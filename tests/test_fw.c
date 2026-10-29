@@ -112,9 +112,55 @@ static void test_nft(void)
     sb_free(&s);
 }
 
+static void test_windivert(void)
+{
+    fw_config c;
+    sbuf s, e;
+    t_current = "fw windivert";
+    sb_init(&s);
+    sb_init(&e);
+    fw_config_default(&c);
+    ports_parse("80,8000-8100", &c.ports);
+    CHECK_INT(fw_windivert_filter(&c, &s, &e), 0);
+    CHECK_STR(s.data, "!loopback and ((outbound and (tcp.DstPort == 80 or (tcp.DstPort >= 8000 and "
+                      "tcp.DstPort <= 8100))) or (inbound and (tcp.SrcPort == 80 or (tcp.SrcPort >= "
+                      "8000 and tcp.SrcPort <= 8100))))");
+
+    sb_reset(&s);
+    ports_parse("53", &c.ports);
+    c.udp = 1;
+    c.server_side = 1;
+    c.in = 0;
+    c.ipv6 = 0;
+    c.iface = "12";
+    CHECK_INT(fw_windivert_filter(&c, &s, &e), 0);
+    CHECK_STR(s.data, "!loopback and ip and ifIdx == 12 and ((outbound and (tcp.SrcPort == 53 or "
+                      "udp.SrcPort == 53)))");
+
+    sb_reset(&s);
+    c.tcp = 0;
+    c.ipv4 = 0;
+    c.ipv6 = 1;
+    c.out = 0;
+    c.in = 1;
+    c.iface = NULL;
+    CHECK_INT(fw_windivert_filter(&c, &s, &e), 0);
+    CHECK_STR(s.data, "!loopback and ipv6 and ((inbound and (udp.DstPort == 53)))");
+
+    c.iface = "Ethernet";
+    CHECK_INT(fw_windivert_filter(&c, &s, &e), -1);
+    CHECK(strstr(e.data, "interface index") != NULL);
+    c.iface = NULL;
+    c.in = 0;
+    CHECK_INT(fw_windivert_filter(&c, &s, &e), -1);
+    sb_free(&s);
+    sb_free(&e);
+}
+
 void suite_fw(void)
 {
     test_ports();
     test_iptables();
     test_nft();
+    test_windivert();
 }

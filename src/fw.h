@@ -43,6 +43,11 @@ int fw_backend_parse(const char *s, fw_backend *out);
  * given backend (not FW_AUTO). */
 void fw_script(const fw_config *c, fw_backend b, int up, sbuf *out);
 
+/* The WinDivert filter that captures the same traffic as the rules (the
+ * Windows engine needs no firewall). iface must be an interface index there.
+ * Returns 0, or -1 with a message. */
+int fw_windivert_filter(const fw_config *c, sbuf *out, sbuf *err);
+
 /* Applies the rules. With FW_AUTO tries nft, then iptables, and stores the
  * backend that worked in c->backend. Returns 0 or -1 with a message. */
 int fw_up(fw_config *c, sbuf *err);

@@ -112,6 +112,13 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw)
         }
         c->forward_to = s;
     }
+#ifdef _WIN32
+    /* WinDivert captures by a filter: the Linux-only rule options mean nothing */
+    if (c->first || c->forward_to || c->prenat || !*use_fw || c->backend != FW_AUTO) {
+        fprintf(stderr, "geneva %s: --first, --forward-to, --prenat and --firewall are Linux-only\n", cmd);
+        return -1;
+    }
+#endif
     return 0;
 }
 
@@ -184,7 +191,8 @@ int cmd_run(int argc, char **argv)
     }
     if (arg_has(&a, "help")) {
         args_help("Usage: geneva run -s STRATEGY -p PORTS [options]\n"
-                  "Applies a strategy to live traffic through NFQUEUE (Linux, root).\n"
+                  "Applies a strategy to live traffic: NFQUEUE on Linux (root), WinDivert on\n"
+                  "Windows (Administrator, WinDivert.dll and WinDivert64.sys next to geneva.exe).\n"
                   "Signals: SIGHUP re-reads --strategy-file, SIGUSR1 emits stats,\n"
                   "SIGINT/SIGTERM stop and remove the firewall rules.",
                   defs);
@@ -261,6 +269,24 @@ int cmd_fw(int argc, char **argv)
     action = a.pos[0];
     if (parse_fw(&a, "fw", &c, &use_fw) < 0 || parse_logging(&a, "fw") < 0)
         goto done;
+#ifdef _WIN32
+    if (!strcmp(action, "print")) {
+        sbuf s, e;
+        sb_init(&s);
+        sb_init(&e);
+        if (fw_windivert_filter(&c, &s, &e) < 0) {
+            fprintf(stderr, "geneva fw: %s\n", e.data);
+        } else {
+            printf("# WinDivert filter (no firewall rules are needed on Windows)\n%s\n", s.data);
+            rc = EXIT_OK;
+        }
+        sb_free(&s);
+        sb_free(&e);
+    } else {
+        fprintf(stderr, "geneva fw: on Windows there are no rules to apply; only \"print\" works\n");
+    }
+    goto done;
+#endif
     if (!strcmp(action, "print")) {
         sbuf s;
         fw_backend b = c.backend == FW_AUTO ? FW_NFT : c.backend;

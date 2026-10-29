@@ -1,12 +1,16 @@
-# Исполнитель (`geneva run`) на Linux
+# Исполнитель (`geneva run`)
 
 ```
 sudo geneva run -s STRATEGY -p PORTS [опции]
 sudo geneva run -f strategy.txt -p 80,443 --events - --stats-interval 10
 ```
 
-Нужны root (или CAP_NET_ADMIN + CAP_NET_RAW), модули `nfnetlink_queue` и
-`xt_NFQUEUE` (iptables) или `nft_queue` (nftables). Внешних библиотек нет.
+Ядро движка общее (стратегия, sleep, события, управление), пакеты дают
+бэкенды: NFQUEUE на Linux и WinDivert на Windows (раздел «Windows» ниже).
+
+На Linux нужны root (или CAP_NET_ADMIN + CAP_NET_RAW), модули
+`nfnetlink_queue` и `xt_NFQUEUE` (iptables) или `nft_queue` (nftables).
+Внешних библиотек нет.
 
 ## Как идут пакеты
 
@@ -90,6 +94,45 @@ sudo geneva run -f strategy.txt -p 80,443 --events - --stats-interval 10
 сокет: статус, статистика, смена стратегии на лету, пауза, уровень лога,
 подписка на события, остановка. Клиент — `geneva ctl`. Формат событий и
 команд — `docs/PROTOCOL.md`.
+
+## Windows
+
+```
+geneva.exe run -s STRATEGY -p 80,443 -c tcp:47123 -e events.jsonl
+geneva.exe fw print -p 80,443        # показать фильтр WinDivert
+```
+
+- Нужны права администратора и WinDivert 2.x из официального релиза автора
+  (https://github.com/basil00/WinDivert/releases): `WinDivert.dll` и
+  `WinDivert64.sys` (`WinDivert32.sys` для 32-битной Windows) кладутся рядом
+  с `geneva.exe`. DLL грузится только из каталога `geneva.exe`, не из текущего
+  каталога и не из PATH; для сборки SDK WinDivert не нужен.
+- Правил firewall нет: перехват задаёт фильтр WinDivert, построенный из тех же
+  опций (`-p`, `--proto`, `--server-side`, `--dir`, `-4`/`-6`). Петлевой
+  трафик не перехватывается. `--iface` принимает индекс интерфейса
+  (`netsh interface ipv4 show interfaces`). Linux-опции `--first`,
+  `--forward-to`, `--prenat` и `--firewall` на Windows отклоняются.
+- Пакеты принимает отдельный поток; результаты уходят через `WinDivertSend`
+  с адресом исходного пакета, то есть в ту же сторону и через тот же
+  интерфейс. Наши байты отправляются как есть (флаги контрольных сумм
+  выставлены), поэтому специально испорченные суммы доходят до сети.
+  Пакетам с незавершёнными из-за offload суммами они пересчитываются при
+  приёме.
+- `--queue-maxlen` задаёт длину очереди WinDivert (32–16384). `--queue` и
+  `--mark` на Windows не используются. Ctrl+C и закрытие консоли
+  останавливают движок; SIGHUP/SIGUSR1 нет — используйте команды `reload` и
+  `stats` управляющего сокета (unix-сокетов на Windows нет, только `tcp:`).
+- Windows может договариваться об ECN, и тогда её SYN несут флаги `SEC`, а не
+  `S`: триггер `[TCP:flags:S]` из стратегий, найденных на Linux, на них не
+  сработает. Добавьте дерево с `[TCP:flags:SEC]` или отключите ECN
+  (`netsh int tcp set global ecncapability=disabled`).
+- В событиях `start`/`ready` и в ответе `status` поле `backend` равно
+  `windivert`, `firewall` — тоже `windivert`.
+
+Проверка: `tests/windows/smoke.ps1` (в CI на windows-latest) запускает
+движок с официальным WinDivert, проверяет HTTP через движок, дублирование
+SYN, то, что drop действительно рвёт соединение, паузу, `stop` и работу сети
+после выхода.
 
 ## Проверка
 

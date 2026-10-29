@@ -16,13 +16,13 @@
 
 | `ev` | Когда | Поля |
 |---|---|---|
-| `start` | запуск движка | `proto`, `version`, `mode` (`run`), `pid`, `queue`, `ports`, `server_side` |
+| `start` | запуск движка | `proto`, `version`, `mode` (`run`), `pid`, `backend` (`nfqueue`, `windivert`), `queue`, `ports`, `server_side` |
 | `strategy` | стратегия установлена (при старте, `set_strategy`, `reload`, SIGHUP) | `strategy` (каноническая строка) |
-| `ready` | правила firewall стоят, пакеты идут через движок | `firewall` (`nft`, `iptables`, `none`) |
+| `ready` | правила firewall стоят (или открыт WinDivert), пакеты идут через движок | `backend`, `firewall` (`nft`, `iptables`, `windivert`, `none`) |
 | `state` | `pause` / `resume` | `state` (`paused`, `running`) |
 | `stats` | каждые `--stats-interval` с (по умолчанию 10 с, если есть `--events` или `--control`), по SIGUSR1 и при выходе | см. ниже |
 | `log` | сообщение лога (в `--log-format json` и для подписчиков) | `level`, `mod`, `msg` |
-| `error` | ошибка | `where` (`strategy`, `nfqueue`, `rawsend`, `firewall`, `control`, `reload`), `message` |
+| `error` | ошибка | `where` (`strategy`, `nfqueue`, `rawsend`, `firewall`, `windivert`, `control`, `reload`), `message` |
 | `dropped` | только подписчику: он читал слишком медленно и потерял события | `count` |
 | `exit` | завершение | `code` (код возврата), `reason` (`signal`, `control`, `duration`, `error`) |
 
@@ -37,7 +37,7 @@
 | `accepted` | вердикты «пропустить» |
 | `modified` | пакеты, ушедшие вердиктом с изменёнными байтами |
 | `dropped` | пакеты, отброшенные стратегией |
-| `injected` | пакеты, отправленные через raw-сокет |
+| `injected` | дополнительные пакеты, отправленные движком (raw-сокет или WinDivert) |
 | `delayed` | пакеты, отложенные `sleep` |
 | `pending` | отложенные пакеты, ещё не отправленные |
 | `send_errors`, `verdict_errors`, `parse_errors` | ошибки |
@@ -77,7 +77,7 @@
 | `ping` | — | `ts` |
 | `version` | — | `version`, `proto` |
 | `subscribe` / `unsubscribe` | — | включить / выключить поток событий в это соединение |
-| `status` | — | `mode`, `state`, `version`, `pid`, `uptime_ms`, `queue`, `ports`, `server_side`, `firewall`, `log_level`, `strategy`, `strategy_file` |
+| `status` | — | `mode`, `state`, `version`, `pid`, `uptime_ms`, `backend`, `queue`, `ports`, `server_side`, `firewall`, `log_level`, `strategy`, `strategy_file` |
 | `stats` | — | поля `stats` |
 | `reset_stats` | — | обнулить счётчики и состояние стратегии (gas триггеров) |
 | `set_strategy` | `strategy` | заменить стратегию; ответ — каноническая `strategy`. Ошибка разбора оставляет прежнюю |

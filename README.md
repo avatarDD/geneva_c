@@ -7,9 +7,9 @@
 
 План работ — `docs/PLAN.md`.
 
-Сейчас готово (этапы 0–4): модель пакетов с семантикой полей Geneva, язык
-стратегий, офлайн-применение к pcap, исполнитель на Linux (NFQUEUE) и
-управление им через сокет:
+Сейчас готово (этапы 0–5): модель пакетов с семантикой полей Geneva, язык
+стратегий, офлайн-применение к pcap, исполнитель на Linux (NFQUEUE) и на
+Windows (WinDivert) и управление им через сокет:
 
 ```
 make && make test
@@ -17,6 +17,7 @@ build/geneva check '[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamp
 build/geneva apply -s '[TCP:flags:PA]-fragment{tcp:8:False}-|' -i in.pcap -o out.pcap -p 80
 sudo build/geneva run -s '[TCP:flags:PA]-fragment{tcp:8:False}-| \/' -p 80,443 -c unix:/var/run/geneva.sock
 sudo build/geneva ctl stats
+geneva.exe run -s '[TCP:flags:S]-duplicate-| \/' -p 80,443 -c tcp:47123   # Windows, администратор
 ```
 
 Исполнитель и правила firewall — `docs/ENGINE.md`, события и управляющий
