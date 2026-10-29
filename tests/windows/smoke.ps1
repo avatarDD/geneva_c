@@ -103,3 +103,4 @@ Check ($LASTEXITCODE -eq 1) "no WinDivert.dll: exit 1 (got $LASTEXITCODE)"
 
 if ($script:Failed) { Write-Host "smoke: $script:Failed failed"; exit 1 }
 Write-Host "smoke: all passed"
+exit 0 # the last native command failed on purpose: do not report its code
