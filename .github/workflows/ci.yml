@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and unit tests
+        run: make -j"$(nproc)" CC=${{ matrix.cc }} CFLAGS="-O1 -g -Werror" test
+      - name: Sanitizers
+        if: matrix.cc == 'clang'
+        run: |
+          make clean
+          make -j"$(nproc)" CC=clang O=build-asan \
+            CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" \
+            LDFLAGS="-fsanitize=address,undefined" test
+
+  musl-static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: make -j"$(nproc)" CC=musl-gcc STATIC=1 SMALL=1 CFLAGS="-Werror" test
+      - run: ls -la build/geneva && file build/geneva
+
+  windows-cross:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - run: make -j"$(nproc)" CC=x86_64-w64-mingw32-gcc STATIC=1 CFLAGS="-O2 -Werror"
+      # No upload-artifact here: the account's Actions artifact storage quota
+      # is exhausted, and releases publish binaries directly instead.
+      - run: ls -la build/geneva.exe && file build/geneva.exe
