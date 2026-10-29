@@ -124,12 +124,27 @@ def patch_find_library():
     ctypes.util.find_library = find_library
 
 
+class _Dummy(object):
+    """Stands in for any attribute or call of a stubbed module."""
+    def __getattr__(self, name):
+        return _Dummy()
+
+    def __call__(self, *a, **k):
+        return _Dummy()
+
+
+# Imported somewhere on Geneva's import path but only used for live traffic,
+# remote workers or docker; nothing here touches them.
+STUBBED = ("netfilterqueue", "netifaces", "psutil", "requests", "urllib3", "docker", "paramiko")
+
+
 def stub_modules():
-    for name in ("netfilterqueue", "netifaces"):
+    for name in STUBBED:
         try:
             importlib.import_module(name)
         except ImportError:
             mod = types.ModuleType(name)
+            mod.__getattr__ = lambda attr: _Dummy()  # PEP 562
             mod.interfaces = lambda: []
             mod.ifaddresses = lambda iface: {}
             mod.AF_INET = 2
