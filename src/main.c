@@ -19,6 +19,8 @@ typedef struct {
 } command;
 
 static const command commands[] = {
+    {"apply", cmd_apply, "run a strategy over a pcap file offline"},
+    {"check", cmd_check, "parse, validate and print strategies"},
     {"version", cmd_version, "print version and build features"},
 };
 

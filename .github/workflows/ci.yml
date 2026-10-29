@@ -41,3 +41,25 @@ jobs:
       # No upload-artifact here: the account's Actions artifact storage quota
       # is exhausted, and releases publish binaries directly instead.
       - run: ls -la build/geneva.exe && file build/geneva.exe
+
+  # Differential test against the Python Geneva at a pinned commit: the same
+  # strategies must parse and print alike and produce identical packets.
+  geneva-diff:
+    runs-on: ubuntu-22.04
+    env:
+      GENEVA_COMMIT: 61a4a5104641ddbba6dd0526013e85a5be875203
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"
+      - name: Fetch Geneva
+        run: |
+          git clone -q https://github.com/Kkevsterrr/geneva "$RUNNER_TEMP/geneva"
+          git -C "$RUNNER_TEMP/geneva" checkout -q "$GENEVA_COMMIT"
+      - run: pip install scapy==2.4.3 anytree
+      - run: make -j"$(nproc)"
+      - name: Strategy corpus is up to date
+        run: python tools/extract_strategies.py "$RUNNER_TEMP/geneva" | diff -u tests/geneva_strategies.h -
+      - name: Compare with Geneva
+        run: python tools/geneva_diff.py --geneva "$RUNNER_TEMP/geneva" --bin build/geneva -v
