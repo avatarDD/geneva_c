@@ -113,12 +113,15 @@ stop_censor() {
 }
 
 # A probe that timed out leaves its socket retransmitting the forbidden
-# request; censors 6 and 7 would see it after the reset and block the
-# client again. Abort those connections first (the agent's control
-# connection is not on port 80 and stays).
+# request, and a closing connection retransmits its FIN; censor 6 inspects
+# every packet and is switched off by any RST or FIN, censor 7 blocks the
+# client again. So both ends of the old connections on the service port
+# are aborted first (the agent's control connection is on another port
+# and stays), and the censor is reset once their RSTs have passed.
 reset_censor() {
-    ip netns exec "$NC" ss -K -t dst 10.80.2.2 '( dport = :80 or dport = :443 )' >/dev/null 2>&1 || true
-    sleep 0.05
+    ip netns exec "$NC" ss -K -t '( dport = :80 or dport = :443 )' >/dev/null 2>&1 || true
+    ip netns exec "$NS" ss -K -t '( sport = :80 or sport = :443 )' >/dev/null 2>&1 || true
+    sleep 0.3
     kill -HUP "$CPID"
     sleep 0.2
 }
