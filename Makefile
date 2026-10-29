@@ -20,26 +20,30 @@ OS_TARGET ?= posix
 
 WARN    := -Wall -Wextra -Wshadow -Wpointer-arith -Wstrict-prototypes -Wno-unused-parameter
 CFLAGS  ?= -O2 -g
-CFLAGS  += -std=c11 $(WARN) -D_GNU_SOURCE -DGENEVA_VERSION=\"$(VERSION)\"
+LDFLAGS ?=
+# Internal flags live in separate variables so that CFLAGS/LDFLAGS given on
+# the command line add to them instead of replacing them.
+XCFLAGS := -std=c11 $(WARN) -D_GNU_SOURCE -DGENEVA_VERSION=\"$(VERSION)\"
+XLDFLAGS :=
 LDLIBS  :=
 
 ifeq ($(OS_TARGET),windows)
   EXE     := .exe
   LDLIBS  += -lws2_32 -liphlpapi
-  CFLAGS  += -D_WIN32_WINNT=0x0601
+  XCFLAGS += -D_WIN32_WINNT=0x0601 -D__USE_MINGW_ANSI_STDIO=1
 else
   EXE     :=
   LDLIBS  += -lpthread -lm
 endif
 
 ifeq ($(STATIC),1)
-  LDFLAGS += -static
+  XLDFLAGS += -static
 endif
 
 ifeq ($(SMALL),1)
   # size-optimized build for routers with tiny flash
-  CFLAGS  += -Os -ffunction-sections -fdata-sections
-  LDFLAGS += -Wl,--gc-sections
+  XCFLAGS += -Os -ffunction-sections -fdata-sections
+  XLDFLAGS += -Wl,--gc-sections
 endif
 
 SRCS    := $(filter-out src/main.c,$(wildcard src/*.c))
@@ -58,19 +62,19 @@ $(O) $(O)/tests:
 	@mkdir -p $@
 
 $(O)/%.o: src/%.c src/*.h | $(O)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(XCFLAGS) -c -o $@ $<
 
 $(O)/tests/%.o: tests/%.c tests/*.h src/*.h | $(O)/tests
-	$(CC) $(CFLAGS) -Isrc -c -o $@ $<
+	$(CC) $(CFLAGS) $(XCFLAGS) -Isrc -c -o $@ $<
 
 $(O)/libgeneva.a: $(OBJS)
 	$(AR) rcs $@ $^
 
 $(BIN): $(O)/main.o $(O)/libgeneva.a
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+	$(CC) $(LDFLAGS) $(XLDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(TBIN): $(TOBJS) $(O)/libgeneva.a
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+	$(CC) $(LDFLAGS) $(XLDFLAGS) -o $@ $^ $(LDLIBS)
 
 test: $(TBIN) $(BIN)
 	$(TBIN)

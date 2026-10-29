@@ -19,12 +19,14 @@ void t_dump(const char *label, const unsigned char *p, size_t n)
 
 /* Each test file exposes one suite function. */
 void suite_base(void);
+void suite_pkt(void);
 
 int main(void)
 {
     plat_net_init();
     rng_global_seed(12345);
     suite_base();
+    suite_pkt();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }
