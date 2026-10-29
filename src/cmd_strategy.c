@@ -12,6 +12,7 @@
 #include "log.h"
 #include "pcap.h"
 #include "pkt.h"
+#include "ports.h"
 #include "rng.h"
 #include "strategy.h"
 #include "util.h"
@@ -133,51 +134,6 @@ int cmd_check(int argc, char **argv)
 
 /* ---- apply --------------------------------------------------------------- */
 
-#define MAX_PORT_RANGES 64
-
-typedef struct {
-    uint16_t lo[MAX_PORT_RANGES], hi[MAX_PORT_RANGES];
-    int n;
-} portset;
-
-/* "80", "80,443", "8000-8100" */
-static int parse_ports(const char *s, portset *ps)
-{
-    ps->n = 0;
-    while (*s) {
-        char *end;
-        long lo = strtol(s, &end, 10), hi;
-        if (end == s || lo < 0 || lo > 65535)
-            return -1;
-        hi = lo;
-        s = end;
-        if (*s == '-') {
-            const char *h = s + 1;
-            hi = strtol(h, &end, 10);
-            if (end == h || hi < lo || hi > 65535)
-                return -1;
-            s = end;
-        }
-        if (ps->n == MAX_PORT_RANGES)
-            return -1;
-        ps->lo[ps->n] = (uint16_t)lo;
-        ps->hi[ps->n++] = (uint16_t)hi;
-        if (*s == ',')
-            s++;
-        else if (*s)
-            return -1;
-    }
-    return ps->n ? 0 : -1;
-}
-
-static int port_in(const portset *ps, uint16_t p)
-{
-    for (int i = 0; i < ps->n; i++)
-        if (p >= ps->lo[i] && p <= ps->hi[i])
-            return 1;
-    return 0;
-}
-
 static void describe(gpkt *p, sbuf *out)
 {
     sb_reset(out);
@@ -281,7 +237,7 @@ int cmd_apply(int argc, char **argv)
         }
     }
     if (arg_has(&a, "server-port")) {
-        if (parse_ports(arg_str(&a, "server-port", ""), &ports) < 0) {
+        if (ports_parse(arg_str(&a, "server-port", ""), &ports) < 0) {
             fprintf(stderr, "geneva apply: bad --server-port\n");
             rc = EXIT_USAGE;
             goto done;
@@ -332,8 +288,8 @@ int cmd_apply(int argc, char **argv)
             continue;
         }
         if (use_ports) {
-            int to = p->l4 != LAYER_NONE && port_in(&ports, p->dport);
-            int from = p->l4 != LAYER_NONE && port_in(&ports, p->sport);
+            int to = p->l4 != LAYER_NONE && ports_has(&ports, p->dport);
+            int from = p->l4 != LAYER_NONE && ports_has(&ports, p->sport);
             if (to)
                 dir = DIR_OUT;
             else if (from)

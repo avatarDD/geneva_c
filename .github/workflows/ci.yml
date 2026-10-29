@@ -24,6 +24,16 @@ jobs:
             CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" \
             LDFLAGS="-fsanitize=address,undefined" test
 
+  # The engine on live traffic: two network namespaces, every firewall backend.
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y tcpdump ethtool nftables iptables
+      - run: make -j"$(nproc)" CFLAGS="-O1 -g -Werror"
+      - name: e2e (auto, iptables, nft)
+        run: sudo env FIREWALLS="auto iptables nft" tests/e2e/run.sh build/geneva
+
   musl-static:
     runs-on: ubuntu-24.04
     steps:

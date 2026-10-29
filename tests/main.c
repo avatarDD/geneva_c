@@ -21,6 +21,7 @@ void t_dump(const char *label, const unsigned char *p, size_t n)
 void suite_base(void);
 void suite_pkt(void);
 void suite_strategy(void);
+void suite_fw(void);
 
 int main(void)
 {
@@ -29,6 +30,7 @@ int main(void)
     suite_base();
     suite_pkt();
     suite_strategy();
+    suite_fw();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }

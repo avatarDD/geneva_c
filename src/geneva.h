@@ -21,5 +21,7 @@ enum {
 int cmd_version(int argc, char **argv);
 int cmd_check(int argc, char **argv);
 int cmd_apply(int argc, char **argv);
+int cmd_run(int argc, char **argv);
+int cmd_fw(int argc, char **argv);
 
 #endif
