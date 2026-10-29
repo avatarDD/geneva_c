@@ -2,6 +2,8 @@
 #ifndef GENEVA_GENEVA_H
 #define GENEVA_GENEVA_H
 
+#include "args.h"
+
 #ifndef GENEVA_VERSION
 #  define GENEVA_VERSION "0.1.0-dev"
 #endif
@@ -24,5 +26,11 @@ int cmd_apply(int argc, char **argv);
 int cmd_run(int argc, char **argv);
 int cmd_fw(int argc, char **argv);
 int cmd_ctl(int argc, char **argv);
+int cmd_evolve(int argc, char **argv);
+int cmd_db(int argc, char **argv);
+
+/* Shared handling of --log-level, -v, --log-format, --log-file, --quiet and
+ * --events (cmd_run.c). Prints an error and returns -1 on bad values. */
+int parse_logging(const args_t *a, const char *cmd);
 
 #endif

@@ -87,6 +87,12 @@ typedef struct pollfd plat_pollfd;
 #endif
 int plat_poll(plat_pollfd *fds, unsigned n, int timeout_ms);
 
+/* ---- files --------------------------------------------------------------- */
+
+/* Writes a file so that a crash leaves either the old or the new contents:
+ * PATH.tmp, flushed to disk, then renamed over PATH. Returns 0 or -1. */
+int plat_write_atomic(const char *path, const void *data, size_t len);
+
 /* ---- misc ---------------------------------------------------------------- */
 
 /* Fill buf with OS randomness; falls back to time-derived bytes. */

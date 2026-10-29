@@ -23,6 +23,7 @@ void suite_pkt(void);
 void suite_strategy(void);
 void suite_fw(void);
 void suite_ctl(void);
+void suite_evolve(void);
 
 int main(void)
 {
@@ -33,6 +34,7 @@ int main(void)
     suite_strategy();
     suite_fw();
     suite_ctl();
+    suite_evolve();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }
