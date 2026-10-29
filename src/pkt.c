@@ -108,6 +108,12 @@ static uint32_t pseudo_sum(const gpkt *p, uint8_t proto, size_t l4len)
         s += (uint32_t)(l4len >> 16) + (uint32_t)(l4len & 0xffff);
         s += proto;
     } else {
+        /* like scapy's in4_pseudoheader(): an explicit IP length (from the
+         * wire or a tamper) defines the length, not the bytes present */
+        if (!(p->auto_fields & AUTO_IP_LEN)) {
+            size_t ihl = (p->auto_fields & AUTO_IP_IHL) ? (20 + (size_t)p->ipopts_len) / 4 : p->ihl;
+            l4len = p->iplen > ihl * 4 ? p->iplen - ihl * 4 : 0;
+        }
         s = sum_words(p->src, 4) + sum_words(p->dst, 4);
         s += proto;
         s += (uint32_t)(l4len & 0xffff);
