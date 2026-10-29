@@ -20,7 +20,7 @@ void fw_config_default(fw_config *c)
 {
     memset(c, 0, sizeof(*c));
     c->backend = FW_AUTO;
-    c->queue = 300;
+    c->queue = 310; /* zapret-gui runs nfqws2 on 300-303 */
     c->mark = 0x20000000;
     c->tcp = 1;
     c->ipv4 = c->ipv6 = 1;

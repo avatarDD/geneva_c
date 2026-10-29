@@ -17,81 +17,20 @@
 #include "plat.h"
 #include "util.h"
 
-#ifndef MSG_NOSIGNAL
-#  define MSG_NOSIGNAL 0
-#endif
-
 #define CTL_DEFAULT "unix:/var/run/geneva.sock"
-
-typedef struct {
-    sock_t s;
-    sbuf in;
-} conn;
-
-static int send_line(conn *c, const char *line)
-{
-    size_t len = strlen(line), off = 0;
-    while (off < len) {
-        int r = (int)send(c->s, line + off, (int)(len - off), MSG_NOSIGNAL);
-        if (r <= 0)
-            return -1;
-        off += (size_t)r;
-    }
-    return send(c->s, "\n", 1, MSG_NOSIGNAL) == 1 ? 0 : -1;
-}
-
-/* Reads one line (without "\n") into out. timeout_ms < 0 waits forever.
- * Returns 1, 0 on timeout, -1 on EOF or error. */
-static int read_line(conn *c, sbuf *out, int timeout_ms)
-{
-    uint64_t deadline = timeout_ms >= 0 ? plat_now_ms() + (uint64_t)timeout_ms : 0;
-    for (;;) {
-        char *nl = c->in.len ? memchr(c->in.data, '\n', c->in.len) : NULL;
-        plat_pollfd pfd;
-        char buf[4096];
-        int r, wait = -1;
-        if (nl) {
-            size_t n = (size_t)(nl - c->in.data);
-            sb_reset(out);
-            sb_append(out, c->in.data, n);
-            memmove(c->in.data, nl + 1, c->in.len - n - 1);
-            c->in.len -= n + 1;
-            c->in.data[c->in.len] = 0;
-            return 1;
-        }
-        if (deadline) {
-            uint64_t now = plat_now_ms();
-            if (now >= deadline)
-                return 0;
-            wait = (int)(deadline - now);
-        }
-        pfd.fd = c->s;
-        pfd.events = POLLIN;
-        pfd.revents = 0;
-        r = plat_poll(&pfd, 1, wait);
-        if (r < 0)
-            return -1; /* a signal (Ctrl+C) ends a subscription */
-        if (r == 0)
-            continue;
-        r = (int)recv(c->s, buf, sizeof(buf), 0);
-        if (r <= 0)
-            return -1;
-        sb_append(&c->in, buf, (size_t)r);
-    }
-}
 
 /* Sends a request and waits for the response with the same id. Events that
  * arrive meanwhile are printed when show_events is set. */
-static int request(conn *c, const char *req, int id, int timeout_ms, sbuf *resp)
+static int request(ctl_conn *c, const char *req, int id, int timeout_ms, sbuf *resp)
 {
-    if (send_line(c, req) < 0) {
+    if (ctl_send_line(c, req) < 0) {
         fprintf(stderr, "geneva ctl: send failed\n");
         return -1;
     }
     for (;;) {
         const char *perr;
         json_val *v;
-        int r = read_line(c, resp, timeout_ms);
+        int r = ctl_read_line(c, resp, timeout_ms);
         if (r == 0) {
             fprintf(stderr, "geneva ctl: no answer within %d ms\n", timeout_ms);
             return -1;
@@ -134,7 +73,7 @@ int cmd_ctl(int argc, char **argv)
     args_t a;
     char err[128];
     const char *addr, *token, *until;
-    conn c = {SOCK_INVALID, {0}};
+    ctl_conn c = {SOCK_INVALID, {0}};
     sbuf req, resp, e;
     double timeout;
     int64_t count;
@@ -270,7 +209,7 @@ int cmd_ctl(int argc, char **argv)
         int64_t seen = 0;
         int idle = arg_has(&a, "timeout") ? tmo : -1;
         for (;;) {
-            int r = read_line(&c, &resp, idle);
+            int r = ctl_read_line(&c, &resp, idle);
             if (r <= 0)
                 break; /* the engine exited, a signal, or --timeout without events */
             printf("%s\n", resp.data);

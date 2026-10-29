@@ -30,6 +30,8 @@ int cmd_censor(int argc, char **argv);
 int cmd_eval(int argc, char **argv);
 int cmd_evolve(int argc, char **argv);
 int cmd_db(int argc, char **argv);
+int cmd_library(int argc, char **argv);
+int cmd_agent(int argc, char **argv);
 
 /* Shared handling of --log-level, -v, --log-format, --log-file, --quiet and
  * --events (cmd_run.c). Prints an error and returns -1 on bad values. */

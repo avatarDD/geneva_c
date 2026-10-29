@@ -20,6 +20,8 @@
 | `start` | запуск цензора (`geneva censor`, `docs/CENSOR.md`) | `proto`, `version`, `mode` (`censor`), `pid`, `censor`, `queue`, `ports` |
 | `censorship` | (censor) цензор сработал | `censor`, `action` (`drop`, `rst`, `dns`), `src`, `dst`, `proto`, `sport`, `dport`, `injected` |
 | `reset` | (censor) SIGHUP сбросил состояние цензора | — |
+| `start` | запуск агента server-side (`geneva agent`) | `proto`, `version`, `mode` (`agent`), `pid` |
+| `connected`, `disconnected` | (agent `--connect`) соединение с оценщиком | `addr` |
 | `start` | запуск подборщика | `proto`, `version`, `mode` (`evolve`), `pid`, `population`, `generations`, `target`, `resume` |
 | `generation` | (evolve) поколение оценено | `gen`, `unique`, `evaluated`, `avg_fitness`, `best_fitness`, `best` |
 | `baseline` | (evolve) проба без стратегии | `blocked`, `fitness`, `outcome`, `detail` |
@@ -28,6 +30,7 @@
 | `result` | (evolve) поиск закончен | `stopped`, `best` — `[{"strategy", "avg_fitness", "runs"}]` |
 | `strategy` | стратегия установлена (при старте, `set_strategy`, `reload`, SIGHUP) | `strategy` (каноническая строка) |
 | `ready` | правила firewall стоят (или открыт WinDivert), пакеты идут через движок | `backend`, `firewall` (`nft`, `iptables`, `windivert`, `none`) |
+| `ready` | (agent) агент ждёт оценщика или начал к нему подключаться | `addr` |
 | `state` | `pause` / `resume` | `state` (`paused`, `running`) |
 | `stats` | каждые `--stats-interval` с (по умолчанию 10 с, если есть `--events` или `--control`), по SIGUSR1 и при выходе | см. ниже |
 | `log` | сообщение лога (в `--log-format json` и для подписчиков) | `level`, `mod`, `msg` |
@@ -95,8 +98,11 @@
 | `log_level` | `level` (необязателен) | установить / узнать уровень: `error`, `warn`, `info`, `debug`, `trace` |
 | `stop` | — | корректный выход со снятием правил (`exit` с `reason: control`) |
 
-Подборщик (этапы 6–7) добавит `hall`, `best`, `fitness` и события
-`generation`, `individual`, `best`, `eval_request`.
+У `geneva evolve` и `geneva eval` управляющего сокета нет: ими управляют
+сигналы (SIGINT/SIGTERM — остановка с сохранением checkpoint), а
+прогресс идёт событиями. Агент server-side (`geneva agent`) говорит по
+тому же протоколу и добавляет команды `hello` и `probe`
+(`docs/SERVER_SIDE.md`).
 
 ### geneva ctl
 

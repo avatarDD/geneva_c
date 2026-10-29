@@ -19,6 +19,7 @@ typedef struct {
 } command;
 
 static const command commands[] = {
+    {"agent", cmd_agent, "run the probes of a server-side evaluation (no root)"},
     {"apply", cmd_apply, "run a strategy over a pcap file offline"},
     {"censor", cmd_censor, "run one of Geneva's lab censors on a Linux router"},
     {"check", cmd_check, "parse, validate and print strategies"},
@@ -27,6 +28,7 @@ static const command commands[] = {
     {"eval", cmd_eval, "evaluate strategies against a target with a probe"},
     {"evolve", cmd_evolve, "search for strategies with the genetic algorithm"},
     {"fw", cmd_fw, "print, apply or remove the firewall rules of run"},
+    {"library", cmd_library, "list the built-in strategies of Geneva's library"},
     {"run", cmd_run, "apply a strategy to live traffic (NFQUEUE or WinDivert)"},
     {"version", cmd_version, "print version and build features"},
 };

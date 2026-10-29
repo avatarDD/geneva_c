@@ -36,6 +36,13 @@ typedef int (*ctl_handler)(void *ctx, const char *cmd, const json_val *req, jw *
  * ("tcp:[::1]:PORT" for IPv6). A TCP socket on a non-loopback address needs
  * a token. Port 0 picks a free port (see ctl_port). */
 ctl *ctl_open(const char *spec, const char *token, sbuf *err);
+/* A control server without a listening socket: its clients come from
+ * ctl_adopt() (an agent that dials out to its controller). */
+ctl *ctl_new(const char *token);
+/* Serves an already connected socket like an accepted client. Returns -1
+ * when the client table is full (the socket stays open then). */
+int ctl_adopt(ctl *c, sock_t s);
+int ctl_clients(const ctl *c);
 /* Closes all clients and removes a unix socket file. */
 void ctl_close(ctl *c);
 int ctl_port(const ctl *c);
@@ -54,5 +61,20 @@ int ctl_subscribers(const ctl *c);
 
 /* Connects to a control socket. Returns SOCK_INVALID with a message. */
 sock_t ctl_connect(const char *spec, sbuf *err);
+
+/* A blocking TCP socket listening on spec (the other side dials in). A
+ * non-loopback address needs has_token. */
+sock_t ctl_listen(const char *spec, int has_token, sbuf *err);
+
+/* Line I/O over a connected socket. */
+typedef struct {
+    sock_t s;
+    sbuf in;
+} ctl_conn;
+
+int ctl_send_line(ctl_conn *c, const char *line);
+/* Reads one line (without "\n") into out. timeout_ms < 0 waits forever.
+ * Returns 1, 0 on timeout, -1 on EOF, error or an overlong line. */
+int ctl_read_line(ctl_conn *c, sbuf *out, int timeout_ms);
 
 #endif

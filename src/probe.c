@@ -110,7 +110,7 @@ int probe_resolve(probe_cfg *c, sbuf *err)
     return 0;
 }
 
-static void addr_text(const probe_cfg *c, char *buf, size_t cap)
+void probe_addr_text(const probe_cfg *c, char *buf, size_t cap)
 {
     const void *a = c->addr.ss_family == AF_INET6 ? (const void *)&((const struct sockaddr_in6 *)&c->addr)->sin6_addr
                                                   : (const void *)&((const struct sockaddr_in *)&c->addr)->sin_addr;
@@ -892,7 +892,7 @@ static void run_dns(const probe_cfg *c, probe_ports *lp, probe_res *r)
 void probe_expand_cmd(const probe_cfg *c, const probe_ports *lp, sbuf *out)
 {
     char ip[64];
-    addr_text(c, ip, sizeof(ip));
+    probe_addr_text(c, ip, sizeof(ip));
     for (const char *p = c->cmd; *p; p++) {
         if (*p == '{') {
             const char *e = strchr(p, '}');

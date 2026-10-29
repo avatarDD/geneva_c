@@ -105,8 +105,8 @@ geneva db --db FILE compact
 
 Ранжирование: доля успехов, затем средний фитнес, затем число оценок.
 `export --format txt` даёт список стратегий, по одной в строке, для
-`--load-from` и для внешних программ. Форматы zapret-gui и AutoTuner
-описываются на этапе 9 (`docs/INTEGRATION.md`).
+`--load-from` и для внешних программ. Как этим пользуются zapret-gui и
+AutoTuner — `docs/INTEGRATION.md`.
 
 ## События
 

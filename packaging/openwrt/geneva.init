@@ -1,0 +1,87 @@
+#!/bin/sh /etc/rc.common
+# Geneva on OpenWrt (procd): "geneva run" with the strategy from
+# /etc/config/geneva, and optionally "geneva agent". Stopping the service
+# removes the firewall rules; "reload" re-reads the strategy file.
+
+USE_PROCD=1
+START=95
+STOP=10
+
+PROG=/usr/bin/geneva
+
+start_run() {
+	local enabled strategy_file ports proto iface queue firewall control control_token log_level events extra
+
+	config_get_bool enabled main enabled 0
+	[ "$enabled" = 1 ] || return 0
+	config_get strategy_file main strategy_file /etc/geneva/strategy.txt
+	config_get ports main ports '80,443'
+	config_get proto main proto tcp
+	config_get iface main iface
+	config_get queue main queue 310
+	config_get firewall main firewall auto
+	config_get control main control 'unix:/var/run/geneva.sock'
+	config_get control_token main control_token
+	config_get log_level main log_level info
+	config_get events main events
+	config_get extra main extra
+
+	if ! grep -q '[^[:space:]]' "$strategy_file" 2>/dev/null; then
+		logger -t geneva "no strategy in $strategy_file: not started"
+		return 1
+	fi
+	procd_open_instance run
+	procd_set_param command "$PROG" run -f "$strategy_file" -p "$ports" --proto "$proto" \
+		-q "$queue" --firewall "$firewall" -l "$log_level"
+	[ -n "$iface" ] && procd_append_param command -i "$iface"
+	[ -n "$control" ] && procd_append_param command -c "$control"
+	[ -n "$events" ] && procd_append_param command -e "$events"
+	# shellcheck disable=SC2086 # extra holds several options
+	[ -n "$extra" ] && procd_append_param command $extra
+	[ -n "$control_token" ] && procd_set_param env GENEVA_CONTROL_TOKEN="$control_token"
+	procd_set_param respawn 3600 5 5
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+start_agent() {
+	local enabled listen connect token log_level
+
+	config_get_bool enabled agent enabled 0
+	[ "$enabled" = 1 ] || return 0
+	config_get listen agent listen 'tcp:0.0.0.0:7110'
+	config_get connect agent connect
+	config_get token agent token
+	config_get log_level agent log_level info
+
+	if [ -z "$token" ]; then
+		logger -t geneva "the agent needs a token: not started"
+		return 1
+	fi
+	procd_open_instance agent
+	if [ -n "$connect" ]; then
+		procd_set_param command "$PROG" agent --connect "$connect" -l "$log_level"
+	else
+		procd_set_param command "$PROG" agent --listen "$listen" -l "$log_level"
+	fi
+	procd_set_param env GENEVA_AGENT_TOKEN="$token"
+	procd_set_param respawn 3600 5 0
+	procd_set_param stderr 1
+	procd_set_param user nobody
+	procd_close_instance
+}
+
+start_service() {
+	config_load geneva
+	start_run
+	start_agent
+}
+
+reload_service() {
+	start
+	procd_send_signal geneva run HUP
+}
+
+service_triggers() {
+	procd_add_reload_trigger geneva
+}

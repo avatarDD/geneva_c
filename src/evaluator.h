@@ -10,7 +10,8 @@
  * whether the target is blocked at all and captures the canary packets the
  * mutations take values from; a pause after a failure for censors that
  * keep blocking for a while (residual censorship); external probes, where a
- * controller makes the connection and reports the result.
+ * controller makes the connection and reports the result; server-side
+ * evaluation, where a remote agent makes it.
  */
 #ifndef GENEVA_EVALUATOR_H
 #define GENEVA_EVALUATOR_H
@@ -40,6 +41,13 @@ typedef struct {
     int skip_empty;         /* GA: empty strategies get -1000 without a run (Geneva's default) */
     volatile sig_atomic_t *stop;
     FILE *ext_in;           /* external probe: results arrive here (stdin) */
+    /* Server-side evaluation (agent.h): the probes run on a remote "geneva
+     * agent", and the strategy applies to the service port of this host
+     * (port_base = probe.port, one worker of one port). */
+    const char *agent;      /* tcp:HOST:PORT of the agent, or the address to listen on */
+    int agent_listen;       /* the agent dials in */
+    const char *agent_token;
+    double agent_wait;      /* agent_listen: seconds to wait for it */
 } eval_opts;
 
 void eval_opts_default(eval_opts *o);

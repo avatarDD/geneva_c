@@ -113,7 +113,8 @@ sudo geneva evolve --probe exec \
 стратегии запрос со словом блокируется, а каждая стратегия из
 `LAB_STRATEGIES` в `library.py` Geneva, которая заявлена против этого
 цензора, проходит. Затем `geneva evolve` сам находит обход цензора 2.
-DNS-цензор проверяется подменой ответа и сжатием имени.
+DNS-цензор проверяется подменой ответа и сжатием имени. Раздел `server`
+проверяет server-side оценку с `geneva agent` (`docs/SERVER_SIDE.md`).
 
 | Стратегия Geneva | Проходит цензоры |
 |---|---|
@@ -129,5 +130,5 @@ DNS-цензор проверяется подменой ответа и сжа�
 
 ```
 sudo tests/e2e/censors.sh build/geneva            # всё
-sudo tests/e2e/censors.sh build/geneva 8 9 dns    # выборочно; evolve — подбор
+sudo tests/e2e/censors.sh build/geneva 8 9 dns    # выборочно; evolve — подбор, server — server-side
 ```
