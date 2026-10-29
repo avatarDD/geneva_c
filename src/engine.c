@@ -27,6 +27,7 @@ void engine_opts_default(engine_opts *o)
 #include <signal.h>
 #include <poll.h>
 
+#include "ctl.h"
 #include "nfq.h"
 #include "pcap.h"
 #include "rawsend.h"
@@ -59,6 +60,9 @@ typedef struct {
     uint64_t dl_order;
     uint64_t start_ms;
     sbuf line;
+    ctl *ctl;
+    int paused;       /* packets pass unchanged */
+    int stop_request; /* "stop" over the control socket */
 } engine;
 
 static volatile sig_atomic_t sig_stop, sig_hup, sig_usr1;
@@ -245,6 +249,12 @@ static void on_packet(const nfq_msg *m, void *ctx)
         e->c.pkts_out++;
     else
         e->c.pkts_in++;
+    if (e->paused) {
+        pkt_free(p);
+        e->c.accepted++;
+        give_verdict(e, m->id, NFQ_ACCEPT, NULL, 0);
+        return;
+    }
     if (log_enabled(LOG_TRACE))
         orig = pkt_copy(p);
     fired = strategy_apply(e->st, p, dir, &out);
@@ -332,31 +342,49 @@ static void forest_json(jw *w, atree **f, size_t n)
     sb_free(&s);
 }
 
+/* Counters shared by the "stats" event and the "stats" control command. */
+static void stats_fields(engine *e, jw *w)
+{
+    counters *c = &e->c;
+    jw_kuint(w, "uptime_ms", plat_now_ms() - e->start_ms);
+    jw_kbool(w, "paused", e->paused);
+    jw_kuint(w, "pkts_out", c->pkts_out);
+    jw_kuint(w, "pkts_in", c->pkts_in);
+    jw_kuint(w, "triggered", c->triggered);
+    jw_kuint(w, "accepted", c->accepted);
+    jw_kuint(w, "modified", c->modified);
+    jw_kuint(w, "dropped", c->dropped);
+    jw_kuint(w, "injected", c->injected);
+    jw_kuint(w, "delayed", c->delayed);
+    jw_kuint(w, "pending", e->ndl);
+    jw_kuint(w, "send_errors", c->send_errors);
+    jw_kuint(w, "verdict_errors", c->verdict_errors);
+    jw_kuint(w, "parse_errors", c->parse_errors);
+    jw_kuint(w, "overruns", c->overruns);
+    jw_key(w, "out_trees");
+    forest_json(w, e->st->out, e->st->nout);
+    jw_key(w, "in_trees");
+    forest_json(w, e->st->in, e->st->nin);
+}
+
 static void emit_stats(engine *e)
 {
     ev_t ev;
-    counters *c = &e->c;
     if (!ev_enabled())
         return;
     ev_begin(&ev, "stats");
-    jw_kuint(&ev.w, "uptime_ms", plat_now_ms() - e->start_ms);
-    jw_kuint(&ev.w, "pkts_out", c->pkts_out);
-    jw_kuint(&ev.w, "pkts_in", c->pkts_in);
-    jw_kuint(&ev.w, "triggered", c->triggered);
-    jw_kuint(&ev.w, "accepted", c->accepted);
-    jw_kuint(&ev.w, "modified", c->modified);
-    jw_kuint(&ev.w, "dropped", c->dropped);
-    jw_kuint(&ev.w, "injected", c->injected);
-    jw_kuint(&ev.w, "delayed", c->delayed);
-    jw_kuint(&ev.w, "pending", e->ndl);
-    jw_kuint(&ev.w, "send_errors", c->send_errors);
-    jw_kuint(&ev.w, "verdict_errors", c->verdict_errors);
-    jw_kuint(&ev.w, "parse_errors", c->parse_errors);
-    jw_kuint(&ev.w, "overruns", c->overruns);
-    jw_key(&ev.w, "out_trees");
-    forest_json(&ev.w, e->st->out, e->st->nout);
-    jw_key(&ev.w, "in_trees");
-    forest_json(&ev.w, e->st->in, e->st->nin);
+    stats_fields(e, &ev.w);
+    ev_emit(&ev);
+}
+
+static void emit_state(engine *e, const char *state)
+{
+    ev_t ev;
+    LOGI("engine", "%s", state);
+    if (!ev_enabled())
+        return;
+    ev_begin(&ev, "state");
+    jw_kstr(&ev.w, "state", state);
     ev_emit(&ev);
 }
 
@@ -427,25 +455,115 @@ static strategy *load_strategy(const engine_opts *o, sbuf *err)
     return s;
 }
 
-static void reload(engine *e)
+/* Re-reads --strategy-file. Returns 0, or -1 with a message in err (the
+ * current strategy stays). */
+static int reload(engine *e, sbuf *err)
 {
-    sbuf err;
     strategy *s;
     if (!e->o->strategy_file) {
-        LOGI("engine", "SIGHUP: no --strategy-file to re-read");
-        return;
+        sb_puts(err, "no --strategy-file to re-read");
+        return -1;
     }
-    sb_init(&err);
-    s = load_strategy(e->o, &err);
+    s = load_strategy(e->o, err);
     if (!s) {
-        LOGE("engine", "reload failed, keeping the current strategy: %s", err.data);
-        emit_error("reload", err.data);
-    } else {
+        LOGE("engine", "reload failed, keeping the current strategy: %s", err->data);
+        emit_error("reload", err->data);
+        return -1;
+    }
+    strategy_free(e->st);
+    e->st = s;
+    emit_strategy(e);
+    return 0;
+}
+
+/* ---- control commands ---------------------------------------------------- */
+
+static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sbuf *err)
+{
+    engine *e = ctx;
+    if (!strcmp(cmd, "status")) {
+        sbuf s;
+        sb_init(&s);
+        jw_kstr(w, "mode", "run");
+        jw_kstr(w, "state", e->paused ? "paused" : "running");
+        jw_kstr(w, "version", GENEVA_VERSION);
+        jw_kint(w, "pid", plat_getpid());
+        jw_kuint(w, "uptime_ms", plat_now_ms() - e->start_ms);
+        jw_kuint(w, "queue", e->o->fw.queue);
+        ports_format(&e->o->fw.ports, &s, ",", "-");
+        jw_kstr(w, "ports", s.data);
+        jw_kbool(w, "server_side", e->o->fw.server_side);
+        jw_kstr(w, "firewall", e->o->apply_fw ? fw_backend_name(e->o->fw.backend) : "none");
+        jw_kstr(w, "log_level", log_level_name(log_get_level()));
+        sb_reset(&s);
+        strategy_print(e->st, &s);
+        jw_kstr(w, "strategy", s.data);
+        if (e->o->strategy_file)
+            jw_kstr(w, "strategy_file", e->o->strategy_file);
+        sb_free(&s);
+        return 0;
+    }
+    if (!strcmp(cmd, "stats")) {
+        stats_fields(e, w);
+        return 0;
+    }
+    if (!strcmp(cmd, "reset_stats")) {
+        memset(&e->c, 0, sizeof(e->c));
+        strategy_reset(e->st);
+        return 0;
+    }
+    if (!strcmp(cmd, "set_strategy")) {
+        const char *text = json_get_str(req, "strategy", NULL);
+        strategy *s;
+        sbuf out;
+        if (!text) {
+            sb_puts(err, "set_strategy needs \"strategy\"");
+            return -1;
+        }
+        s = strategy_parse(text, err);
+        if (!s)
+            return -1;
         strategy_free(e->st);
         e->st = s;
         emit_strategy(e);
+        sb_init(&out);
+        strategy_print(s, &out);
+        jw_kstr(w, "strategy", out.data);
+        sb_free(&out);
+        return 0;
     }
-    sb_free(&err);
+    if (!strcmp(cmd, "reload")) {
+        if (reload(e, err) < 0)
+            return -1;
+        return 0;
+    }
+    if (!strcmp(cmd, "pause") || !strcmp(cmd, "resume")) {
+        int p = !strcmp(cmd, "pause");
+        if (p != e->paused) {
+            e->paused = p;
+            emit_state(e, p ? "paused" : "running");
+        }
+        return 0;
+    }
+    if (!strcmp(cmd, "log_level")) {
+        const char *l = json_get_str(req, "level", NULL);
+        log_level lvl;
+        if (l) {
+            if (log_parse_level(l, &lvl) < 0) {
+                sb_printf(err, "bad level \"%s\" (error, warn, info, debug, trace)", l);
+                return -1;
+            }
+            log_set_level(lvl);
+        }
+        jw_kstr(w, "level", log_level_name(log_get_level()));
+        return 0;
+    }
+    if (!strcmp(cmd, "stop")) {
+        e->stop_request = 1;
+        return 0;
+    }
+    sb_printf(err, "unknown command \"%s\"", cmd);
+    return -1;
 }
 
 /* ---- main loop ----------------------------------------------------------- */
@@ -528,6 +646,18 @@ int engine_run(engine_opts *o)
     }
     if (err.len)
         LOGW("engine", "%s", err.data);
+    if (o->control) {
+        sb_reset(&err);
+        e.ctl = ctl_open(o->control, o->control_token, &err);
+        if (!e.ctl) {
+            LOGE("engine", "%s", err.data);
+            emit_error("control", err.data);
+            rc = EXIT_IO;
+            goto out;
+        }
+        ev_set_tap(ctl_broadcast, e.ctl);
+        LOGI("engine", "control socket %s", o->control);
+    }
     if (o->apply_fw) {
         sb_reset(&err);
         if (fw_up(&o->fw, &err) < 0) {
@@ -550,10 +680,15 @@ int engine_run(engine_opts *o)
 
     next_stats = o->stats_interval > 0 ? e.start_ms + (uint64_t)(o->stats_interval * 1000) : 0;
     deadline = o->duration > 0 ? e.start_ms + (uint64_t)(o->duration * 1000) : 0;
-    while (!sig_stop) {
-        struct pollfd pfd = {.fd = nfq_fd(e.q), .events = POLLIN};
+    while (!sig_stop && !e.stop_request) {
+        struct pollfd pfd[2 + CTL_MAX_CLIENTS];
+        size_t nctl;
         uint64_t now = plat_now_ms();
         int timeout = 1000, r;
+        pfd[0].fd = nfq_fd(e.q);
+        pfd[0].events = POLLIN;
+        pfd[0].revents = 0;
+        nctl = ctl_pollfds(e.ctl, pfd + 1, ARRAY_LEN(pfd) - 1);
         if (e.ndl)
             timeout = e.dl[0].due <= now ? 0 : (int)MIN(e.dl[0].due - now, 1000);
         if (next_stats && next_stats > now && next_stats - now < (uint64_t)timeout)
@@ -566,14 +701,14 @@ int engine_run(engine_opts *o)
             if (deadline - now < (uint64_t)timeout)
                 timeout = (int)(deadline - now);
         }
-        r = poll(&pfd, 1, timeout);
+        r = poll(pfd, (nfds_t)(1 + nctl), timeout);
         if (r < 0 && errno != EINTR) {
             LOGE("engine", "poll: %s", strerror(errno));
             rc = EXIT_FAIL;
             reason = "error";
             break;
         }
-        if (r > 0 && (pfd.revents & POLLIN)) {
+        if (r > 0 && (pfd[0].revents & POLLIN)) {
             /* drain a batch, but keep timers responsive */
             for (int i = 0; i < 64; i++) {
                 int n = nfq_read(e.q, on_packet, &e, &e.c.overruns);
@@ -588,10 +723,16 @@ int engine_run(engine_opts *o)
                     break;
             }
         }
+        if (r > 0 && nctl)
+            ctl_dispatch(e.ctl, pfd + 1, nctl, on_control, &e);
         run_timers(&e, 0);
         if (sig_hup) {
+            sbuf herr;
             sig_hup = 0;
-            reload(&e);
+            sb_init(&herr);
+            if (reload(&e, &herr) < 0 && !e.o->strategy_file)
+                LOGI("engine", "SIGHUP: %s", herr.data);
+            sb_free(&herr);
         }
         now = plat_now_ms();
         if (sig_usr1 || (next_stats && now >= next_stats)) {
@@ -604,6 +745,10 @@ int engine_run(engine_opts *o)
     }
     if (sig_stop > 0)
         LOGI("engine", "stopping (signal %d)", (int)sig_stop);
+    if (e.stop_request) {
+        reason = "control";
+        LOGI("engine", "stopping (stop command)");
+    }
 
 out:
     if (fw_on)
@@ -622,6 +767,10 @@ out:
         jw_kint(&ev.w, "code", rc);
         jw_kstr(&ev.w, "reason", rc == EXIT_OK ? reason : "error");
         ev_emit(&ev);
+    }
+    if (e.ctl) {
+        ev_set_tap(NULL, NULL);
+        ctl_close(e.ctl);
     }
     free(e.dl);
     nfq_close(e.q);
