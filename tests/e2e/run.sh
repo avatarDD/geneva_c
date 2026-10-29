@@ -41,6 +41,8 @@ import socket, sys, threading
 def serve(fam, addr):
     s = socket.socket(fam, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if fam == socket.AF_INET6:  # "::" would take the IPv4 port as well
+        s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
     s.bind((addr, int(sys.argv[1]))); s.listen(16)
     while True:
         c, _ = s.accept()
@@ -79,6 +81,7 @@ ip netns exec "$NC" python3 -c 'import socket; socket.socket(socket.AF_INET6)' 2
 ip netns exec "$NS" python3 "$WORK/srv.py" $PORT &
 SRV=$!
 sleep 0.5
+kill -0 $SRV 2>/dev/null || { echo "echo server failed to start"; exit 1; }
 
 # run_case NAME FIREWALL STRATEGY [DST] -- then checks via helpers below
 start_case() {
