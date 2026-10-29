@@ -21,6 +21,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 JOBS=$(nproc 2>/dev/null || echo 4)
 
 # name|zig target and CPU|os
+# (mips64: zig itself passes -fno-PIC for a static build, which clang
+# ignores under the N64 ABI with a warning that -Werror would turn fatal)
 ALL="
 linux-x86_64|-target x86_64-linux-musl|posix
 linux-x86|-target x86-linux-musl -mcpu=i686|posix
@@ -30,7 +32,7 @@ linux-armv6|-target arm-linux-musleabihf -mcpu=arm1176jzf_s|posix
 linux-armv5|-target arm-linux-musleabi -mcpu=arm926ej_s|posix
 linux-mips|-target mips-linux-musleabi -mcpu=mips32+soft_float|posix
 linux-mipsel|-target mipsel-linux-musleabi -mcpu=mips32+soft_float|posix
-linux-mips64|-target mips64-linux-muslabi64|posix
+linux-mips64|-target mips64-linux-muslabi64 -Wno-option-ignored|posix
 linux-riscv64|-target riscv64-linux-musl|posix
 linux-ppc|-target powerpc-linux-musleabi|posix
 windows-x86_64|-target x86_64-windows-gnu|windows
