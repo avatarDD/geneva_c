@@ -167,21 +167,22 @@ done
 
 if [ -z "$ONLY" ] || echo " $ONLY " | grep -q " evolve "; then
     echo "== geneva evolve against censor 2"
+    # Censor 2 keeps no state between connections (it synchronizes on every
+    # SYN and blocks no host), so runs need no reset and the http probe can
+    # be used directly; its RSTs fail a run quickly. Inbound trees let the
+    # search drop the RSTs too.
     start_censor 2 && {
-        # every run resets the censor first, as Geneva runs a fresh one
-        CMD="kill -HUP $CPID; sleep 0.1; curl -sf -o /dev/null --max-time 2 --local-port {lports} http://10.80.2.2/?q=ultrasurf"
-        ip netns exec "$NC" "$GENEVA" evolve --probe exec --cmd "$CMD" --population 30 --generations 8 \
-            --rng-seed 3 --runs 2 --fitness-by min --log-file "$WORK/evolve.log" --quiet > "$WORK/best.txt"
+        ip netns exec "$NC" "$GENEVA" evolve $PROBE --bad-word ultrasurf --timeout 1 --in-trees 1 \
+            --population 40 --generations 15 --rng-seed ${SEED:-3} --runs 2 --fitness-by min \
+            --log-file "$WORK/evolve.log" --quiet > "$WORK/best.txt"
         rc=$?
         head -3 "$WORK/best.txt"
         BEST=$(head -1 "$WORK/best.txt" | cut -f3)
         FIT=$(head -1 "$WORK/best.txt" | cut -f1)
         [ $rc -eq 0 ] && positive "${FIT:-0}" && ok "found: $BEST ($FIT)" || bad "evolve found nothing (exit $rc)" "$WORK/evolve.log"
-        if [ -n "$BEST" ]; then
-            ip netns exec "$NC" "$GENEVA" eval --probe exec --cmd "$CMD" --runs 3 --fitness-by min --quiet \
+        if positive "${FIT:-0}"; then
+            ip netns exec "$NC" "$GENEVA" eval $PROBE --bad-word ultrasurf --runs 3 --fitness-by min --quiet \
                 -s "$BEST" > "$WORK/eval.txt" && ok "it works again (3 of 3)" || bad "the strategy does not hold" "$WORK/eval.txt"
-            f=$(run_eval "$BEST")
-            positive "${f:-0}" && ok "and with the http probe ($f)" || bad "not with the http probe ($f)"
         fi
         stop_censor
     }
