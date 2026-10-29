@@ -289,8 +289,9 @@ static void test_http(void)
     c.min_bytes = 10000;
     CHECK_INT(run_mode(M_HTTP_EOF, &c, &r), PO_BROKEN);
 
-    /* nothing listens */
+    /* nothing listens (Windows retries a refused connect for about 2 s) */
     cfg_init(&c, PROBE_HTTP, 1);
+    c.timeout = 8;
     {
         probe_ports lp = {0, 0, 0};
         probe_run(&c, &lp, &r);
