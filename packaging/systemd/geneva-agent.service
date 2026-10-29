@@ -1,0 +1,23 @@
+# The agent of a server-side evaluation ("geneva agent"): makes probes for
+# an evaluator that holds the token. Needs no privileges.
+[Unit]
+Description=Geneva agent for server-side evaluation
+Documentation=https://github.com/avatarDD/geneva_c
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/geneva/geneva.conf
+ExecStart=/usr/local/bin/geneva agent $AGENT_ARGS
+Restart=on-failure
+RestartSec=5
+DynamicUser=yes
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

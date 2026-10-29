@@ -14,7 +14,7 @@ sudo geneva run -f strategy.txt -p 80,443 --events - --stats-interval 10
 
 ## Как идут пакеты
 
-1. Правила firewall отправляют в NFQUEUE (по умолчанию очередь 300) пакеты
+1. Правила firewall отправляют в NFQUEUE (по умолчанию очередь 310) пакеты
    на порты сервиса (`-p`) и ответы с них. Направление: хуки PREROUTING и
    INPUT дают «in», OUTPUT и POSTROUTING — «out», в FORWARD оно
    определяется по портам.

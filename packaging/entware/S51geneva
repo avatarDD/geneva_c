@@ -1,0 +1,131 @@
+#!/bin/sh
+# Geneva on Entware (Keenetic and other routers): "geneva run" with the
+# strategy from /opt/etc/geneva/geneva.conf, and optionally "geneva agent".
+#   S51geneva start|stop|restart|reload|status
+# Stopping removes the firewall rules; reload re-reads the strategy file.
+
+GENEVA=${GENEVA:-/opt/bin/geneva}
+CONF=${GENEVA_CONF:-/opt/etc/geneva/geneva.conf}
+RUN_DIR=${GENEVA_RUN_DIR:-/opt/var/run}
+PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+ENABLED=no
+STRATEGY_FILE=/opt/etc/geneva/strategy.txt
+PORTS=80,443
+PROTO=tcp
+IFACE=
+QUEUE=310
+FIREWALL=auto
+CONTROL=unix:/opt/var/run/geneva.sock
+CONTROL_TOKEN=
+LOG_LEVEL=info
+LOG_FILE=/opt/var/log/geneva.log
+EVENTS=
+EXTRA=
+AGENT_ENABLED=no
+AGENT_LISTEN=tcp:0.0.0.0:7110
+AGENT_CONNECT=
+AGENT_TOKEN=
+AGENT_LOG_FILE=/opt/var/log/geneva-agent.log
+# shellcheck disable=SC1090
+[ -f "$CONF" ] && . "$CONF"
+
+PID_RUN=$RUN_DIR/geneva.pid
+PID_AGENT=$RUN_DIR/geneva-agent.pid
+
+alive() {
+	[ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null
+}
+
+# stop_pid FILE: SIGTERM, then up to 10 s for the rules to go
+stop_pid() {
+	alive "$1" || { rm -f "$1"; return 0; }
+	pid=$(cat "$1")
+	kill "$pid" 2>/dev/null
+	i=0
+	while kill -0 "$pid" 2>/dev/null && [ $i -lt 100 ]; do
+		sleep 0.1 2>/dev/null || sleep 1
+		i=$((i + 1))
+	done
+	kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+	rm -f "$1"
+}
+
+start_run() {
+	[ "$ENABLED" = yes ] || return 0
+	alive "$PID_RUN" && return 0
+	if ! grep -q '[^[:space:]]' "$STRATEGY_FILE" 2>/dev/null; then
+		echo "geneva: no strategy in $STRATEGY_FILE" >&2
+		return 1
+	fi
+	mkdir -p "$RUN_DIR" "$(dirname "$LOG_FILE")"
+	set -- run -f "$STRATEGY_FILE" -p "$PORTS" --proto "$PROTO" -q "$QUEUE" --firewall "$FIREWALL" \
+		-l "$LOG_LEVEL" --log-file "$LOG_FILE" --quiet
+	[ -n "$IFACE" ] && set -- "$@" -i "$IFACE"
+	[ -n "$CONTROL" ] && set -- "$@" -c "$CONTROL"
+	[ -n "$EVENTS" ] && set -- "$@" -e "$EVENTS"
+	# shellcheck disable=SC2086 # EXTRA holds several options
+	[ -n "$EXTRA" ] && set -- "$@" $EXTRA
+	GENEVA_CONTROL_TOKEN=$CONTROL_TOKEN "$GENEVA" "$@" </dev/null >/dev/null 2>&1 &
+	echo $! > "$PID_RUN"
+	sleep 1
+	if ! alive "$PID_RUN"; then
+		echo "geneva: failed to start, see $LOG_FILE" >&2
+		rm -f "$PID_RUN"
+		return 1
+	fi
+}
+
+start_agent() {
+	[ "$AGENT_ENABLED" = yes ] || return 0
+	alive "$PID_AGENT" && return 0
+	if [ -z "$AGENT_TOKEN" ]; then
+		echo "geneva: the agent needs AGENT_TOKEN" >&2
+		return 1
+	fi
+	mkdir -p "$RUN_DIR" "$(dirname "$AGENT_LOG_FILE")"
+	if [ -n "$AGENT_CONNECT" ]; then
+		set -- agent --connect "$AGENT_CONNECT"
+	else
+		set -- agent --listen "$AGENT_LISTEN"
+	fi
+	GENEVA_AGENT_TOKEN=$AGENT_TOKEN "$GENEVA" "$@" --log-file "$AGENT_LOG_FILE" --quiet \
+		</dev/null >/dev/null 2>&1 &
+	echo $! > "$PID_AGENT"
+}
+
+status() {
+	rc=1
+	if alive "$PID_RUN"; then echo "geneva run: running ($(cat "$PID_RUN"))"; rc=0; else echo "geneva run: stopped"; fi
+	if [ "$AGENT_ENABLED" = yes ]; then
+		if alive "$PID_AGENT"; then echo "geneva agent: running ($(cat "$PID_AGENT"))"; else echo "geneva agent: stopped"; fi
+	fi
+	return $rc
+}
+
+case "$1" in
+start)
+	start_run
+	r=$?
+	start_agent || r=1
+	exit $r
+	;;
+stop)
+	stop_pid "$PID_AGENT"
+	stop_pid "$PID_RUN"
+	;;
+restart)
+	"$0" stop
+	"$0" start
+	;;
+reload)
+	alive "$PID_RUN" && kill -HUP "$(cat "$PID_RUN")"
+	;;
+status)
+	status
+	;;
+*)
+	echo "Usage: $0 start|stop|restart|reload|status" >&2
+	exit 2
+	;;
+esac

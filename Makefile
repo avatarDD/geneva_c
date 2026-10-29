@@ -30,7 +30,7 @@ LDLIBS  :=
 ifeq ($(OS_TARGET),windows)
   EXE     := .exe
   LDLIBS  += -lws2_32 -liphlpapi
-  XCFLAGS += -D_WIN32_WINNT=0x0601 -D__USE_MINGW_ANSI_STDIO=1
+  XCFLAGS += -U_WIN32_WINNT -D_WIN32_WINNT=0x0601 -D__USE_MINGW_ANSI_STDIO=1
 else
   EXE     :=
   LDLIBS  += -lpthread -lm

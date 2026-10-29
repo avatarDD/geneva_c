@@ -35,8 +35,10 @@ jobs:
         run: sudo env FIREWALLS="auto iptables nft" tests/e2e/run.sh build/geneva
       - name: evaluator e2e (evolve against a keyword censor)
         run: sudo tests/e2e/evolve.sh build/geneva
-      - name: censors e2e (Geneva's lab censors on a router namespace)
+      - name: censors e2e (Geneva's lab censors on a router namespace, server side)
         run: sudo tests/e2e/censors.sh build/geneva
+      - name: service scripts e2e (Entware, OpenWrt procd)
+        run: sudo tests/e2e/initscripts.sh build/geneva
 
   musl-static:
     runs-on: ubuntu-24.04
@@ -105,5 +107,7 @@ jobs:
       - run: make -j"$(nproc)"
       - name: Strategy corpus is up to date
         run: python tools/extract_strategies.py "$RUNNER_TEMP/geneva" | diff -u tests/geneva_strategies.h -
+      - name: Strategy library is up to date
+        run: python tools/gen_library.py "$RUNNER_TEMP/geneva" | diff -u src/library_data.h -
       - name: Compare with Geneva
         run: python tools/geneva_diff.py --geneva "$RUNNER_TEMP/geneva" --bin build/geneva -v

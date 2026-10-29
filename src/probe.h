@@ -83,6 +83,9 @@ typedef struct {
  * message. */
 int probe_resolve(probe_cfg *c, sbuf *err);
 
+/* The resolved address as text (cfg->ip when unresolved). */
+void probe_addr_text(const probe_cfg *c, char *buf, size_t cap);
+
 /* Runs one attempt (not for PROBE_EXTERNAL). */
 void probe_run(const probe_cfg *c, probe_ports *lp, probe_res *r);
 

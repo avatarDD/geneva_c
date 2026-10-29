@@ -362,3 +362,18 @@ int plat_write_atomic(const char *path, const void *data, size_t len)
     free(tmp);
     return ok ? 0 : -1;
 }
+
+#if defined(__GCC_ATOMIC_INT_LOCK_FREE) && __GCC_ATOMIC_INT_LOCK_FREE < 2
+/* No atomic instructions (ARMv5): a load and a store can be preempted
+ * between each other, so the read-modify-write takes a lock. */
+int atomic_fetch_add_int(volatile int *p, int v)
+{
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    int old;
+    pthread_mutex_lock(&lock);
+    old = *p;
+    *p = old + v;
+    pthread_mutex_unlock(&lock);
+    return old;
+}
+#endif

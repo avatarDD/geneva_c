@@ -112,6 +112,49 @@ bad:
 
 /* ---- server -------------------------------------------------------------- */
 
+/* A blocking TCP socket listening on a. */
+static sock_t tcp_listener(const ctl_addr *a, const char *spec, sbuf *err)
+{
+    int one = 1;
+    sock_t s = socket(a->ss.ss_family, SOCK_STREAM, 0);
+    if (s == SOCK_INVALID) {
+        sb_printf(err, "socket: %s", plat_sock_strerror(plat_sock_err()));
+        return SOCK_INVALID;
+    }
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
+    if (bind(s, (struct sockaddr *)&a->ss, a->sslen) < 0 || listen(s, 8) < 0) {
+        sb_printf(err, "%s: %s", spec, plat_sock_strerror(plat_sock_err()));
+        plat_sock_close(s);
+        return SOCK_INVALID;
+    }
+    return s;
+}
+
+sock_t ctl_listen(const char *spec, int has_token, sbuf *err)
+{
+    ctl_addr a;
+    if (parse_spec(spec, &a, err) < 0)
+        return SOCK_INVALID;
+    if (a.is_unix) {
+        sb_puts(err, "a TCP address is needed here (tcp:PORT or tcp:HOST:PORT)");
+        return SOCK_INVALID;
+    }
+    if (!a.loopback && !has_token) {
+        sb_puts(err, "a socket on a non-loopback address needs a token");
+        return SOCK_INVALID;
+    }
+    return tcp_listener(&a, spec, err);
+}
+
+ctl *ctl_new(const char *token)
+{
+    ctl *c = xcalloc(1, sizeof(*c));
+    c->ls = SOCK_INVALID;
+    if (token && *token)
+        c->token = xstrdup(token);
+    return c;
+}
+
 ctl *ctl_open(const char *spec, const char *token, sbuf *err)
 {
     ctl_addr a;
@@ -159,23 +202,17 @@ ctl *ctl_open(const char *spec, const char *token, sbuf *err)
             return NULL;
         }
         umask(old);
+        if (listen(s, 8) < 0) {
+            sb_printf(err, "control socket %s: %s", spec, strerror(errno));
+            close(s);
+            remove(a.path);
+            return NULL;
+        }
     } else
 #endif
-    {
-        int one = 1;
-        s = socket(a.ss.ss_family, SOCK_STREAM, 0);
-        if (s == SOCK_INVALID) {
-            sb_printf(err, "control socket: %s", plat_sock_strerror(plat_sock_err()));
-            return NULL;
-        }
-        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
-        if (bind(s, (struct sockaddr *)&a.ss, a.sslen) < 0) {
-            sb_printf(err, "control socket %s: %s", spec, plat_sock_strerror(plat_sock_err()));
-            plat_sock_close(s);
-            return NULL;
-        }
-    }
-    if (listen(s, 8) < 0 || plat_sock_nonblock(s, 1) < 0) {
+    if ((s = tcp_listener(&a, spec, err)) == SOCK_INVALID)
+        return NULL;
+    if (plat_sock_nonblock(s, 1) < 0) {
         sb_printf(err, "control socket %s: %s", spec, plat_sock_strerror(plat_sock_err()));
         plat_sock_close(s);
         if (a.is_unix)
@@ -218,7 +255,8 @@ void ctl_close(ctl *c)
         return;
     while (c->ncl)
         drop_client(c, c->ncl - 1);
-    plat_sock_close(c->ls);
+    if (c->ls != SOCK_INVALID)
+        plat_sock_close(c->ls);
     if (c->unix_path)
         remove(c->unix_path);
     free(c->unix_path);
@@ -231,9 +269,11 @@ size_t ctl_pollfds(ctl *c, plat_pollfd *fds, size_t max)
     size_t n = 0;
     if (!c || !max)
         return 0;
-    fds[n].fd = c->ls;
-    fds[n].events = POLLIN;
-    fds[n++].revents = 0;
+    if (c->ls != SOCK_INVALID) {
+        fds[n].fd = c->ls;
+        fds[n].events = POLLIN;
+        fds[n++].revents = 0;
+    }
     for (int i = 0; i < c->ncl && n < max; i++, n++) {
         fds[n].fd = c->cl[i].s;
         fds[n].events = (short)(POLLIN | (c->cl[i].out.len ? POLLOUT : 0));
@@ -406,11 +446,21 @@ static void handle_line(ctl *c, client *k, const char *line, ctl_handler h, void
     json_free(req);
 }
 
+static void add_client(ctl *c, sock_t s)
+{
+    client *k = &c->cl[c->ncl++];
+    plat_sock_nonblock(s, 1);
+    memset(k, 0, sizeof(*k));
+    k->s = s;
+    sb_init(&k->in);
+    sb_init(&k->out);
+    k->authed = c->token == NULL;
+}
+
 static void accept_clients(ctl *c)
 {
     for (;;) {
         sock_t s = accept(c->ls, NULL, NULL);
-        client *k;
         if (s == SOCK_INVALID)
             return;
         if (c->ncl == CTL_MAX_CLIENTS) {
@@ -419,15 +469,19 @@ static void accept_clients(ctl *c)
             plat_sock_close(s);
             continue;
         }
-        plat_sock_nonblock(s, 1);
-        k = &c->cl[c->ncl++];
-        memset(k, 0, sizeof(*k));
-        k->s = s;
-        sb_init(&k->in);
-        sb_init(&k->out);
-        k->authed = c->token == NULL;
+        add_client(c, s);
     }
 }
+
+int ctl_adopt(ctl *c, sock_t s)
+{
+    if (c->ncl == CTL_MAX_CLIENTS)
+        return -1;
+    add_client(c, s);
+    return 0;
+}
+
+int ctl_clients(const ctl *c) { return c ? c->ncl : 0; }
 
 /* Reads and handles complete lines. Returns -1 when the client is gone. */
 static int read_client(ctl *c, client *k, ctl_handler h, void *ctx)
@@ -469,11 +523,16 @@ static int read_client(ctl *c, client *k, ctl_handler h, void *ctx)
 
 void ctl_dispatch(ctl *c, const plat_pollfd *fds, size_t n, ctl_handler h, void *ctx)
 {
+    int listener = 0;
     if (!c || !n)
         return;
     /* clients first: accepting reorders nothing, dropping does */
-    for (size_t j = n; j-- > 1;) {
+    for (size_t j = n; j-- > 0;) {
         int i;
+        if (c->ls != SOCK_INVALID && fds[j].fd == c->ls) {
+            listener = fds[j].revents & POLLIN;
+            continue;
+        }
         for (i = 0; i < c->ncl && c->cl[i].s != fds[j].fd; i++)
             ;
         if (i == c->ncl || !fds[j].revents)
@@ -485,7 +544,7 @@ void ctl_dispatch(ctl *c, const plat_pollfd *fds, size_t n, ctl_handler h, void 
         if (flush(&c->cl[i]) < 0 || (c->cl[i].closing && !c->cl[i].out.len))
             drop_client(c, i);
     }
-    if (fds[0].revents & POLLIN)
+    if (listener)
         accept_clients(c);
 }
 
@@ -521,4 +580,65 @@ sock_t ctl_connect(const char *spec, sbuf *err)
         return SOCK_INVALID;
     }
     return s;
+}
+
+int ctl_send_line(ctl_conn *c, const char *line)
+{
+    /* one send for the line and its newline: two would meet Nagle and the
+     * peer's delayed ACK (40 ms per request) */
+    size_t len = strlen(line), off = 0;
+    char *buf = xmalloc(len + 1);
+    int rc = 0;
+    memcpy(buf, line, len);
+    buf[len++] = '\n';
+    while (off < len) {
+        int r = (int)send(c->s, buf + off, (int)(len - off), MSG_NOSIGNAL);
+        if (r <= 0) {
+            rc = -1;
+            break;
+        }
+        off += (size_t)r;
+    }
+    free(buf);
+    return rc;
+}
+
+int ctl_read_line(ctl_conn *c, sbuf *out, int timeout_ms)
+{
+    uint64_t deadline = timeout_ms >= 0 ? plat_now_ms() + (uint64_t)timeout_ms : 0;
+    for (;;) {
+        char *nl = c->in.len ? memchr(c->in.data, '\n', c->in.len) : NULL;
+        plat_pollfd pfd;
+        char buf[4096];
+        int r, wait = -1;
+        if (nl) {
+            size_t n = (size_t)(nl - c->in.data);
+            sb_reset(out);
+            sb_append(out, c->in.data, n);
+            memmove(c->in.data, nl + 1, c->in.len - n - 1);
+            c->in.len -= n + 1;
+            c->in.data[c->in.len] = 0;
+            return 1;
+        }
+        if (c->in.len > CTL_MAX_LINE)
+            return -1;
+        if (deadline) {
+            uint64_t now = plat_now_ms();
+            if (now >= deadline)
+                return 0;
+            wait = (int)(deadline - now);
+        }
+        pfd.fd = c->s;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        r = plat_poll(&pfd, 1, wait);
+        if (r < 0)
+            return -1; /* a signal (Ctrl+C) */
+        if (r == 0)
+            continue;
+        r = (int)recv(c->s, buf, sizeof(buf), 0);
+        if (r <= 0)
+            return -1;
+        sb_append(&c->in, buf, (size_t)r);
+    }
 }

@@ -140,7 +140,7 @@ int eval_parse_args(const args_t *a, const char *cmd, eval_opts *o)
         return -1;
     o->port_base = (uint16_t)v;
     o->use_engine = !arg_has(a, "no-engine");
-    if (arg_int(a, "queue", 301, 0, 65535, &v) < 0)
+    if (arg_int(a, "queue", 311, 0, 65535, &v) < 0)
         return -1;
     o->fw.queue = (uint16_t)v;
     if ((s = arg_str(a, "mark", NULL)) != NULL) {
@@ -155,6 +155,34 @@ int eval_parse_args(const args_t *a, const char *cmd, eval_opts *o)
     if ((s = arg_str(a, "firewall", NULL)) != NULL && fw_backend_parse(s, &o->fw.backend) < 0) {
         fprintf(stderr, "geneva %s: --firewall must be auto, nft or iptables\n", cmd);
         return -1;
+    }
+
+    if (arg_has(a, "agent") && arg_has(a, "agent-listen")) {
+        fprintf(stderr, "geneva %s: --agent and --agent-listen exclude each other\n", cmd);
+        return -1;
+    }
+    o->agent = arg_str(a, "agent", NULL);
+    if (!o->agent && (o->agent = arg_str(a, "agent-listen", NULL)) != NULL)
+        o->agent_listen = 1;
+    o->agent_token = arg_str(a, "agent-token", getenv("GENEVA_AGENT_TOKEN"));
+    if (arg_dbl(a, "agent-wait", 300, 1, 86400, &o->agent_wait) < 0)
+        return -1;
+    if (o->agent) {
+        if (c->kind == PROBE_EXEC || c->kind == PROBE_EXTERNAL) {
+            fprintf(stderr, "geneva %s: the agent runs http, tls, dns and tcp probes\n", cmd);
+            return -1;
+        }
+        if (o->workers > 1) {
+            fprintf(stderr, "geneva %s: server-side evaluation runs one strategy at a time (--workers 1)\n", cmd);
+            return -1;
+        }
+        if (!c->port) {
+            fprintf(stderr, "geneva %s: server-side evaluation needs --port of the service\n", cmd);
+            return -1;
+        }
+        /* the strategy applies to the service: its port is the one slot */
+        o->port_base = c->port;
+        o->ports_per_worker = 1;
     }
 
     switch (c->kind) {
@@ -231,7 +259,18 @@ void eval_target_name(const eval_opts *o, sbuf *out)
 static void add_file(const char *path, char ***v, size_t *n, int *bad)
 {
     size_t len;
-    char *text = read_file(path, &len), *line, *next;
+    char *text, *line, *next;
+    if (!strcmp(path, "-")) { /* geneva library -q ... | geneva eval -f - */
+        sbuf in;
+        char buf[4096];
+        size_t got;
+        sb_init(&in);
+        while ((got = fread(buf, 1, sizeof(buf), stdin)) > 0)
+            sb_append(&in, buf, got);
+        text = sb_take(&in);
+    } else {
+        text = read_file(path, &len);
+    }
     if (!text) {
         fprintf(stderr, "geneva eval: cannot read %s\n", path);
         *bad = 1;
@@ -259,7 +298,7 @@ int cmd_eval(int argc, char **argv)
 {
     static const optdef defs[] = {
         {"strategy", 's', 1, "STRATEGY", "strategy to evaluate (repeatable)"},
-        {"strategy-file", 'f', 1, "FILE", "strategies to evaluate, one per line"},
+        {"strategy-file", 'f', 1, "FILE", "strategies to evaluate, one per line (- for stdin)"},
         EVAL_OPTS,
         {"log-level", 'l', 1, "LEVEL", "error, warn, info (default), debug or trace"},
         {"log-format", 0, 1, "FMT", "text (default) or json"},
@@ -304,8 +343,13 @@ int cmd_eval(int argc, char **argv)
         strats[ns++] = xstrdup(s);
     }
     idx = 0;
-    while ((s = arg_next(&a, "strategy-file", &idx)) != NULL)
+    while ((s = arg_next(&a, "strategy-file", &idx)) != NULL) {
+        if (!strcmp(s, "-") && o.probe.kind == PROBE_EXTERNAL) {
+            fprintf(stderr, "geneva eval: the external probe reads its results from stdin: no -f -\n");
+            goto done;
+        }
         add_file(s, &strats, &ns, &bad);
+    }
     for (int i = 0; i < a.npos; i++) {
         strats = xrealloc(strats, (ns + 1) * sizeof(*strats));
         strats[ns++] = xstrdup(a.pos[i]);

@@ -33,7 +33,11 @@
         {"residual-wait", 0, 1, "SEC", "pause after a failed run (censors that keep blocking)"},  \
         {"local-ports", 0, 1, "BASE", "local ports for probes: 64 per worker from BASE (default 30000)"}, \
         {"no-engine", 0, 0, NULL, "probes only, no strategies (no privileges needed)"},            \
-        {"queue", 'q', 1, "N", "NFQUEUE number (default 301)"},                                    \
+        {"agent", 0, 1, "ADDR", "server-side: geneva agent at ADDR (tcp:HOST:PORT) runs the probes"}, \
+        {"agent-listen", 0, 1, "ADDR", "server-side: wait for geneva agent --connect on ADDR"},    \
+        {"agent-token", 0, 1, "TOKEN", "the agent's token (default $GENEVA_AGENT_TOKEN)"},         \
+        {"agent-wait", 0, 1, "SEC", "--agent-listen: wait for the agent this long (default 300)"}, \
+        {"queue", 'q', 1, "N", "NFQUEUE number (default 311)"},                                    \
         {"mark", 0, 1, "MASK", "fwmark of packets the engine sends (default 0x20000000)"},         \
         {"firewall", 0, 1, "TYPE", "auto, nft or iptables"}
 

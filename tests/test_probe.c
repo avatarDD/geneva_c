@@ -2,7 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "agent.h"
+#include "ctl.h"
 #include "evaluator.h"
+#include "json.h"
+#include "library.h"
 #include "plat.h"
 #include "probe.h"
 #include "strategy.h"
@@ -641,8 +645,295 @@ static void test_evaluator(void)
     sb_free(&err);
 }
 
+/* ---- server-side evaluation: the agent ------------------------------------ */
+
+static void test_agent_json(void)
+{
+    probe_cfg c, d;
+    sbuf sb, err;
+    jw w;
+    json_val *v;
+    const char *perr;
+    t_current = "agent probe json";
+    cfg_init(&c, PROBE_HTTP, 8080);
+    c.path = "/x?y";
+    c.bad_word = "ultrasurf";
+    c.valid_contains = "ok \"quoted\"";
+    c.max_bytes = 1000;
+    c.timeout = 1.5;
+    sb_init(&sb);
+    sb_init(&err);
+    jw_init(&w, &sb);
+    jw_obj(&w);
+    agent_probe_json(&c, &w);
+    jw_obj_end(&w);
+    v = json_parse(sb.data, &perr);
+    CHECK(v != NULL);
+    CHECK_INT(agent_probe_parse(json_get(v, "probe"), &d, &err), 0);
+    CHECK_INT(d.kind, PROBE_HTTP);
+    CHECK_STR(d.ip, "127.0.0.1");
+    CHECK_STR(d.host, "test.example");
+    CHECK_INT(d.port, 8080);
+    CHECK_STR(d.path, "/x?y");
+    CHECK_STR(d.bad_word, "ultrasurf");
+    CHECK_STR(d.valid_contains, "ok \"quoted\"");
+    CHECK_INT(d.max_bytes, 1000);
+    CHECK(d.timeout == 1.5);
+    CHECK(d.addrlen > 0);
+    json_free(v);
+
+    /* a tcp payload goes as hex */
+    cfg_init(&c, PROBE_TCP, 7);
+    CHECK_INT(probe_parse_payload("a\\r\\n\\x00b", &c.payload, &c.payload_len), 0);
+    sb_reset(&sb);
+    jw_init(&w, &sb);
+    jw_obj(&w);
+    agent_probe_json(&c, &w);
+    jw_obj_end(&w);
+    v = json_parse(sb.data, &perr);
+    CHECK_INT(agent_probe_parse(json_get(v, "probe"), &d, &err), 0);
+    CHECK_INT(d.payload_len, 5);
+    CHECK(d.payload && !memcmp(d.payload, "a\r\n\0b", 5));
+    free(d.payload);
+    free(c.payload);
+    json_free(v);
+
+    /* refused */
+    {
+        static const char *const bad[] = {
+            "{\"kind\":\"exec\",\"ip\":\"127.0.0.1\",\"port\":1}",
+            "{\"kind\":\"external\",\"ip\":\"127.0.0.1\",\"port\":1}",
+            "{\"kind\":\"gopher\",\"ip\":\"127.0.0.1\",\"port\":1}",
+            "{\"kind\":\"http\",\"port\":80}",
+            "{\"kind\":\"http\",\"ip\":\"127.0.0.1\",\"port\":0}",
+            "{\"kind\":\"http\",\"ip\":\"127.0.0.1\",\"port\":80,\"timeout\":600}",
+            "{\"kind\":\"http\",\"ip\":\"127.0.0.1\",\"port\":80,\"max_bytes\":1e12}",
+            "{\"kind\":\"http\",\"ip\":7,\"port\":80}",
+            "{\"kind\":\"tls\",\"ip\":\"127.0.0.1\",\"port\":443,\"tls_version\":11}",
+            "{\"kind\":\"dns\",\"ip\":\"127.0.0.1\",\"port\":53}",
+            "{\"kind\":\"tcp\",\"ip\":\"127.0.0.1\",\"port\":7,\"payload\":\"hex:zz\"}",
+            "[]",
+        };
+        for (size_t i = 0; i < ARRAY_LEN(bad); i++) {
+            v = json_parse(bad[i], &perr);
+            sb_reset(&err);
+            CHECK(v && agent_probe_parse(v, &d, &err) < 0 && err.len);
+            json_free(v);
+        }
+        CHECK(agent_probe_parse(NULL, &d, &err) < 0);
+    }
+    sb_free(&sb);
+    sb_free(&err);
+}
+
+static struct {
+    ctl *c;
+    agent_state st;
+    volatile int stop;
+    const char *dial; /* reverse: dial this address and serve it */
+    plat_thread_t th;
+} ag;
+
+static void agent_main(void *arg)
+{
+    (void)arg;
+    while (!ag.stop) {
+        plat_pollfd fds[CTL_MAX_CLIENTS + 1];
+        size_t n;
+        if (ag.dial && !ctl_clients(ag.c)) {
+            sbuf err;
+            sock_t s;
+            sb_init(&err);
+            s = ctl_connect(ag.dial, &err);
+            sb_free(&err);
+            if (s == SOCK_INVALID || ctl_adopt(ag.c, s) < 0) {
+                if (s != SOCK_INVALID)
+                    plat_sock_close(s);
+                plat_sleep_ms(20);
+                continue;
+            }
+        }
+        n = ctl_pollfds(ag.c, fds, ARRAY_LEN(fds));
+        if (n && plat_poll(fds, (unsigned)n, 50) > 0)
+            ctl_dispatch(ag.c, fds, n, agent_handler, &ag.st);
+        else if (!n)
+            plat_sleep_ms(20);
+    }
+}
+
+static void test_agent(void)
+{
+    agent_conn *a;
+    probe_cfg c;
+    probe_res r;
+    sbuf err;
+    char spec[64];
+    t_current = "agent";
+    sb_init(&err);
+    memset(&ag, 0, sizeof(ag));
+    ag.c = ctl_open("tcp:127.0.0.1:0", "tok", &err);
+    CHECK(ag.c != NULL);
+    if (!ag.c)
+        return;
+    snprintf(spec, sizeof(spec), "tcp:127.0.0.1:%d", ctl_port(ag.c));
+    plat_thread_start(&ag.th, agent_main, NULL);
+
+    CHECK(agent_open(spec, 0, "wrong", 5, NULL, &err) == NULL && strstr(err.data, "token"));
+    sb_reset(&err);
+    CHECK(agent_open(spec, 0, NULL, 5, NULL, &err) == NULL);
+    sb_reset(&err);
+    CHECK(agent_open("tcp:127.0.0.1:1", 0, "tok", 5, NULL, &err) == NULL);
+    sb_reset(&err);
+    a = agent_open(spec, 0, "tok", 5, NULL, &err);
+    CHECK(a != NULL);
+    if (a) {
+        CHECK(strstr(agent_name(a), GENEVA_VERSION) != NULL);
+        cfg_init(&c, PROBE_HTTP, srv.port);
+        srv.mode = M_HTTP_CL;
+        CHECK_INT(agent_probe(a, &c, &r), 0);
+        CHECK_INT(r.outcome, PO_OK);
+        CHECK(r.fitness == 400 && r.bytes > 0);
+        srv.mode = M_RESET;
+        CHECK_INT(agent_probe(a, &c, &r), 0);
+        CHECK_INT(r.outcome, PO_RESET);
+        c.kind = PROBE_EXEC; /* the agent refuses: no retry */
+        CHECK_INT(agent_probe(a, &c, &r), -1);
+        CHECK(strstr(r.detail, "agent:") != NULL);
+        agent_close(a);
+    }
+
+    /* the evaluator with the agent */
+    {
+        eval_opts o;
+        evaluator *ev = NULL;
+        eval_result er;
+        int reachable = 0;
+        eval_opts_default(&o);
+        cfg_init(&o.probe, PROBE_HTTP, srv.port);
+        o.use_engine = 0;
+        o.runs = 2;
+        o.agent = spec;
+        o.agent_token = "tok";
+        CHECK_INT(evaluator_open(&o, &ev, &err), 0);
+        srv.mode = M_HTTP_CL;
+        CHECK_INT(evaluator_baseline(ev, &er, &reachable, NULL, NULL), 0);
+        CHECK(reachable && er.fitness == 400 && er.runs == 2);
+        CHECK_INT(ag.st.probes, 4); /* two above, two here */
+        evaluator_close(ev);
+        o.agent_token = "nope";
+        ev = NULL;
+        CHECK_INT(evaluator_open(&o, &ev, &err), 6);
+        evaluator_close(ev);
+    }
+    ag.stop = 1;
+    plat_thread_join(ag.th);
+    ctl_close(ag.c);
+
+    /* reverse: the agent dials the evaluator */
+    {
+        sock_t ls = ctl_listen("tcp:127.0.0.1:0", 0, &err);
+        struct sockaddr_in sa;
+        socklen_t sl = sizeof(sa);
+        CHECK(ls != SOCK_INVALID);
+        CHECK(ctl_listen("tcp:0.0.0.0:0", 0, &err) == SOCK_INVALID); /* public needs a token */
+        getsockname(ls, (struct sockaddr *)&sa, &sl);
+        snprintf(spec, sizeof(spec), "tcp:127.0.0.1:%u", (unsigned)ntohs(sa.sin_port));
+        plat_sock_close(ls);
+        memset(&ag, 0, sizeof(ag));
+        ag.c = ctl_new("tok");
+        ag.dial = spec;
+        plat_thread_start(&ag.th, agent_main, NULL);
+        sb_reset(&err);
+        a = agent_open(spec, 1, "tok", 10, NULL, &err);
+        CHECK(a != NULL);
+        if (a) {
+            cfg_init(&c, PROBE_HTTP, srv.port);
+            srv.mode = M_HTTP_CL;
+            CHECK_INT(agent_probe(a, &c, &r), 0);
+            CHECK_INT(r.outcome, PO_OK);
+            agent_close(a);
+        }
+        ag.stop = 1;
+        plat_thread_join(ag.th);
+        ctl_close(ag.c);
+        sb_reset(&err);
+        CHECK(agent_open(spec, 1, "tok", 1, NULL, &err) == NULL && strstr(err.data, "no agent"));
+    }
+    sb_free(&err);
+}
+
+/* ---- the strategy library ------------------------------------------------- */
+
+static void test_library(void)
+{
+    size_t n, real = 0, lab = 0, server = 0;
+    const lib_entry *v = library_entries(&n);
+    lib_filter f;
+    sbuf err;
+    t_current = "library";
+    sb_init(&err);
+    CHECK(n >= 50);
+    for (size_t i = 0; i < n; i++) {
+        strategy *st = strategy_parse(v[i].strategy, &err);
+        if (!st)
+            fprintf(stderr, "    %s: %s\n", v[i].strategy, err.data);
+        CHECK(st != NULL);
+        strategy_free(st);
+        CHECK(v[i].rate >= 0 && v[i].rate <= 100);
+        CHECK(v[i].description && *v[i].description);
+        if (!strcmp(v[i].country, "lab")) {
+            lab++;
+            CHECK(v[i].censors && *v[i].censors);
+        } else {
+            real++;
+            CHECK(v[i].censors == NULL);
+        }
+        server += v[i].server_side;
+    }
+    CHECK_INT(lab, 10);
+    CHECK(real >= 40 && server >= 1);
+
+    memset(&f, 0, sizeof(f));
+    n = 0;
+    for (size_t i = 0; i < real + lab; i++)
+        n += library_match(&v[i], &f);
+    CHECK_INT(n, real); /* lab entries only on request */
+    f.with_lab = 1;
+    n = 0;
+    for (size_t i = 0; i < real + lab; i++)
+        n += library_match(&v[i], &f);
+    CHECK_INT(n, real + lab);
+    memset(&f, 0, sizeof(f));
+    f.censor = "8b";
+    n = 0;
+    for (size_t i = 0; i < real + lab; i++)
+        n += library_match(&v[i], &f);
+    CHECK_INT(n, 3);
+    f.censor = "censor8";
+    n = 0;
+    for (size_t i = 0; i < real + lab; i++)
+        n += library_match(&v[i], &f);
+    CHECK_INT(n, 4); /* "8" is not "8b" */
+    memset(&f, 0, sizeof(f));
+    f.country = "kazakhstan";
+    f.side = 2;
+    n = 0;
+    for (size_t i = 0; i < real + lab; i++)
+        n += library_match(&v[i], &f) && v[i].server_side;
+    f.side = 1;
+    for (size_t i = 0; i < real + lab; i++)
+        CHECK(!library_match(&v[i], &f) || !v[i].server_side);
+    memset(&f, 0, sizeof(f));
+    f.min_rate = 99;
+    for (size_t i = 0; i < real + lab; i++)
+        CHECK(!library_match(&v[i], &f) || v[i].rate >= 99);
+    sb_free(&err);
+}
+
 void suite_probe(void)
 {
+    test_agent_json();
+    test_library();
     if (server_start() != 0) {
         t_current = "probe server";
         CHECK(!"cannot start the test server");
@@ -655,5 +946,6 @@ void suite_probe(void)
     test_exec();
     test_punish();
     test_evaluator();
+    test_agent();
     server_stop();
 }

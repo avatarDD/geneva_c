@@ -50,9 +50,9 @@ static void test_iptables(void)
     CHECK_INT(count(s.data, "-m multiport --dports 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 -j NFQUEUE"), 1);
     CHECK_INT(count(s.data, "-m multiport --dports 16,17 -j NFQUEUE"), 1);
     CHECK_INT(count(s.data, "-m multiport --sports 16,17 -j NFQUEUE"), 1);
-    CHECK_INT(count(s.data, "--queue-num 300 --queue-bypass"), 4);
-    CHECK_INT(count(s.data, "-I POSTROUTING -j GENEVA_300_OUT"), 1);
-    CHECK_INT(count(s.data, "-I PREROUTING -j GENEVA_300_IN"), 1);
+    CHECK_INT(count(s.data, "--queue-num 310 --queue-bypass"), 4);
+    CHECK_INT(count(s.data, "-I POSTROUTING -j GENEVA_310_OUT"), 1);
+    CHECK_INT(count(s.data, "-I PREROUTING -j GENEVA_310_IN"), 1);
     CHECK_INT(count(s.data, "-j CT --notrack"), 1);
     CHECK_INT(count(s.data, "ip6tables"), 0);
     CHECK_INT(count(s.data, "-p udp"), 0);
@@ -91,8 +91,8 @@ static void test_nft(void)
     c.forward_to = "10.0.0.5";
     fw_script(&c, FW_NFT, 1, &s);
     CHECK_INT(count(s.data, "type filter hook postrouting priority 101;"), 1);
-    CHECK_INT(count(s.data, "oifname \"wan\" tcp dport { 80, 8000-8100 } ct original packets 1-6 queue num 300 bypass\n"), 1);
-    CHECK_INT(count(s.data, "iifname \"wan\" udp sport { 80, 8000-8100 } ct reply packets 1-6 queue num 300 bypass\n"), 1);
+    CHECK_INT(count(s.data, "oifname \"wan\" tcp dport { 80, 8000-8100 } ct original packets 1-6 queue num 310 bypass\n"), 1);
+    CHECK_INT(count(s.data, "iifname \"wan\" udp sport { 80, 8000-8100 } ct reply packets 1-6 queue num 310 bypass\n"), 1);
     CHECK_INT(count(s.data, "meta mark & 0x20000000 == 0x20000000 notrack"), 1);
     CHECK_INT(count(s.data, "dnat ip to 10.0.0.5"), 2);
     CHECK_INT(count(s.data, "ip daddr 10.0.0.5 tcp dport { 80, 8000-8100 } masquerade"), 1);
@@ -108,7 +108,7 @@ static void test_nft(void)
 
     sb_reset(&s);
     fw_script(&c, FW_NFT, 0, &s);
-    CHECK_STR(s.data, "nft -f - <<'EOF'\nadd table inet geneva_300\ndelete table inet geneva_300\nEOF\n");
+    CHECK_STR(s.data, "nft -f - <<'EOF'\nadd table inet geneva_310\ndelete table inet geneva_310\nEOF\n");
     sb_free(&s);
 }
 

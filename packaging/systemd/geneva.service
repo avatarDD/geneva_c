@@ -1,0 +1,28 @@
+# Geneva: a strategy on live traffic ("geneva run"). Settings in
+# /etc/geneva/geneva.conf; "systemctl reload geneva" re-reads the strategy.
+[Unit]
+Description=Geneva censorship evasion (geneva run)
+Documentation=https://github.com/avatarDD/geneva_c
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/geneva/geneva.conf
+ExecStart=/usr/local/bin/geneva run -f ${STRATEGY_FILE} -p ${PORTS} $GENEVA_ARGS
+ExecReload=/bin/kill -HUP $MAINPID
+# SIGTERM removes the firewall rules
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=geneva
+RuntimeDirectoryMode=0750
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

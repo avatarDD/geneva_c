@@ -3,6 +3,8 @@
  */
 #include "evaluator.h"
 
+#include "agent.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +25,7 @@ struct evaluator {
     volatile int eng_state; /* 0 starting, 1 running, else the exit code + 2 */
     int eng_rc;
     uint64_t ext_id;
+    agent_conn *agent;
     plat_mutex_t lock; /* the GA batch: next individual */
 };
 
@@ -34,7 +37,7 @@ void eval_opts_default(eval_opts *o)
     o->workers = 1;
     o->use_engine = 1;
     fw_config_default(&o->fw);
-    o->fw.queue = 301; /* next to geneva run's default 300 */
+    o->fw.queue = 311; /* next to geneva run's default 310 */
     o->apply_fw = 1;
     o->port_base = 30000;
     o->ports_per_worker = 64;
@@ -76,6 +79,14 @@ int evaluator_open(eval_opts *o, evaluator **out, sbuf *err)
         ev->ports[i].hi = (uint16_t)(ev->ports[i].lo + o->ports_per_worker - 1);
     }
     *out = ev;
+    if (o->agent) {
+        /* before the engine: a wrong address fails fast, without rules */
+        ev->agent = agent_open(o->agent, o->agent_listen, o->agent_token, o->agent_wait, o->stop, err);
+        if (!ev->agent)
+            return EXIT_IO;
+        LOGI("eval", "server-side: probes by the agent %s, strategies on port %u", agent_name(ev->agent),
+             (unsigned)o->port_base);
+    }
     if (!o->use_engine)
         return EXIT_OK;
 
@@ -93,7 +104,7 @@ int evaluator_open(eval_opts *o, evaluator **out, sbuf *err)
     ev->eng.fw.ports.n = 1;
     ev->eng.fw.ports.lo[0] = o->port_base;
     ev->eng.fw.ports.hi[0] = (uint16_t)(o->port_base + nw * o->ports_per_worker - 1);
-    ev->eng.fw.server_side = 1; /* outbound packets come from our ports */
+    ev->eng.fw.server_side = 1; /* outbound packets come from our ports (or the service port) */
     ev->eng.fw.tcp = 1;
     ev->eng.fw.udp = o->probe.kind == PROBE_DNS || o->probe.kind == PROBE_EXEC || o->probe.kind == PROBE_EXTERNAL;
     ev->eng.slots = &ev->slots;
@@ -136,6 +147,7 @@ void evaluator_close(evaluator *ev)
             pkt_free(sl->cap[k]);
         free(sl->cap);
     }
+    agent_close(ev->agent);
     plat_mutex_destroy(&ev->slots.lock);
     plat_mutex_destroy(&ev->lock);
     free(ev);
@@ -273,6 +285,17 @@ static int eval_slot(evaluator *ev, size_t w, const char *text, eval_result *res
         }
         if (ev->o->probe.kind == PROBE_EXTERNAL) {
             if (external_run(ev, w, text, run, &pr) < 0) {
+                if (ev->eng_running) {
+                    plat_mutex_lock(&ev->slots.lock);
+                    ev->slotv[w].st = NULL;
+                    plat_mutex_unlock(&ev->slots.lock);
+                }
+                strategy_free(st);
+                return -1;
+            }
+        } else if (ev->agent) {
+            if (agent_probe(ev->agent, &ev->o->probe, &pr) < 0) {
+                LOGE("eval", "%s", pr.detail);
                 if (ev->eng_running) {
                     plat_mutex_lock(&ev->slots.lock);
                     ev->slotv[w].st = NULL;

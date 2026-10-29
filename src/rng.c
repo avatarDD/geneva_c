@@ -34,7 +34,7 @@ static void thread_init(void)
     int idx;
     if (!g_seeded)
         rng_global_seed(0);
-    idx = __atomic_fetch_add(&g_thread_counter, 1, __ATOMIC_SEQ_CST);
+    idx = atomic_fetch_add_int(&g_thread_counter, 1);
     x = g_seed ^ ((uint64_t)idx * 0xD1B54A32D192ED03ULL);
     for (int i = 0; i < 4; i++)
         t_state[i] = splitmix64(&x);

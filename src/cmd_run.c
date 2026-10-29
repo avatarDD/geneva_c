@@ -19,7 +19,7 @@
     {"server-port", 'p', 1, "PORTS", "ports of the service: 443 or 80,443 or 8000-8100 (required)"}, \
     {"server-side", 0, 0, NULL, "run on the server: outbound packets come from PORTS"},          \
     {"proto", 0, 1, "LIST", "tcp, udp or tcp,udp (default tcp)"},                                \
-    {"queue", 'q', 1, "N", "NFQUEUE number (default 300)"},                                      \
+    {"queue", 'q', 1, "N", "NFQUEUE number (default 310)"},                                      \
     {"mark", 0, 1, "MASK", "fwmark bit of packets the engine sends itself (default 0x20000000)"}, \
     {"firewall", 0, 1, "TYPE", "auto, nft, iptables, or none (rules set up by hand)"},             \
     {"iface", 'i', 1, "IF", "only traffic through this interface (the WAN on a router)"},         \
@@ -57,7 +57,7 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw)
             return -1;
         }
     }
-    if (arg_int(a, "queue", 300, 0, 65535, &v) < 0)
+    if (arg_int(a, "queue", 310, 0, 65535, &v) < 0)
         return -1;
     c->queue = (uint16_t)v;
     if ((s = arg_str(a, "mark", NULL)) != NULL) {
