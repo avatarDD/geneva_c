@@ -34,6 +34,68 @@ Windows через WinDivert).
 - **Офлайн** (`geneva apply`, `geneva check`): стратегия над pcap, проверка
   и каноническая форма стратегий.
 
+## Как пользоваться: пример
+
+Допустим, сайт `blocked.example` не открывается, и нужно подобрать для него
+стратегию на Linux-ПК или роутере. Всё, что меняет трафик, запускается
+от root.
+
+**1. Убедиться, что сайт заблокирован.** Проба без стратегии (права не
+нужны):
+
+```
+$ geneva eval --host blocked.example --probe tls
+-360	(no strategy)
+```
+
+Положительный фитнес (`400`) значит, что сайт открывается и подбирать
+нечего. Отрицательный показывает, как именно сайт не открылся:
+`reset` — сброс, `injected` — подмена ответа, `timeout` — тишина.
+Подробности пишутся в лог.
+
+**2. Попробовать готовые стратегии Geneva:**
+
+```
+$ geneva library -q --test http | sudo geneva eval --host blocked.example --probe tls -f -
+-360	\/
+398	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:chksum:corrupt},),)-
+...
+```
+
+Каждая строка — фитнес и стратегия. Подходят стратегии с фитнесом больше
+нуля.
+
+**3. Если ничего не подошло — подобрать.** Поиск можно прервать (Ctrl+C) и
+продолжить с `--resume`; найденное копится в базе:
+
+```
+$ sudo geneva evolve --host blocked.example --probe tls --population 50 --generations 20 \
+      --checkpoint /opt/geneva/search.ckpt --db /opt/geneva/db.jsonl
+398	2	[TCP:flags:PA]-fragment{tcp:8:True}-| \/
+$ geneva db --db /opt/geneva/db.jsonl top -n 3
+```
+
+**4. Включить стратегию для всего трафика на порты 80 и 443:**
+
+```
+$ sudo geneva run -s '[TCP:flags:PA]-fragment{tcp:8:True}-| \/' -p 80,443 -c unix:/var/run/geneva.sock
+$ sudo geneva ctl stats          # в другом терминале: срабатывания стратегии
+```
+
+Ctrl+C останавливает движок и снимает правила firewall.
+
+**5. Сделать постоянным.** Запишите стратегию в файл и включите службу
+(см. «Установка» ниже):
+
+```
+echo '[TCP:flags:PA]-fragment{tcp:8:True}-| \/' > /opt/etc/geneva/strategy.txt   # Entware
+sed -i 's/^ENABLED=no/ENABLED=yes/' /opt/etc/geneva/geneva.conf
+/opt/etc/init.d/S51geneva start
+```
+
+Стратегии в примерах — для иллюстрации; что сработает у вас, зависит от
+DPI вашей сети.
+
 ## Быстрый старт
 
 ```
@@ -52,9 +114,14 @@ geneva.exe run -s '[TCP:flags:S]-duplicate-| \/' -p 80,443 -c tcp:47123   # Wind
 
 ## Установка
 
-Готовые бинарники для всех архитектур публикуются в релизах. Сборка из
-исходников нужна только для компилятора C (gcc, clang, `zig cc` или
-mingw):
+Готовые бинарники для всех архитектур публикуются в релизах:
+`geneva-ВЕРСИЯ-linux-АРХИТЕКТУРА.tar.gz` (статический бинарник, документация
+и `packaging/`; архитектуры x86_64, x86, aarch64, armv7, armv6, armv5,
+mips, mipsel, mips64, riscv64, ppc; mips и mipsel — soft-float, как на
+большинстве роутеров) и `geneva-ВЕРСИЯ-windows-АРХИТЕКТУРА.zip` (x86_64 и
+x86 с WinDivert из официального релиза; arm64 без него, так как у
+WinDivert нет драйвера для ARM64). Суммы — в `SHA256SUMS`. Для сборки
+из исходников нужен только компилятор C (gcc, clang, `zig cc` или mingw):
 
 ```
 make                                       # для этой машины

@@ -1,0 +1,66 @@
+name: Release
+
+# Every pull request builds all release targets with zig and runs the unit
+# tests of each Linux target (foreign ones under qemu-user). A tag v* also
+# publishes the archives and SHA256SUMS as a GitHub release. Everything is
+# built in one job: the account's Actions artifact storage is exhausted, so
+# nothing passes between jobs as artifacts.
+
+on:
+  pull_request:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      ZIG_VERSION: 0.14.1
+      WINDIVERT_VERSION: 2.2.2
+      WINDIVERT_SHA256: 63cb41763bb4b20f600b6de04e991a9c2be73279e317d4d82f237b150c5f3f15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tools (qemu-user for the unit tests of foreign targets)
+        run: sudo apt-get update && sudo apt-get install -y qemu-user-static binfmt-support zip
+      - name: Fetch zig (official, checked against ziglang.org/download/index.json)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/index.json" https://ziglang.org/download/index.json
+          url=$(jq -r --arg v "$ZIG_VERSION" '.[$v]["x86_64-linux"].tarball' "$RUNNER_TEMP/index.json")
+          sum=$(jq -r --arg v "$ZIG_VERSION" '.[$v]["x86_64-linux"].shasum' "$RUNNER_TEMP/index.json")
+          curl -fsSL -o "$RUNNER_TEMP/zig.tar.xz" "$url"
+          echo "$sum  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/zig"
+          tar -C "$RUNNER_TEMP/zig" --strip-components=1 -xJf "$RUNNER_TEMP/zig.tar.xz"
+          echo "$RUNNER_TEMP/zig" >> "$GITHUB_PATH"
+      - name: Fetch WinDivert (official release)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/windivert.zip" "https://github.com/basil00/WinDivert/releases/download/v${WINDIVERT_VERSION}/WinDivert-${WINDIVERT_VERSION}-A.zip"
+          echo "${WINDIVERT_SHA256}  $RUNNER_TEMP/windivert.zip" | sha256sum -c -
+          unzip -q -d "$RUNNER_TEMP" "$RUNNER_TEMP/windivert.zip"
+      - name: Version
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) v=${GITHUB_REF_NAME#v} ;;
+            *) v=$(git describe --tags --always) ;;
+          esac
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+      - name: Build all targets and run the unit tests
+        run: |
+          zig version
+          WINDIVERT_DIR="$RUNNER_TEMP/WinDivert-${WINDIVERT_VERSION}-A" \
+            tools/build-release.sh --test "$VERSION" dist
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+            --title "geneva $VERSION" --generate-notes

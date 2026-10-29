@@ -213,7 +213,11 @@ if [ -z "$ONLY" ] || echo " $ONLY " | grep -q " server "; then
         --log-file "$WORK/agent.log" --quiet &
     APID=$!
     sleep 0.3
-    SPROBE="$PROBE --bad-word ultrasurf --agent tcp:10.80.1.2:7110 --agent-token $TOKEN"
+    # A file, not the directory listing: the listing repeats the query with
+    # the forbidden word, and censors desynchronized on the server's seq
+    # would see it in the answer.
+    SPROBE="--probe http --host censored.example --ip 10.80.2.2 --path /secret.html --valid-contains behind"
+    SPROBE="$SPROBE --timeout 2 --bad-word ultrasurf --agent tcp:10.80.1.2:7110 --agent-token $TOKEN"
     # sev STRATEGY: server-side fitness of the strategy (none: baseline)
     sev() {
         [ -n "${CPID:-}" ] && reset_censor
@@ -252,12 +256,13 @@ EOS
         echo "== server-side: geneva evolve against censor 2"
         # Censor 2 keeps no state between connections (see above), and its RSTs
         # fail a run quickly. The trigger is fixed to the SYN+ACK, as in
-        # Geneva's server-side experiments: the search looks for what to do
-        # with it.
+        # Geneva's server-side experiments, and the fields are narrowed: the
+        # search looks for what to do with it. Even so the space is wide, so
+        # the population is bigger than on the client side.
         start_censor 2 && {
-            ip netns exec "$NS" "$GENEVA" evolve $SPROBE --timeout 1 --population 40 --generations 15 \
-                --fix-trigger TCP:flags:SA \
-                --rng-seed ${SEED:-3} --runs 2 --fitness-by min --log-file "$WORK/sevolve.log" --quiet > "$WORK/best.txt"
+            ip netns exec "$NS" "$GENEVA" evolve $SPROBE --timeout 1 --population 60 --generations 20 \
+                --fix-trigger TCP:flags:SA --fields flags,seq,ack,chksum,window \
+                --rng-seed ${SEED:-3} --runs 3 --fitness-by min --log-file "$WORK/sevolve.log" --quiet > "$WORK/best.txt"
             rc=$?
             head -3 "$WORK/best.txt"
             BEST=$(head -1 "$WORK/best.txt" | cut -f3)
@@ -265,8 +270,10 @@ EOS
             [ $rc -eq 0 ] && positive "${FIT:-0}" && ok "found on the server: $BEST ($FIT)" ||
                 bad "server-side evolve found nothing (exit $rc)" "$WORK/sevolve.log"
             if positive "${FIT:-0}"; then
+                reset_censor
                 ip netns exec "$NS" "$GENEVA" eval $SPROBE --runs 3 --fitness-by min --quiet -s "$BEST" \
-                    > "$WORK/eval.txt" && ok "it works again (3 of 3)" || bad "the strategy does not hold" "$WORK/eval.txt"
+                    --log-level debug --log-file "$WORK/recheck.log" > "$WORK/eval.txt" &&
+                    ok "it works again (3 of 3)" || bad "the strategy does not hold" "$WORK/recheck.log"
             fi
             stop_censor
         }
