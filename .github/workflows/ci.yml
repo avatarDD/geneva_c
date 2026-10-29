@@ -38,7 +38,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
       - run: make -j"$(nproc)" CC=x86_64-w64-mingw32-gcc STATIC=1 CFLAGS="-O2 -Werror"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: geneva-windows-x86_64
-          path: build/geneva.exe
+      # No upload-artifact here: the account's Actions artifact storage quota
+      # is exhausted, and releases publish binaries directly instead.
+      - run: ls -la build/geneva.exe && file build/geneva.exe
