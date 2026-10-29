@@ -480,6 +480,7 @@ int cmd_censor(int argc, char **argv)
 #ifdef __linux__
     rc = run_censor(cen, &fw, apply_fw, duration);
 #else
+    (void)apply_fw;
     fprintf(stderr, "geneva censor: runs on Linux routers only (NFQUEUE)\n");
     rc = EXIT_PRIV;
 #endif
