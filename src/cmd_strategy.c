@@ -243,7 +243,7 @@ int cmd_apply(int argc, char **argv)
     strategy *st = NULL;
     pcap_reader *rd = NULL;
     pcap_writer *wr = NULL;
-    portset ports;
+    portset ports = {.n = 0};
     int use_ports = 0, rc = EXIT_OK, verbose, r;
     strat_dir def_dir = DIR_OUT;
     int64_t seed = 0;

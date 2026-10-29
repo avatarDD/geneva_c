@@ -109,6 +109,21 @@ def deliberate_reject(s):
     return bool(re.search(r"tamper(?![{a-zA-Z])", s))
 
 
+def patch_find_library():
+    # scapy 2.4.3 calls find_library("libc"), which raises FileNotFoundError
+    # on Python 3.8 with a current toolchain; None loads the process image,
+    # whose symbols include libc.
+    import ctypes.util
+    orig = ctypes.util.find_library
+
+    def find_library(name):
+        try:
+            return orig(name)
+        except OSError:
+            return None
+    ctypes.util.find_library = find_library
+
+
 def stub_modules():
     for name in ("netfilterqueue", "netifaces"):
         try:
@@ -128,6 +143,7 @@ def stub_modules():
 def load_geneva(path):
     sys.path.insert(0, path)
     os.chdir(path)
+    patch_find_library()
     stub_modules()
     import actions.utils  # noqa: F401
     import actions.strategy  # noqa: F401
