@@ -33,6 +33,8 @@ typedef struct {
     int bypass;      /* accept packets while no program listens on the queue */
     int first;       /* queue only the first N packets of each connection (0 = all) */
     const char *forward_to; /* Geneva's forwarder: DNAT the ports to this address */
+    int forward;     /* router: queue forwarded packets from and to the ports, both
+                      * directions (geneva censor); out, in and notrack are unused */
 } fw_config;
 
 void fw_config_default(fw_config *c);

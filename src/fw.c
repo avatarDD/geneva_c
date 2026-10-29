@@ -104,7 +104,7 @@ static void fwlist_free(fwlist *l)
 /* ---- iptables ------------------------------------------------------------ */
 
 typedef struct {
-    char out[32], in[32], nt[32], dnat[32], snat[32];
+    char out[32], in[32], nt[32], dnat[32], snat[32], fwd[32];
 } chains;
 
 static void chain_names(const fw_config *c, chains *ch)
@@ -114,6 +114,7 @@ static void chain_names(const fw_config *c, chains *ch)
     snprintf(ch->nt, sizeof(ch->nt), "GENEVA_%u_NT", c->queue);
     snprintf(ch->dnat, sizeof(ch->dnat), "GENEVA_%u_DNAT", c->queue);
     snprintf(ch->snat, sizeof(ch->snat), "GENEVA_%u_SNAT", c->queue);
+    snprintf(ch->fwd, sizeof(ch->fwd), "GENEVA_%u_FWD", c->queue);
 }
 
 /* Splits the port set into iptables port matches: multiport takes up to 15
@@ -175,6 +176,30 @@ static void gen_ipt_queue(const fw_config *c, fwlist *l, int v6, const char *cha
     ipt(l, K_REQ, v6, "-t mangle -I %s -j %s", outdir ? "POSTROUTING" : "PREROUTING", chain);
 }
 
+/* Router mode: forwarded packets of either direction, matched by source or
+ * destination port. */
+static void gen_ipt_forward(const fw_config *c, fwlist *l, int v6, const char *chain)
+{
+    const char *protos[2] = {c->tcp ? "tcp" : NULL, c->udp ? "udp" : NULL};
+    char m[2][MAX_PORT_RANGES][400];
+    size_t nm[2];
+    char ifm[64] = "", bypass[24] = "";
+    nm[0] = port_matches(&c->ports, 0, m[0], MAX_PORT_RANGES);
+    nm[1] = port_matches(&c->ports, 1, m[1], MAX_PORT_RANGES);
+    if (c->iface)
+        snprintf(ifm, sizeof(ifm), "-i %s ", c->iface);
+    if (c->bypass)
+        snprintf(bypass, sizeof(bypass), " --queue-bypass");
+    ipt(l, K_REQ, v6, "-t mangle -N %s", chain);
+    ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j RETURN", chain, c->mark, c->mark);
+    for (int p = 0; p < 2; p++)
+        for (int src = 0; protos[p] && src < 2; src++)
+            for (size_t i = 0; i < nm[src]; i++)
+                ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s -j NFQUEUE --queue-num %u%s", chain, ifm,
+                    protos[p], m[src][i], c->queue, bypass);
+    ipt(l, K_REQ, v6, "-t mangle -I FORWARD -j %s", chain);
+}
+
 static int addr_is_v6(const char *a) { return strchr(a, ':') != NULL; }
 
 static void gen_ipt(const fw_config *c, fwlist *l, int v6, int up)
@@ -182,20 +207,25 @@ static void gen_ipt(const fw_config *c, fwlist *l, int v6, int up)
     chains ch;
     struct {
         const char *table, *hook, *chain;
-    } all[5];
+    } all[6];
     chain_names(c, &ch);
     all[0].table = "mangle", all[0].hook = "POSTROUTING", all[0].chain = ch.out;
     all[1].table = "mangle", all[1].hook = "PREROUTING", all[1].chain = ch.in;
     all[2].table = "raw", all[2].hook = "OUTPUT", all[2].chain = ch.nt;
     all[3].table = "nat", all[3].hook = "PREROUTING", all[3].chain = ch.dnat;
     all[4].table = "nat", all[4].hook = "POSTROUTING", all[4].chain = ch.snat;
-    for (int i = 0; i < 5; i++) {
+    all[5].table = "mangle", all[5].hook = "FORWARD", all[5].chain = ch.fwd;
+    for (int i = 0; i < 6; i++) {
         ipt(l, K_DEL, v6, "-t %s -D %s -j %s", all[i].table, all[i].hook, all[i].chain);
         ipt(l, K_IGN, v6, "-t %s -F %s", all[i].table, all[i].chain);
         ipt(l, K_IGN, v6, "-t %s -X %s", all[i].table, all[i].chain);
     }
     if (!up)
         return;
+    if (c->forward) {
+        gen_ipt_forward(c, l, v6, ch.fwd);
+        return;
+    }
     if (c->out)
         gen_ipt_queue(c, l, v6, ch.out, 1);
     if (c->in)
@@ -251,6 +281,25 @@ static void nft_queue_chain(const fw_config *c, sbuf *s, int outdir)
     sb_puts(s, "\t}\n");
 }
 
+static void nft_forward_chain(const fw_config *c, sbuf *s)
+{
+    const char *protos[2] = {c->tcp ? "tcp" : NULL, c->udp ? "udp" : NULL};
+    sb_puts(s, "\tchain routed {\n\t\ttype filter hook forward priority -150; policy accept;\n");
+    sb_printf(s, "\t\tmeta mark & 0x%x == 0x%x return\n", c->mark, c->mark);
+    for (int p = 0; p < 2; p++)
+        for (int src = 0; protos[p] && src < 2; src++) {
+            sb_puts(s, "\t\t");
+            if (c->ipv4 != c->ipv6)
+                sb_printf(s, "meta nfproto %s ", c->ipv4 ? "ipv4" : "ipv6");
+            if (c->iface)
+                sb_printf(s, "iifname \"%s\" ", c->iface);
+            sb_printf(s, "%s %s { ", protos[p], src ? "sport" : "dport");
+            ports_format(&c->ports, s, ", ", "-");
+            sb_printf(s, " } queue num %u%s\n", c->queue, c->bypass ? " bypass" : "");
+        }
+    sb_puts(s, "\t}\n");
+}
+
 static char *gen_nft_script(const fw_config *c, int up, int notrack)
 {
     sbuf s;
@@ -260,6 +309,11 @@ static char *gen_nft_script(const fw_config *c, int up, int notrack)
     if (!up)
         return sb_take(&s);
     sb_printf(&s, "table inet geneva_%u {\n", c->queue);
+    if (c->forward) {
+        nft_forward_chain(c, &s);
+        sb_puts(&s, "}\n");
+        return sb_take(&s);
+    }
     if (c->out)
         nft_queue_chain(c, &s, 1);
     if (c->in)
@@ -344,6 +398,10 @@ int fw_windivert_filter(const fw_config *c, sbuf *out, sbuf *err)
     /* client side: out to the ports, in from them; server side: the reverse */
     const char *out_field = c->server_side ? "SrcPort" : "DstPort";
     const char *in_field = c->server_side ? "DstPort" : "SrcPort";
+    if (c->forward) {
+        sb_puts(err, "forwarded traffic is only captured on Linux");
+        return -1;
+    }
     if (!c->tcp && !c->udp) {
         sb_puts(err, "no protocol to capture");
         return -1;

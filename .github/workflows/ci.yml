@@ -29,12 +29,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y tcpdump ethtool nftables iptables
+      - run: sudo apt-get update && sudo apt-get install -y tcpdump ethtool nftables iptables curl
       - run: make -j"$(nproc)" CFLAGS="-O1 -g -Werror"
       - name: e2e (auto, iptables, nft)
         run: sudo env FIREWALLS="auto iptables nft" tests/e2e/run.sh build/geneva
       - name: evaluator e2e (evolve against a keyword censor)
         run: sudo tests/e2e/evolve.sh build/geneva
+      - name: censors e2e (Geneva's lab censors on a router namespace)
+        run: sudo tests/e2e/censors.sh build/geneva
 
   musl-static:
     runs-on: ubuntu-24.04

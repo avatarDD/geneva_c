@@ -112,6 +112,47 @@ static void test_nft(void)
     sb_free(&s);
 }
 
+/* Router mode (geneva censor): forwarded packets of both directions. */
+static void test_forward(void)
+{
+    fw_config c;
+    sbuf s, e;
+    t_current = "fw forward";
+    sb_init(&s);
+    sb_init(&e);
+    fw_config_default(&c);
+    c.forward = 1;
+    c.queue = 400;
+    c.ipv6 = 0;
+    ports_parse("80", &c.ports);
+    fw_script(&c, FW_IPTABLES, 1, &s);
+    CHECK_INT(count(s.data, "iptables -t mangle -A GENEVA_400_FWD -p tcp --dport 80 -j NFQUEUE --queue-num 400 --queue-bypass\n"), 1);
+    CHECK_INT(count(s.data, "iptables -t mangle -A GENEVA_400_FWD -p tcp --sport 80 -j NFQUEUE --queue-num 400 --queue-bypass\n"), 1);
+    CHECK_INT(count(s.data, "-A GENEVA_400_FWD -m mark --mark 0x20000000/0x20000000 -j RETURN"), 1);
+    CHECK_INT(count(s.data, "-I FORWARD -j GENEVA_400_FWD"), 1);
+    CHECK_INT(count(s.data, "-I POSTROUTING"), 0);
+    CHECK_INT(count(s.data, "-I PREROUTING"), 0);
+    CHECK_INT(count(s.data, "notrack"), 0);
+    sb_reset(&s);
+    fw_script(&c, FW_IPTABLES, 0, &s);
+    CHECK_INT(count(s.data, "-D FORWARD -j GENEVA_400_FWD"), 1);
+    CHECK_INT(count(s.data, " -A "), 0);
+
+    sb_reset(&s);
+    c.tcp = 0, c.udp = 1;
+    c.iface = "lan";
+    ports_parse("53", &c.ports);
+    fw_script(&c, FW_NFT, 1, &s);
+    CHECK_INT(count(s.data, "type filter hook forward priority -150;"), 1);
+    CHECK_INT(count(s.data, "meta nfproto ipv4 iifname \"lan\" udp dport { 53 } queue num 400 bypass\n"), 1);
+    CHECK_INT(count(s.data, "meta nfproto ipv4 iifname \"lan\" udp sport { 53 } queue num 400 bypass\n"), 1);
+    CHECK_INT(count(s.data, "hook postrouting"), 0);
+    CHECK_INT(count(s.data, "notrack"), 0);
+    CHECK_INT(fw_windivert_filter(&c, &s, &e), -1);
+    sb_free(&s);
+    sb_free(&e);
+}
+
 static void test_windivert(void)
 {
     fw_config c;
@@ -162,5 +203,6 @@ void suite_fw(void)
     test_ports();
     test_iptables();
     test_nft();
+    test_forward();
     test_windivert();
 }

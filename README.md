@@ -7,11 +7,12 @@
 
 План работ — `docs/PLAN.md`.
 
-Сейчас готово (этапы 0–7): модель пакетов с семантикой полей Geneva, язык
+Сейчас готово (этапы 0–8): модель пакетов с семантикой полей Geneva, язык
 стратегий, офлайн-применение к pcap, исполнитель на Linux (NFQUEUE) и на
 Windows (WinDivert) с управлением через сокет, генетический алгоритм с
-сохранением и продолжением поиска, база стратегий и оценка стратегий
-пробами http, tls, dns, tcp и внешними командами:
+сохранением и продолжением поиска, база стратегий, оценка стратегий
+пробами http, tls, dns, tcp и внешними командами, лабораторные цензоры
+Geneva 1–11 и DNS-цензор для проверки на стенде:
 
 ```
 make && make test
@@ -24,10 +25,11 @@ build/geneva eval --host blocked.example        # открывается ли б
 sudo build/geneva eval --host blocked.example -s '[TCP:flags:PA]-fragment{tcp:-1:True}-| \/'
 sudo build/geneva evolve --host blocked.example --workers 8 --checkpoint search.ckpt --db db.jsonl
 build/geneva db --db db.jsonl top -n 5
+sudo build/geneva censor -c 8 --port 80          # на роутере стенда
 ```
 
 Исполнитель и правила firewall — `docs/ENGINE.md`, события и управляющий
 сокет — `docs/PROTOCOL.md`, подборщик и база — `docs/EVOLVE.md`, пробы и
-фитнес — `docs/EVAL.md`.
+фитнес — `docs/EVAL.md`, цензоры и стенд — `docs/CENSOR.md`.
 
 Язык стратегий и отличия от Geneva — `docs/STRATEGY.md`.
