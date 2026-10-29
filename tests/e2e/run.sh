@@ -86,12 +86,19 @@ kill -0 $SRV 2>/dev/null || { echo "echo server failed to start"; exit 1; }
 # run_case NAME FIREWALL STRATEGY [DST] -- then checks via helpers below
 start_case() {
     CASE=$1 FW=$2 STRAT=$3 DST=${4:-10.77.0.2}
-    rm -f "$WORK/cap.pcap" "$WORK/ev.jsonl"
-    ip netns exec "$NS" tcpdump -i veth_s -U -s 0 -w "$WORK/cap.pcap" "tcp port $PORT or ip[6:2] & 0x1fff != 0 or ip6[6] = 44" >/dev/null 2>&1 &
+    rm -f "$WORK/cap.pcap" "$WORK/ev.jsonl" "$WORK/eng.log"
+    rm -f "$WORK/tcpdump.err"
+    ip netns exec "$NS" tcpdump -i veth_s -U -s 0 -w "$WORK/cap.pcap" "tcp port $PORT or ip[6:2] & 0x1fff != 0 or ip6[6] = 44" >/dev/null 2>"$WORK/tcpdump.err" &
     TCPD=$!
+    # the capture must be running before the first packet
+    i=0
+    while ! grep -q "listening on" "$WORK/tcpdump.err" 2>/dev/null; do
+        i=$((i + 1)); sleep 0.1
+        if [ $i -gt 50 ]; then echo "  tcpdump did not start"; cat "$WORK/tcpdump.err"; break; fi
+    done
     printf '%s\n' "$STRAT" > "$WORK/strategy"
     ip netns exec "$NC" "$GENEVA" run -f "$WORK/strategy" -p $PORT --firewall "$FW" \
-        --events "$WORK/ev.jsonl" --stats-interval 0.2 --quiet &
+        --events "$WORK/ev.jsonl" --stats-interval 0.2 --quiet -v --log-file "$WORK/eng.log" &
     ENG=$!
     i=0
     while ! grep -q '"ev":"ready"' "$WORK/ev.jsonl" 2>/dev/null; do
@@ -112,7 +119,13 @@ stop_case() {
 }
 
 ok() { passes=$((passes + 1)); echo "  ok   $CASE [$FW]: $1"; }
-bad() { fails=$((fails + 1)); echo "  FAIL $CASE [$FW]: $1"; [ -n "${2:-}" ] && sed 's/^/       /' "$2" | head -40; }
+bad() {
+    fails=$((fails + 1)); echo "  FAIL $CASE [$FW]: $1"
+    [ -n "${2:-}" ] && sed 's/^/       /' "$2" | head -40
+    if [ -n "${2:-}" ] && [ -f "$WORK/eng.log" ]; then
+        echo "       -- engine log:"; sed 's/^/       /' "$WORK/eng.log" | head -60
+    fi
+}
 check() { if eval "$2"; then ok "$1"; else bad "$1" "$WORK/cap.txt"; fi; }
 
 exchange() { ip netns exec "$NC" timeout 15 python3 "$WORK/cli.py" "${DST}" $PORT; }
