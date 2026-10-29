@@ -331,3 +331,34 @@ const char *plat_arch_name(void)
     return "unknown";
 #endif
 }
+
+/* ---- files --------------------------------------------------------------- */
+
+int plat_write_atomic(const char *path, const void *data, size_t len)
+{
+    char *tmp = malloc(strlen(path) + 8);
+    FILE *f;
+    int ok;
+    if (!tmp)
+        return -1;
+    sprintf(tmp, "%s.tmp", path);
+    f = fopen(tmp, "wb");
+    if (!f) {
+        free(tmp);
+        return -1;
+    }
+    ok = fwrite(data, 1, len, f) == len && fflush(f) == 0;
+#ifndef _WIN32
+    ok = ok && fsync(fileno(f)) == 0;
+#endif
+    ok = fclose(f) == 0 && ok;
+#ifdef _WIN32
+    ok = ok && MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+#else
+    ok = ok && rename(tmp, path) == 0;
+#endif
+    if (!ok)
+        remove(tmp);
+    free(tmp);
+    return ok ? 0 : -1;
+}

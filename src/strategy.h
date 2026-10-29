@@ -121,6 +121,12 @@ size_t strategy_len(const strategy *s);
 void strategy_reset(strategy *s);
 
 void tree_print(const atree *t, sbuf *out);
+
+/* Building blocks for the genetic operators (mutate.c). */
+int trigger_parse(trigger *t, const char *text, sbuf *err);
+void trigger_clear(trigger *t);
+void action_free(action *a); /* with its subtrees */
+void tree_free(atree *t);
 void trigger_print(const trigger *t, sbuf *out);
 void action_print(const action *a, sbuf *out);
 

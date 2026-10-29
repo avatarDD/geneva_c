@@ -9,7 +9,7 @@
 ## Поток событий (JSON Lines)
 
 Источники:
-- `geneva run --events -|stderr|FILE`: одна строка — один JSON-объект;
+- `geneva run|evolve --events -|stderr|FILE`: одна строка — один JSON-объект;
 - подписка через управляющий сокет (`subscribe`), тот же формат.
 
 У каждого события есть `ts` (мс с начала эпохи, UTC) и `ev` (тип).
@@ -17,6 +17,9 @@
 | `ev` | Когда | Поля |
 |---|---|---|
 | `start` | запуск движка | `proto`, `version`, `mode` (`run`), `pid`, `backend` (`nfqueue`, `windivert`), `queue`, `ports`, `server_side` |
+| `start` | запуск подборщика | `proto`, `version`, `mode` (`evolve`), `pid`, `population`, `generations`, `target`, `resume` |
+| `generation` | (evolve) поколение оценено | `gen`, `unique`, `evaluated`, `avg_fitness`, `best_fitness`, `best` |
+| `result` | (evolve) поиск закончен | `stopped`, `best` — `[{"strategy", "avg_fitness", "runs"}]` |
 | `strategy` | стратегия установлена (при старте, `set_strategy`, `reload`, SIGHUP) | `strategy` (каноническая строка) |
 | `ready` | правила firewall стоят (или открыт WinDivert), пакеты идут через движок | `backend`, `firewall` (`nft`, `iptables`, `windivert`, `none`) |
 | `state` | `pause` / `resume` | `state` (`paused`, `running`) |
@@ -24,7 +27,7 @@
 | `log` | сообщение лога (в `--log-format json` и для подписчиков) | `level`, `mod`, `msg` |
 | `error` | ошибка | `where` (`strategy`, `nfqueue`, `rawsend`, `firewall`, `windivert`, `control`, `reload`), `message` |
 | `dropped` | только подписчику: он читал слишком медленно и потерял события | `count` |
-| `exit` | завершение | `code` (код возврата), `reason` (`signal`, `control`, `duration`, `error`) |
+| `exit` | завершение | `code` (код возврата), `reason` (`signal`, `control`, `duration`, `error`; у evolve — `done`, `signal`, `error`) |
 
 Поля `stats` (и ответа на команду `stats`):
 

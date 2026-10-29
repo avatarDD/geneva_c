@@ -122,7 +122,7 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw)
     return 0;
 }
 
-static int parse_logging(const args_t *a, const char *cmd)
+int parse_logging(const args_t *a, const char *cmd)
 {
     const char *s;
     log_level lvl;

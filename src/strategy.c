@@ -127,7 +127,7 @@ static void free_parts(char **parts, size_t n)
 
 /* ---- triggers ------------------------------------------------------------ */
 
-static void trigger_clear(trigger *t)
+void trigger_clear(trigger *t)
 {
     free(t->proto_str);
     free(t->field);
@@ -136,7 +136,7 @@ static void trigger_clear(trigger *t)
 }
 
 /* Trigger.parse(): "[proto:field:value(:gas)]". */
-static int trigger_parse(trigger *t, const char *text, sbuf *err)
+int trigger_parse(trigger *t, const char *text, sbuf *err)
 {
     char *s = strip_dup(text, strlen(text));
     char **parts = NULL;
@@ -242,7 +242,7 @@ static int act_is_terminal(act_type t) { return t == ACT_DROP || t == ACT_TRACE;
 /* Only tamper and drop may run on inbound packets (Action.applies()). */
 static int act_allowed_in(act_type t) { return t == ACT_TAMPER || t == ACT_DROP; }
 
-static void action_free(action *a)
+void action_free(action *a)
 {
     if (!a)
         return;
@@ -566,7 +566,7 @@ out:
     return rc;
 }
 
-static void tree_free(atree *t)
+void tree_free(atree *t)
 {
     if (!t)
         return;

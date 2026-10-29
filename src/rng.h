@@ -24,5 +24,8 @@ int rng_chance(double p);
 void rng_bytes(void *buf, size_t n);
 /* Fisher-Yates shuffle of an array of pointers. */
 void rng_shuffle_ptrs(void **items, size_t n);
+/* The calling thread's generator state, for checkpoints. */
+void rng_get_state(uint64_t s[4]);
+void rng_set_state(const uint64_t s[4]);
 
 #endif

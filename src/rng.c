@@ -107,3 +107,20 @@ void rng_shuffle_ptrs(void **items, size_t n)
         items[j] = t;
     }
 }
+
+void rng_get_state(uint64_t s[4])
+{
+    if (!t_ready)
+        thread_init();
+    for (int i = 0; i < 4; i++)
+        s[i] = t_state[i];
+}
+
+void rng_set_state(const uint64_t s[4])
+{
+    for (int i = 0; i < 4; i++)
+        t_state[i] = s[i];
+    if (!(s[0] | s[1] | s[2] | s[3]))
+        t_state[0] = 1; /* the all-zero state is a fixed point */
+    t_ready = 1;
+}
