@@ -150,9 +150,11 @@ def stub_modules():
             mod.ifaddresses = lambda iface: {}
             mod.AF_INET = 2
             sys.modules[name] = mod
-    import scapy.config
     # TraceAction opens a raw socket in its constructor, which Geneva runs
-    # while listing actions; nothing here sends packets.
+    # while listing actions; nothing here sends packets. scapy.all sets
+    # conf.L3socket on import, so patch after loading it.
+    import scapy.all  # noqa: F401
+    import scapy.config
     scapy.config.conf.L3socket = lambda *a, **k: None
 
 
