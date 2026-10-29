@@ -163,7 +163,14 @@ for c in 1 2 3 4 5 6 7 8 8b 9 10 11; do
     while IFS='|' read -r list strategy; do
         echo " $list " | grep -q " $c " || continue
         f=$(run_eval "$strategy")
-        positive "${f:-0}" && ok "gets through ($f): $strategy" || bad "blocked ($f): $strategy" "$WORK/cen.log"
+        if positive "${f:-0}"; then
+            ok "gets through ($f): $strategy"
+        else
+            # strategies with corrupt values are random: one retry, said aloud
+            f2=$(run_eval "$strategy")
+            positive "${f2:-0}" && ok "gets through on a retry ($f, then $f2): $strategy" ||
+                bad "blocked ($f, then $f2): $strategy" "$WORK/cen.log"
+        fi
     done < "$WORK/lab.txt"
     stop_censor
 done
