@@ -139,6 +139,31 @@ class _Dummy(object):
 STUBBED = ("netfilterqueue", "netifaces", "psutil", "requests", "urllib3", "docker", "paramiko")
 
 
+def segment_after_l3_tamper(s):
+    """Geneva segments a packet whose IP proto or frag was tampered by
+    re-parsing it without its payload: the segments lose their data and
+    repeat the TCP header. geneva_c segments such packets normally."""
+    return re.search(r"tamper\{IP:(proto|frag):", s) and "fragment{tcp" in s
+
+
+def udp_csum_only(exp, got):
+    """Geneva leaves the UDP checksum stale after a tamper (Packet.set()
+    only recomputes IP and TCP); geneva_c recomputes it. True if that is the
+    only difference and geneva_c's checksum is valid."""
+    if len(exp) != len(got) or not got or got[0] >> 4 != 4 or got[9] != 17:
+        return False
+    off = (got[0] & 15) * 4 + 6
+    if exp[:off] != got[:off] or exp[off + 2:] != got[off + 2:]:
+        return False
+    from scapy.all import IP, UDP
+    p = IP(got)
+    if not p.haslayer(UDP):
+        return False
+    stored = p[UDP].chksum
+    del p[UDP].chksum
+    return IP(bytes(p))[UDP].chksum == stored
+
+
 def stub_modules():
     for name in STUBBED:
         try:
@@ -224,7 +249,7 @@ def pin(s):
     if re.search(r"tamper(?!\{)|fragment(?!\{)|trace", s):
         return None  # random tamper or fragment order; trace needs sockets
     try:
-        return re.sub(r"tamper\{([A-Za-z]+):([a-z-]+):corrupt(?::[^}]*)?\}", repl, s)
+        return re.sub(r"tamper\{([A-Za-z0-9]+):([A-Za-z0-9-]+):corrupt(?::[^}]*)?\}", repl, s)
     except KeyError:
         return None
 
@@ -368,11 +393,14 @@ def main():
     inp = os.path.join(tmp, "in.pcap")
     outp = os.path.join(tmp, "out.pcap")
     write_pcap(inp, packets)
-    n_run = n_skip = n_crash = 0
+    n_run = n_skip = n_crash = n_known = n_udp = 0
     for s in strategies:
         ps = pin(s)
         if ps is None or not geneva_print(gu, ps, logger)[0]:
             n_skip += 1
+            continue
+        if segment_after_l3_tamper(ps):
+            n_known += 1
             continue
         try:
             expected = geneva_apply(gu, gp, ps, packets, logger)
@@ -395,9 +423,13 @@ def main():
         got = read_pcap(outp)
         n_run += 1
         bad = len(got) != len(expected)
+        udp = False
         for (i, eb, sleep), (ts, gb) in zip(expected, got):
-            if eb != gb or abs(ts - (i * 100 + sleep)) > 1e-6:
+            if eb != gb and udp_csum_only(eb, gb):
+                udp = True
+            elif eb != gb or abs(ts - (i * 100 + sleep)) > 1e-6:
                 bad = True
+        n_udp += udp and not bad
         if bad:
             failures += 1
             print("APPLY MISMATCH: %s" % ps)
@@ -409,8 +441,9 @@ def main():
                                                  e[1].hex() + (" sleep=%g" % e[2] if e[2] else "")
                                                  if e else "(none)"))
                 print("  %s    geneva_c: %s" % (mark, g[1].hex() if g else "(none)"))
-    print("apply: %d strategies compared, %d not deterministic, %d crash Geneva"
-          % (n_run, n_skip, n_crash))
+    print("apply: %d strategies compared (%d differ only by geneva_c's valid UDP checksum), "
+          "%d not deterministic, %d crash Geneva, %d hit Geneva's segmentation bug"
+          % (n_run, n_udp, n_skip, n_crash, n_known))
     if failures:
         print("%d differences" % failures)
         sys.exit(1)

@@ -337,6 +337,32 @@ static int run_count(strategy *s, const char *pkt)
     return n;
 }
 
+TEST(test_explicit_ip_len)
+{
+    /* scapy (and so Geneva) puts an explicit IP length, not the bytes
+     * present, into the TCP pseudo-header; reference from scapy 2.4.3 */
+    static const char exp_hex[] =
+        "4500004000014000400626b50a0000010a0000029c400050000003e8000007d0701801f67d0c0000"
+        "020405b401030307474554202f20485454502f312e310d0a486f73743a206578616d706c652e636f"
+        "6d0d0a0d0a";
+    uint8_t exp[256];
+    long el = hex_decode(exp_hex, exp, sizeof(exp));
+    strategy *s = parse_ok("[TCP:flags:PA]-tamper{IP:len:replace:64}-|");
+    pktlist out = {0};
+    if (!s)
+        return;
+    strategy_apply(s, golden("base"), DIR_OUT, &out);
+    CHECK_INT(out.n, 1);
+    if (out.n == 1) {
+        size_t len;
+        uint8_t *b = pkt_bytes(out.v[0], &len);
+        CHECK_MEM(b, len, exp, (size_t)el);
+        free(b);
+    }
+    pktlist_free(&out);
+    strategy_free(s);
+}
+
 TEST(test_gas)
 {
     strategy *s = parse_ok("[TCP:flags:PA:2]-duplicate-|");
@@ -733,6 +759,7 @@ void suite_strategy(void)
     RUN(test_parse_errors);
     RUN(test_fragment_random_order);
     RUN(test_actions_vs_scapy);
+    RUN(test_explicit_ip_len);
     RUN(test_gas);
     RUN(test_trigger_values);
     RUN(test_sleep_trace);
