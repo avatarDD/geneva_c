@@ -26,6 +26,7 @@ int cmd_apply(int argc, char **argv);
 int cmd_run(int argc, char **argv);
 int cmd_fw(int argc, char **argv);
 int cmd_ctl(int argc, char **argv);
+int cmd_eval(int argc, char **argv);
 int cmd_evolve(int argc, char **argv);
 int cmd_db(int argc, char **argv);
 

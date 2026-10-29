@@ -94,6 +94,22 @@ try {
     }
 }
 
+# The evaluator: probes from its own port block, strategies through the
+# embedded engine (geneva eval prints "fitness<TAB>strategy").
+function Eval([string[]]$evalArgs) {
+    $out = & $Bin eval --host example.com --timeout 5 -l warn @evalArgs 2>&1
+    Write-Host "    eval $evalArgs -> exit $LASTEXITCODE`: $($out -join ' | ')"
+    return $LASTEXITCODE
+}
+Check ((Eval @("--no-engine")) -eq 0) "eval: http baseline succeeds"
+Check ((Eval @("--probe", "tls", "--no-engine")) -eq 0) "eval: tls baseline succeeds"
+Check ((Eval @('-s', '[TCP:flags:S]-duplicate-|[TCP:flags:SEC]-duplicate-| \/')) -eq 0) "eval: harmless strategy succeeds"
+Check ((Eval @('-s', '[TCP:flags:S]-drop-|[TCP:flags:SEC]-drop-| \/')) -eq 1) "eval: dropping SYNs fails"
+Check ((Eval @("--probe", "exec", "--timeout", "15", "--cmd",
+    'curl.exe -s -o NUL --max-time 5 --local-port {lports} http://example.com/',
+    '-s', '[TCP:flags:S]-drop-|[TCP:flags:SEC]-drop-| \/')) -eq 1) "eval: exec probe goes through the engine"
+Check ((Fetch) -match '^[23]') "HTTP works after the evaluator is gone"
+
 # A missing driver must be a clear error, not a crash.
 $bare = Join-Path $Work "bare"
 New-Item -ItemType Directory $bare | Out-Null

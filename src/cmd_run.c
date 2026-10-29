@@ -247,7 +247,7 @@ int cmd_fw(int argc, char **argv)
     char err[128];
     fw_config c;
     int use_fw, rc = EXIT_USAGE;
-    const char *action;
+    const char *act;
 
     if (args_parse(&a, argc, argv, defs, err, sizeof(err)) < 0) {
         fprintf(stderr, "geneva fw: %s\n", err);
@@ -266,11 +266,11 @@ int cmd_fw(int argc, char **argv)
         fprintf(stderr, "geneva fw: need one action: print, up or down\n");
         goto done;
     }
-    action = a.pos[0];
+    act = a.pos[0];
     if (parse_fw(&a, "fw", &c, &use_fw) < 0 || parse_logging(&a, "fw") < 0)
         goto done;
 #ifdef _WIN32
-    if (!strcmp(action, "print")) {
+    if (!strcmp(act, "print")) {
         sbuf s, e;
         sb_init(&s);
         sb_init(&e);
@@ -287,7 +287,7 @@ int cmd_fw(int argc, char **argv)
     }
     goto done;
 #endif
-    if (!strcmp(action, "print")) {
+    if (!strcmp(act, "print")) {
         sbuf s;
         fw_backend b = c.backend == FW_AUTO ? FW_NFT : c.backend;
         sb_init(&s);
@@ -304,7 +304,7 @@ int cmd_fw(int argc, char **argv)
         fputs(s.data, stdout);
         sb_free(&s);
         rc = EXIT_OK;
-    } else if (!strcmp(action, "up")) {
+    } else if (!strcmp(act, "up")) {
         sbuf e;
         sb_init(&e);
         if (fw_up(&c, &e) < 0) {
@@ -315,11 +315,11 @@ int cmd_fw(int argc, char **argv)
             rc = EXIT_OK;
         }
         sb_free(&e);
-    } else if (!strcmp(action, "down")) {
+    } else if (!strcmp(act, "down")) {
         fw_down(&c);
         rc = EXIT_OK;
     } else {
-        fprintf(stderr, "geneva fw: unknown action \"%s\" (print, up or down)\n", action);
+        fprintf(stderr, "geneva fw: unknown action \"%s\" (print, up or down)\n", act);
     }
 done:
     args_free(&a);

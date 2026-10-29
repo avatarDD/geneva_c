@@ -15,6 +15,7 @@
 #endif
 
 #include "args.h"
+#include "cmd_eval.h"
 #include "evolve.h"
 #include "geneva.h"
 #include "log.h"
@@ -23,36 +24,7 @@
 #include "rng.h"
 #include "sdb.h"
 
-/* ---- signals ------------------------------------------------------------- */
-
 static volatile sig_atomic_t g_stop;
-
-#ifdef _WIN32
-static BOOL WINAPI on_console(DWORD type)
-{
-    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT || type == CTRL_CLOSE_EVENT) {
-        g_stop = 1;
-        return TRUE;
-    }
-    return FALSE;
-}
-static void catch_stop(void) { SetConsoleCtrlHandler(on_console, TRUE); }
-#else
-static void on_signal(int sig)
-{
-    (void)sig;
-    g_stop = 1;
-}
-static void catch_stop(void)
-{
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = on_signal;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
-}
-#endif
 
 static int make_dir(const char *path)
 {
@@ -63,7 +35,7 @@ static int make_dir(const char *path)
 #endif
 }
 
-/* ---- evaluators available before the probes of stage 7 ------------------ */
+/* ---- a test evaluator ---------------------------------------------------- */
 
 /* --mock-eval TEXT: strategies containing TEXT succeed, shorter ones more.
  * Lets the GA, the checkpoint and the database be exercised offline. */
@@ -151,6 +123,9 @@ int cmd_evolve(int argc, char **argv)
         {"disable-action", 0, 1, "LIST", "never these actions (default sleep,trace)"},
         {"no-gas", 0, 0, NULL, "triggers never get gas"},
         {"packets", 0, 1, "PCAP", "real packets to draw trigger and tamper values from"},
+        EVAL_OPTS,
+        {"no-baseline", 0, 0, NULL, "skip the check that the target is blocked without a strategy"},
+        {"no-canary", 0, 0, NULL, "do not take trigger values from the baseline's packets"},
         {"no-eval", 0, 0, NULL, "do not evaluate (every fitness is 0), for debugging"},
         {"mock-eval", 0, 1, "TEXT", "testing: strategies containing TEXT succeed"},
         {"output-dir", 'o', 1, "DIR", "write generationN.txt and hallN.txt here"},
@@ -173,15 +148,19 @@ int cmd_evolve(int argc, char **argv)
     hall_of_fame hall;
     trigger fixed;
     mock_ctx mock;
-    sbuf msg, params;
+    eval_opts eo;
+    evaluator *evr = NULL;
+    sbuf msg, params, tname;
     int64_t v;
-    int rc = EXIT_USAGE, have_fixed = 0;
+    int rc = EXIT_USAGE, have_fixed = 0, use_probe = 0;
     const char *s, *protos, *fields, *dfields, *dact;
     sdb *db = NULL;
 
     memset(&fixed, 0, sizeof(fixed));
     sb_init(&msg);
     sb_init(&params);
+    sb_init(&tname);
+    eval_opts_default(&eo);
     hof_init(&hall);
     ga_opts_default(&o);
     if (args_parse(&a, argc, argv, defs, err, sizeof(err)) < 0) {
@@ -190,10 +169,11 @@ int cmd_evolve(int argc, char **argv)
     }
     if (arg_has(&a, "help")) {
         args_help("Usage: geneva evolve [options]\n"
-                  "Searches for strategies with Geneva's genetic algorithm. Ctrl+C stops after the\n"
+                  "Searches for strategies with Geneva's genetic algorithm, scoring each one with\n"
+                  "a probe through the engine (root or Administrator). First checks that the probe\n"
+                  "fails without a strategy (the target is blocked). Ctrl+C stops after the\n"
                   "current step; with --checkpoint the search continues later with --resume.\n"
-                  "Probes that evaluate strategies against a real censor come in a later stage;\n"
-                  "until then use --no-eval or --mock-eval.",
+                  "Example: geneva evolve --probe http --host blocked.example --population 50",
                   defs);
         rc = EXIT_OK;
         goto done;
@@ -203,6 +183,9 @@ int cmd_evolve(int argc, char **argv)
         goto done;
     }
     if (parse_logging(&a, "evolve") < 0)
+        goto done;
+    use_probe = !arg_has(&a, "no-eval") && !arg_has(&a, "mock-eval");
+    if (use_probe && eval_parse_args(&a, "evolve", &eo) < 0)
         goto done;
 #define INT_OPT(name, field, lo, hi)                                                                \
     if (arg_int(&a, name, o.field, lo, hi, &v) < 0)                                                 \
@@ -231,7 +214,9 @@ int cmd_evolve(int argc, char **argv)
     o.checkpoint = arg_str(&a, "checkpoint", NULL);
     o.resume = arg_has(&a, "resume") || arg_has(&a, "resume-force");
     o.resume_force = arg_has(&a, "resume-force");
-    o.target = arg_str(&a, "target", "");
+    if (use_probe)
+        eval_target_name(&eo, &tname);
+    o.target = arg_str(&a, "target", tname.data);
     o.stop = &g_stop;
     if (o.resume && !o.checkpoint) {
         fprintf(stderr, "geneva evolve: --resume needs --checkpoint FILE\n");
@@ -285,10 +270,6 @@ int cmd_evolve(int argc, char **argv)
         mock.want = arg_str(&a, "mock-eval", "");
         o.eval = mock_eval;
         o.eval_ctx = &mock;
-    } else if (!arg_has(&a, "no-eval")) {
-        fprintf(stderr, "geneva evolve: no evaluator yet: the probes come in a later stage; use --no-eval "
-                        "(or --mock-eval TEXT for testing)\n");
-        goto done;
     }
 
     if (o.out_dir && make_dir(o.out_dir) < 0) {
@@ -320,10 +301,53 @@ int cmd_evolve(int argc, char **argv)
         jw_kbool(&ev.w, "resume", o.resume);
         ev_emit(&ev);
     }
+    stop_on_signals(&g_stop);
+    if (use_probe) {
+        eval_result br;
+        int reachable = 0, canary = !o.gen.nenv && !arg_has(&a, "no-canary");
+        size_t before = o.gen.nenv;
+        eo.stop = &g_stop;
+        if (!eo.use_engine) {
+            fprintf(stderr, "geneva evolve: the search needs the engine (drop --no-engine)\n");
+            goto done;
+        }
+        sb_reset(&msg);
+        rc = evaluator_open(&eo, &evr, &msg);
+        if (rc != EXIT_OK) {
+            fprintf(stderr, "geneva evolve: %s\n", msg.data);
+            goto finish;
+        }
+        if (!arg_has(&a, "no-baseline") || canary) {
+            if (evaluator_baseline(evr, &br, &reachable, canary ? &o.gen.env : NULL, &o.gen.nenv) < 0) {
+                rc = EXIT_FAIL;
+                goto finish;
+            }
+            LOGI("ga", "baseline (no strategy): %s, fitness %g (%s)", probe_outcome_name(br.last.outcome),
+                 br.fitness, br.last.detail);
+            if (canary)
+                LOGI("ga", "%zu packet(s) of the baseline will seed values", o.gen.nenv - before);
+            if (ev_enabled()) {
+                ev_t ev;
+                ev_begin(&ev, "baseline");
+                jw_kbool(&ev.w, "blocked", !reachable);
+                jw_kdbl(&ev.w, "fitness", br.fitness);
+                jw_kstr(&ev.w, "outcome", probe_outcome_name(br.last.outcome));
+                jw_kstr(&ev.w, "detail", br.last.detail);
+                ev_emit(&ev);
+            }
+            if (reachable && !arg_has(&a, "no-baseline")) {
+                LOGE("ga", "the target is reachable without a strategy: nothing to search for (check the "
+                           "probe options, or --no-baseline)");
+                rc = EXIT_NOT_BLOCKED;
+                goto finish;
+            }
+        }
+        o.eval = evaluator_ga;
+        o.eval_ctx = evr;
+    }
     LOGI("ga", "Initializing %d strategies with %d input-action trees and %d output-action trees of input "
                "size %d and output size %d for evolution over %d generations.",
          o.population, o.in_trees, o.out_trees, o.in_actions, o.out_actions, o.generations);
-    catch_stop();
     rc = ga_run(&o, &hall);
 
     if (rc == EXIT_OK) {
@@ -367,14 +391,20 @@ int cmd_evolve(int argc, char **argv)
             ev_emit(&ev);
         }
     }
+finish:
     if (ev_enabled()) {
         ev_t ev;
         ev_begin(&ev, "exit");
         jw_kint(&ev.w, "code", rc);
-        jw_kstr(&ev.w, "reason", rc != EXIT_OK ? "error" : g_stop ? "signal" : "done");
+        jw_kstr(&ev.w, "reason", rc == EXIT_NOT_BLOCKED ? "not_blocked" : rc != EXIT_OK ? "error"
+                                  : g_stop                    ? "signal"
+                                                              : "done");
         ev_emit(&ev);
     }
 done:
+    evaluator_close(evr);
+    free(eo.probe.payload);
+    sb_free(&tname);
     sdb_close(db);
     hof_free(&hall);
     if (have_fixed)
