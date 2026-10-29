@@ -22,6 +22,7 @@ void suite_base(void);
 void suite_pkt(void);
 void suite_strategy(void);
 void suite_fw(void);
+void suite_ctl(void);
 
 int main(void)
 {
@@ -31,6 +32,7 @@ int main(void)
     suite_pkt();
     suite_strategy();
     suite_fw();
+    suite_ctl();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }

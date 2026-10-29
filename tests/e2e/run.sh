@@ -85,7 +85,7 @@ kill -0 $SRV 2>/dev/null || { echo "echo server failed to start"; exit 1; }
 
 # run_case NAME FIREWALL STRATEGY [DST] -- then checks via helpers below
 start_case() {
-    CASE=$1 FW=$2 STRAT=$3 DST=${4:-10.77.0.2}
+    CASE=$1 FW=$2 STRAT=$3 DST=${4:-10.77.0.2} EXTRA=${5:-}
     rm -f "$WORK/cap.pcap" "$WORK/ev.jsonl" "$WORK/eng.log"
     rm -f "$WORK/tcpdump.err"
     ip netns exec "$NS" tcpdump -i veth_s --immediate-mode -U -s 0 -w "$WORK/cap.pcap" "tcp port $PORT or ip[6:2] & 0x1fff != 0 or ip6[6] = 44" >/dev/null 2>"$WORK/tcpdump.err" &
@@ -98,7 +98,7 @@ start_case() {
     done
     printf '%s\n' "$STRAT" > "$WORK/strategy"
     ip netns exec "$NC" "$GENEVA" run -f "$WORK/strategy" -p $PORT --firewall "$FW" \
-        --events "$WORK/ev.jsonl" --stats-interval 0.2 --quiet -v --log-file "$WORK/eng.log" &
+        --events "$WORK/ev.jsonl" --stats-interval 0.2 --quiet -v --log-file "$WORK/eng.log" $EXTRA &
     ENG=$!
     i=0
     while ! grep -q '"ev":"ready"' "$WORK/ev.jsonl" 2>/dev/null; do
@@ -211,6 +211,38 @@ for FW in $FIREWALLS; do
     check "new strategy applied" '[ $(grep "Flags \[S\]" "$WORK/cap.txt" | grep -c "win 7,") -ge 1 ]'
     check "rules removed" rules_gone
 done
+
+# control socket (once, with the default firewall)
+CTL="ip netns exec $NC $GENEVA ctl -c unix:$WORK/ctl.sock"
+FW=auto
+start_case "control socket" auto '\/' 10.77.0.2 "--control unix:$WORK/ctl.sock"
+check "status says running" '$CTL status | grep -q "\"state\":\"running\""'
+$CTL subscribe --until exit > "$WORK/sub.jsonl" 2>&1 &
+SUB=$!
+sleep 0.2
+check "set_strategy" '$CTL set_strategy strategy="[TCP:flags:S]-tamper{TCP:window:replace:7}-| \\/" | grep -q "\"ok\":true"'
+check "bad strategy is refused" '! $CTL set_strategy strategy="[TCP:flags:S]-nonsense-|" >/dev/null'
+exchange && ok "exchange works" || bad "exchange failed"
+check "pause" '$CTL pause | grep -q "\"ok\":true"'
+exchange && ok "exchange works while paused" || bad "exchange failed while paused"
+check "stats while paused" '$CTL stats | grep -q "\"paused\":true"'
+check "resume" '$CTL resume >/dev/null && $CTL status | grep -q "\"state\":\"running\""'
+check "log_level" '$CTL log_level level=debug | grep -q "\"level\":\"debug\""'
+check "stop" '$CTL stop | grep -q "\"ok\":true"'
+wait $SUB
+stop_case
+check "engine exit code 0" '[ $ENG_RC -eq 0 ]'
+check "exit reason control" 'grep -q "\"reason\":\"control\"" "$WORK/ev.jsonl"'
+check "subscriber saw strategy, state and exit" 'grep -q "\"ev\":\"strategy\"" "$WORK/sub.jsonl" && grep -q "\"ev\":\"state\"" "$WORK/sub.jsonl" && grep -q "\"ev\":\"exit\"" "$WORK/sub.jsonl"'
+check "new strategy applied before pause only" '[ $(grep "Flags \[S\]" "$WORK/cap.txt" | grep -c "win 7,") -eq 1 ] && [ $(grep -c "Flags \[S\]" "$WORK/cap.txt") -eq 2 ]'
+check "socket file removed" '[ ! -e "$WORK/ctl.sock" ]'
+check "rules removed" rules_gone
+
+start_case "control token" auto '\/' 10.77.0.2 "--control tcp:127.0.0.1:47123 --control-token t0k"
+check "no token: refused" '! ip netns exec $NC $GENEVA ctl -c tcp:127.0.0.1:47123 status >/dev/null'
+check "wrong token: refused" '! ip netns exec $NC $GENEVA ctl -c tcp:127.0.0.1:47123 -t nope status >/dev/null'
+check "right token: status" 'ip netns exec $NC $GENEVA ctl -c tcp:127.0.0.1:47123 -t t0k status | grep -q "\"ok\":true"'
+stop_case
 
 echo "e2e: $passes passed, $fails failed"
 [ $fails -eq 0 ]

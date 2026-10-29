@@ -23,6 +23,8 @@ typedef struct {
     int fail_open;
     int max_delayed;           /* pending delayed packets before sending at once */
     double duration;           /* stop after this many seconds, 0 = run until a signal */
+    const char *control;       /* control socket spec (unix:/path, tcp:PORT), or NULL */
+    const char *control_token; /* required from control clients when set */
 } engine_opts;
 
 void engine_opts_default(engine_opts *o);

@@ -156,6 +156,8 @@ int cmd_run(int argc, char **argv)
         {"strategy-file", 'f', 1, "FILE", "read the strategy from FILE (re-read on SIGHUP)"},
         FW_OPTS,
         {"pcap", 0, 1, "FILE", "write the packets the engine releases to a pcap file"},
+        {"control", 'c', 1, "ADDR", "control socket: unix:/path, tcp:PORT or tcp:HOST:PORT"},
+        {"control-token", 0, 1, "TOKEN", "clients must send this token (or set GENEVA_CONTROL_TOKEN)"},
         {"events", 'e', 1, "SINK", "JSON Lines events: - (stdout), stderr, FILE or none"},
         {"stats-interval", 0, 1, "SEC", "emit a stats event every SEC seconds (default 10 with --events)"},
         {"duration", 0, 1, "SEC", "stop after SEC seconds"},
@@ -204,7 +206,9 @@ int cmd_run(int argc, char **argv)
     if (parse_fw(&a, "run", &o.fw, &o.apply_fw) < 0 || parse_logging(&a, "run") < 0)
         goto done;
     o.pcap = arg_str(&a, "pcap", NULL);
-    if (arg_dbl(&a, "stats-interval", ev_enabled() ? 10 : 0, 0, 86400, &o.stats_interval) < 0 ||
+    o.control = arg_str(&a, "control", NULL);
+    o.control_token = arg_str(&a, "control-token", getenv("GENEVA_CONTROL_TOKEN"));
+    if (arg_dbl(&a, "stats-interval", ev_enabled() || o.control ? 10 : 0, 0, 86400, &o.stats_interval) < 0 ||
         arg_dbl(&a, "duration", 0, 0, 1e9, &o.duration) < 0)
         goto done;
     if (arg_int(&a, "queue-maxlen", 4096, 1, 1 << 20, &v) < 0)

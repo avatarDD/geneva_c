@@ -83,6 +83,14 @@ sudo geneva run -f strategy.txt -p 80,443 --events - --stats-interval 10
 Коды возврата: 0 — ок, 2 — аргументы, 3 — стратегия, 4 — нет прав или
 модулей ядра, 5 — firewall, 6 — ввод-вывод.
 
+## Управление
+
+`--control unix:/var/run/geneva.sock` (или `tcp:PORT`, с
+`--control-token` для доступа не только с localhost) открывает управляющий
+сокет: статус, статистика, смена стратегии на лету, пауза, уровень лога,
+подписка на события, остановка. Клиент — `geneva ctl`. Формат событий и
+команд — `docs/PROTOCOL.md`.
+
 ## Проверка
 
 `tests/e2e/run.sh build/geneva` (root) поднимает два network namespace и
@@ -91,6 +99,7 @@ sudo geneva run -f strategy.txt -p 80,443 --events - --stats-interval 10
 - сегментацию TCP и фрагментацию IP (v4 и v6);
 - порчу контрольной суммы IP;
 - sleep, drop, входящий tamper и SIGHUP;
-- снятие правил при выходе.
+- снятие правил при выходе;
+- управляющий сокет: смена стратегии, пауза, подписка, токен, stop.
 
 `FIREWALLS="auto iptables nft"` выбирает проверяемые бэкенды firewall.
