@@ -115,7 +115,7 @@ geneva version   версия и возможности сборки (--json)
 *Готово, когда* golden-тесты (эталоны сняты scapy) проходят байт-в-байт.
 
 ### Этап 2. Язык стратегий
-Триггеры (wildcard, gas, «бомба»), действия tamper/duplicate/fragment/drop/
+Триггеры (wildcard, positive gas, negative gas), действия tamper/duplicate/fragment/drop/
 sleep/trace, деревья, леса, разбор и печать, `geneva check`, `geneva apply`
 (pcap in → pcap out), свой pcap reader/writer.
 *Готово, когда* все стратегии `library.py` и тестов Geneva разбираются и
