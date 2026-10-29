@@ -88,7 +88,7 @@ start_case() {
     CASE=$1 FW=$2 STRAT=$3 DST=${4:-10.77.0.2}
     rm -f "$WORK/cap.pcap" "$WORK/ev.jsonl" "$WORK/eng.log"
     rm -f "$WORK/tcpdump.err"
-    ip netns exec "$NS" tcpdump -i veth_s -U -s 0 -w "$WORK/cap.pcap" "tcp port $PORT or ip[6:2] & 0x1fff != 0 or ip6[6] = 44" >/dev/null 2>"$WORK/tcpdump.err" &
+    ip netns exec "$NS" tcpdump -i veth_s --immediate-mode -U -s 0 -w "$WORK/cap.pcap" "tcp port $PORT or ip[6:2] & 0x1fff != 0 or ip6[6] = 44" >/dev/null 2>"$WORK/tcpdump.err" &
     TCPD=$!
     # the capture must be running before the first packet
     i=0
@@ -114,7 +114,7 @@ stop_case() {
     kill -TERM $ENG 2>/dev/null
     wait $ENG; ENG_RC=$?
     sleep 0.3
-    kill $TCPD 2>/dev/null; wait $TCPD 2>/dev/null
+    kill -INT $TCPD 2>/dev/null; wait $TCPD 2>/dev/null
     tcpdump -nn -v -r "$WORK/cap.pcap" 2>/dev/null > "$WORK/cap.txt"
 }
 
