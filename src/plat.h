@@ -66,9 +66,25 @@ void plat_mutex_lock(plat_mutex_t *m);
 void plat_mutex_unlock(plat_mutex_t *m);
 
 /* Atomics over plain ints only: 64-bit atomics would need libatomic on
- * mips32/armv5, so counters stay thread-confined instead. */
-#define atomic_load_int(p)      __atomic_load_n((p), __ATOMIC_SEQ_CST)
-#define atomic_store_int(p, v)  __atomic_store_n((p), (v), __ATOMIC_SEQ_CST)
+ * mips32/armv5, so counters stay thread-confined instead. ARMv5 has no
+ * atomic instructions at all; its cores are single-processor, where an
+ * aligned int access is atomic, so a compiler barrier is enough there. */
+#if defined(__GCC_ATOMIC_INT_LOCK_FREE) && __GCC_ATOMIC_INT_LOCK_FREE < 2
+static inline int atomic_load_int(volatile int *p)
+{
+    __asm__ __volatile__("" ::: "memory");
+    return *p;
+}
+static inline void atomic_store_int(volatile int *p, int v)
+{
+    __asm__ __volatile__("" ::: "memory");
+    *p = v;
+    __asm__ __volatile__("" ::: "memory");
+}
+#else
+#  define atomic_load_int(p)     __atomic_load_n((p), __ATOMIC_SEQ_CST)
+#  define atomic_store_int(p, v) __atomic_store_n((p), (v), __ATOMIC_SEQ_CST)
+#endif
 
 /* ---- sockets ------------------------------------------------------------- */
 
