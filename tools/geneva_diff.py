@@ -27,6 +27,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import traceback
 import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -160,6 +161,7 @@ def load_geneva(path):
     os.chdir(path)
     patch_find_library()
     stub_modules()
+    import actions.action  # noqa: F401
     import actions.utils  # noqa: F401
     import actions.strategy  # noqa: F401
     import actions.tree  # noqa: F401
@@ -167,14 +169,30 @@ def load_geneva(path):
     return sys.modules["actions.utils"], sys.modules["layers.packet"]
 
 
+class ListHandler(logging.Handler):
+    """Keeps what Geneva logs while parsing, to explain its rejections."""
+    def __init__(self):
+        logging.Handler.__init__(self)
+        self.records = []
+
+    def emit(self, record):
+        msg = record.getMessage()
+        if record.exc_info:
+            msg += " | " + "".join(traceback.format_exception(*record.exc_info)).strip().splitlines()[-1]
+        self.records.append(msg)
+
+
 def geneva_print(gu, s, logger):
+    handler = logger.handlers[0]
+    handler.records = []
     try:
         st = gu.parse(s, logger)
         return True, str(st).strip()
     except BaseException as e:  # Geneva signals errors with assorted exceptions
         if isinstance(e, KeyboardInterrupt):
             raise
-        return False, "%s: %s" % (type(e).__name__, e)
+        why = "; ".join(handler.records[-3:])
+        return False, "%s: %s%s" % (type(e).__name__, e, " [%s]" % why if why else "")
 
 
 def run_check(binary, strategies):
@@ -298,8 +316,22 @@ def main():
 
     gu, gp = load_geneva(geneva)
     logger = logging.getLogger("geneva-diff")
-    logger.addHandler(logging.NullHandler())
+    logger.addHandler(ListHandler())
+    logger.setLevel(logging.DEBUG)
     logger.propagate = False
+
+    # Geneva finds actions by instantiating every Action class; if that
+    # breaks in this environment, nothing parses, so fail loudly here.
+    action_mod = sys.modules["actions.action"]
+    for d in ("out", "in"):
+        try:
+            found = sorted(name for name, _ in action_mod.Action.get_actions(d))
+        except Exception:
+            traceback.print_exc()
+            raise SystemExit("Geneva cannot list its %s actions in this environment" % d)
+        print("Geneva %s actions: %s" % (d, ", ".join(found)))
+        if not found:
+            raise SystemExit("Geneva found no %s actions" % d)
 
     failures = 0
 
