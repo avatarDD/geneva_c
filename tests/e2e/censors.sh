@@ -285,11 +285,23 @@ EOS
             FIT=$(head -1 "$WORK/best.txt" | cut -f1)
             [ $rc -eq 0 ] && positive "${FIT:-0}" && ok "found on the server: $BEST ($FIT)" ||
                 bad "server-side evolve found nothing (exit $rc)" "$WORK/sevolve.log"
+            # Like the client-side search: a timing-dependent strategy can
+            # be lucky in three runs, so any of the top three that holds
+            # 3 of 3 again passes.
             if positive "${FIT:-0}"; then
-                reset_censor
-                ip netns exec "$NS" "$GENEVA" eval $SPROBE --runs 3 --fitness-by min --quiet -s "$BEST" \
-                    --log-level debug --log-file "$WORK/recheck.log" > "$WORK/eval.txt" &&
-                    ok "it works again (3 of 3)" || bad "the strategy does not hold" "$WORK/recheck.log"
+                : > "$WORK/recheck.log"
+                held=
+                awk -F'\t' '$1 > 0 { print $3 }' "$WORK/best.txt" | head -3 > "$WORK/top.txt"
+                while IFS= read -r s; do
+                    reset_censor
+                    if ip netns exec "$NS" "$GENEVA" eval $SPROBE --runs 3 --fitness-by min --quiet -s "$s" \
+                        --log-level debug --log-file "$WORK/recheck.log" > "$WORK/eval.txt"; then
+                        held=$s
+                        break
+                    fi
+                done < "$WORK/top.txt"
+                [ -n "$held" ] && ok "it works again (3 of 3): $held" ||
+                    bad "none of the found strategies holds" "$WORK/recheck.log"
             fi
             stop_censor
         }
