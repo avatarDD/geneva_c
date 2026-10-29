@@ -38,10 +38,11 @@ windows-x86|-target x86-windows-gnu -mcpu=i686|windows
 windows-arm64|-target aarch64-windows-gnu|windows
 "
 
+# want NAME [TARGET...]: no targets means all
 want() {
-    [ $# -eq 0 ] && return 0
     n=$1
     shift
+    [ $# -eq 0 ] && return 0
     for t in "$@"; do [ "$t" = "$n" ] && return 0; done
     return 1
 }
