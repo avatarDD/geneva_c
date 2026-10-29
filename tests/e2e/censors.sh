@@ -112,7 +112,13 @@ stop_censor() {
         bad "censor rules left behind"
 }
 
+# A probe that timed out leaves its socket retransmitting the forbidden
+# request; censors 6 and 7 would see it after the reset and block the
+# client again. Abort those connections first (the agent's control
+# connection is not on port 80 and stays).
 reset_censor() {
+    ip netns exec "$NC" ss -K -t dst 10.80.2.2 '( dport = :80 or dport = :443 )' >/dev/null 2>&1 || true
+    sleep 0.05
     kill -HUP "$CPID"
     sleep 0.2
 }
