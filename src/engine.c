@@ -1,9 +1,17 @@
+/*
+ * The portable engine core: the strategy, delayed packets (sleep), events,
+ * statistics and the control socket. Packets come from a backend (see
+ * engine_int.h): NFQUEUE on Linux, WinDivert on Windows.
+ */
 #include "engine.h"
 
+#include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "engine_int.h"
 #include "geneva.h"
 #include "log.h"
 #include "plat.h"
@@ -21,52 +29,41 @@ void engine_opts_default(engine_opts *o)
     o->max_delayed = 1024;
 }
 
-#ifdef __linux__
+#if defined(__linux__)
+#  define BACKEND (&nfq_backend)
+#  define HAVE_BACKEND 1
+#elif defined(_WIN32)
+#  define BACKEND (&windivert_backend)
+#  define HAVE_BACKEND 1
+#else
+#  define BACKEND NULL
+#endif
 
-#include <errno.h>
-#include <signal.h>
-#include <poll.h>
-
-#include "ctl.h"
-#include "nfq.h"
-#include "pcap.h"
-#include "rawsend.h"
-
-/* A packet waiting for its sleep to end: either a held NFQUEUE packet that
- * gets its verdict then, or bytes for a raw send. */
-typedef struct {
-    uint64_t due;
-    uint64_t order; /* FIFO among equal due times */
-    uint8_t *data;
-    size_t len;
-    int verdict;
-    uint32_t id;
-} delayed;
-
-typedef struct {
-    uint64_t pkts_out, pkts_in, triggered, accepted, modified, dropped;
-    uint64_t injected, delayed, send_errors, verdict_errors, parse_errors, overruns;
-} counters;
-
-typedef struct {
-    engine_opts *o;
-    nfq *q;
-    rawsend *rs;
-    strategy *st;
-    pcap_writer *pw;
-    counters c;
-    delayed *dl; /* min-heap by (due, order) */
-    size_t ndl, capdl;
-    uint64_t dl_order;
-    uint64_t start_ms;
-    sbuf line;
-    ctl *ctl;
-    int paused;       /* packets pass unchanged */
-    int stop_request; /* "stop" over the control socket */
-} engine;
+/* ---- signals ------------------------------------------------------------- */
 
 static volatile sig_atomic_t sig_stop, sig_hup, sig_usr1;
 
+#ifdef _WIN32
+static BOOL WINAPI on_console(DWORD type)
+{
+    switch (type) {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+    case CTRL_CLOSE_EVENT:
+    case CTRL_SHUTDOWN_EVENT:
+        sig_stop = SIGINT;
+        /* CTRL_CLOSE gives a few seconds before the process dies: wait for
+         * the main loop to take the filter down. */
+        if (type == CTRL_CLOSE_EVENT || type == CTRL_SHUTDOWN_EVENT)
+            Sleep(3000);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static void install_signals(void) { SetConsoleCtrlHandler(on_console, TRUE); }
+static void remove_signals(void) { SetConsoleCtrlHandler(on_console, FALSE); }
+#else
 static void on_signal(int sig)
 {
     if (sig == SIGHUP)
@@ -90,6 +87,9 @@ static void install_signals(void)
     signal(SIGPIPE, SIG_IGN);
 }
 
+static void remove_signals(void) {}
+#endif
+
 /* ---- delayed packets (binary heap) --------------------------------------- */
 
 static int dl_less(const delayed *a, const delayed *b)
@@ -97,26 +97,28 @@ static int dl_less(const delayed *a, const delayed *b)
     return a->due < b->due || (a->due == b->due && a->order < b->order);
 }
 
-static void dl_push(engine *e, delayed d)
+static void dl_push(engine *e, const delayed *d)
 {
     size_t i;
     if (e->ndl == e->capdl) {
         e->capdl = e->capdl ? e->capdl * 2 : 64;
         e->dl = xrealloc(e->dl, e->capdl * sizeof(*e->dl));
     }
-    d.order = e->dl_order++;
     i = e->ndl++;
-    while (i && dl_less(&d, &e->dl[(i - 1) / 2])) {
+    while (i && dl_less(d, &e->dl[(i - 1) / 2])) {
         e->dl[i] = e->dl[(i - 1) / 2];
         i = (i - 1) / 2;
     }
-    e->dl[i] = d;
+    e->dl[i] = *d;
+    e->dl[i].order = e->dl_order++;
 }
 
-static delayed dl_pop(engine *e)
+static void dl_pop(engine *e, delayed *top)
 {
-    delayed top = e->dl[0], last = e->dl[--e->ndl];
+    delayed last;
     size_t i = 0;
+    *top = e->dl[0];
+    last = e->dl[--e->ndl];
     for (;;) {
         size_t l = 2 * i + 1, r = l + 1, m = i;
         const delayed *best = &last;
@@ -131,7 +133,6 @@ static delayed dl_pop(engine *e)
     }
     if (e->ndl)
         e->dl[i] = last;
-    return top;
 }
 
 /* ---- output -------------------------------------------------------------- */
@@ -142,20 +143,18 @@ static void record(engine *e, const uint8_t *data, size_t len)
         pcap_write(e->pw, plat_wall_ms() * 1000000ull, data, len);
 }
 
-static void give_verdict(engine *e, uint32_t id, int v, const uint8_t *data, size_t len)
+static void give_verdict(engine *e, const void *pctx, int accept, const uint8_t *data, size_t len)
 {
-    if (nfq_verdict(e->q, id, v, data, len, 0, 0) < 0) {
+    if (e->be->verdict(e, pctx, accept, data, len) < 0)
         e->c.verdict_errors++;
-        LOGW("engine", "verdict for packet %u failed: %s", id, strerror(errno));
-    }
 }
 
-static void raw_send(engine *e, const uint8_t *data, size_t len)
+static void inject(engine *e, const void *pctx, const uint8_t *data, size_t len)
 {
-    if (rawsend_send(e->rs, data, len) < 0) {
+    if (e->be->inject(e, pctx, data, len) < 0) {
         e->c.send_errors++;
         if (e->c.send_errors <= 10 || log_enabled(LOG_DEBUG))
-            LOGW("engine", "raw send of %zu bytes failed: %s", len, strerror(errno));
+            LOGW("engine", "sending %zu bytes failed", len);
         return;
     }
     e->c.injected++;
@@ -165,10 +164,10 @@ static void raw_send(engine *e, const uint8_t *data, size_t len)
 static void release(engine *e, delayed *d)
 {
     if (d->verdict) {
-        give_verdict(e, d->id, NFQ_ACCEPT, d->data, d->len);
+        give_verdict(e, d->pctx, 1, d->data, d->len);
         record(e, d->data, d->len);
     } else {
-        raw_send(e, d->data, d->len);
+        inject(e, d->pctx, d->data, d->len);
     }
     free(d->data);
 }
@@ -177,15 +176,21 @@ static void run_timers(engine *e, int all)
 {
     uint64_t now = plat_now_ms();
     while (e->ndl && (all || e->dl[0].due <= now)) {
-        delayed d = dl_pop(e);
+        delayed d;
+        dl_pop(e, &d);
         release(e, &d);
     }
 }
 
 /* Queues a packet for later, or releases it now when too many wait. */
-static void delay(engine *e, uint8_t *data, size_t len, double secs, int verdict, uint32_t id)
+static void delay(engine *e, uint8_t *data, size_t len, double secs, int verdict, const void *pctx)
 {
-    delayed d = {.data = data, .len = len, .verdict = verdict, .id = id};
+    delayed d;
+    memset(&d, 0, sizeof(d));
+    d.data = data;
+    d.len = len;
+    d.verdict = verdict;
+    memcpy(d.pctx, pctx, e->be->pctx_len);
     if (e->ndl >= (size_t)e->o->max_delayed) {
         LOGW("engine", "too many delayed packets (%zu), sending one now", e->ndl);
         release(e, &d);
@@ -193,7 +198,7 @@ static void delay(engine *e, uint8_t *data, size_t len, double secs, int verdict
     }
     d.due = plat_now_ms() + (uint64_t)(secs * 1000.0 + 0.5);
     e->c.delayed++;
-    dl_push(e, d);
+    dl_push(e, &d);
 }
 
 /* ---- packets ------------------------------------------------------------- */
@@ -214,26 +219,9 @@ static void trace_pkt(engine *e, strat_dir dir, const gpkt *p, const pktlist *ou
     }
 }
 
-static strat_dir direction(const engine *e, const nfq_msg *m, const gpkt *p)
+void engine_packet(engine *e, const uint8_t *data, size_t len, int d, const void *pctx)
 {
-    int to;
-    switch (m->hook) {
-    case NFQ_HOOK_PRE_ROUTING:
-    case NFQ_HOOK_LOCAL_IN:
-        return DIR_IN;
-    case NFQ_HOOK_LOCAL_OUT:
-    case NFQ_HOOK_POST_ROUTING:
-        return DIR_OUT;
-    }
-    /* FORWARD: decide by the ports, like the rules do */
-    to = p->l4 != LAYER_NONE && ports_has(&e->o->fw.ports, p->dport);
-    return (to != e->o->fw.server_side) ? DIR_OUT : DIR_IN;
-}
-
-static void on_packet(const nfq_msg *m, void *ctx)
-{
-    engine *e = ctx;
-    gpkt *p = pkt_parse(m->data, m->len), *orig = NULL;
+    gpkt *p = pkt_parse(data, len), *orig = NULL;
     pktlist out = {0};
     strat_dir dir;
     int fired;
@@ -241,10 +229,16 @@ static void on_packet(const nfq_msg *m, void *ctx)
 
     if (!p) {
         e->c.parse_errors++;
-        give_verdict(e, m->id, NFQ_ACCEPT, NULL, 0);
+        give_verdict(e, pctx, 1, NULL, 0);
         return;
     }
-    dir = direction(e, m, p);
+    if (d < 0) {
+        /* decide by the ports, like the rules do */
+        int to = p->l4 != LAYER_NONE && ports_has(&e->o->fw.ports, p->dport);
+        dir = (to != e->o->fw.server_side) ? DIR_OUT : DIR_IN;
+    } else {
+        dir = (strat_dir)d;
+    }
     if (dir == DIR_OUT)
         e->c.pkts_out++;
     else
@@ -252,7 +246,7 @@ static void on_packet(const nfq_msg *m, void *ctx)
     if (e->paused) {
         pkt_free(p);
         e->c.accepted++;
-        give_verdict(e, m->id, NFQ_ACCEPT, NULL, 0);
+        give_verdict(e, pctx, 1, NULL, 0);
         return;
     }
     if (log_enabled(LOG_TRACE))
@@ -266,7 +260,7 @@ static void on_packet(const nfq_msg *m, void *ctx)
         e->c.triggered++;
     if (!out.n) {
         e->c.dropped++;
-        give_verdict(e, m->id, NFQ_DROP, NULL, 0);
+        give_verdict(e, pctx, 0, NULL, 0);
         return;
     }
     if (dir == DIR_IN) {
@@ -286,41 +280,36 @@ static void on_packet(const nfq_msg *m, void *ctx)
     for (size_t k = 0; k < out.n; k++) {
         size_t i = k == 0 ? first : (k <= first ? k - 1 : k);
         gpkt *r = out.v[i];
-        size_t len;
-        uint8_t *b = pkt_bytes(r, &len);
-        if (!len) {
+        size_t blen;
+        uint8_t *b = pkt_bytes(r, &blen);
+        if (!blen) {
             e->c.send_errors++;
             LOGW("engine", "cannot build a result packet");
             free(b);
             if (i == first)
-                give_verdict(e, m->id, NFQ_DROP, NULL, 0);
+                give_verdict(e, pctx, 0, NULL, 0);
             continue;
         }
         if (i == first) {
-            int same = len == m->len && !memcmp(b, m->data, len);
+            int same = blen == len && !memcmp(b, data, blen);
             if (!same)
                 e->c.modified++;
             if (r->sleep > 0) {
-                delay(e, b, len, r->sleep, 1, m->id);
+                delay(e, b, blen, r->sleep, 1, pctx);
                 continue;
             }
             e->c.accepted++;
-            give_verdict(e, m->id, NFQ_ACCEPT, same ? NULL : b, len);
-            record(e, b, len);
+            give_verdict(e, pctx, 1, same ? NULL : b, blen);
+            record(e, b, blen);
         } else if (r->sleep > 0) {
-            delay(e, b, len, r->sleep, 0, 0);
+            delay(e, b, blen, r->sleep, 0, pctx);
             continue;
         } else {
-            raw_send(e, b, len);
+            inject(e, pctx, b, blen);
         }
         free(b);
     }
     pktlist_free(&out);
-}
-
-static void pass_packet(const nfq_msg *m, void *ctx)
-{
-    give_verdict(ctx, m->id, NFQ_ACCEPT, NULL, 0);
 }
 
 /* ---- events -------------------------------------------------------------- */
@@ -489,11 +478,12 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
         jw_kstr(w, "version", GENEVA_VERSION);
         jw_kint(w, "pid", plat_getpid());
         jw_kuint(w, "uptime_ms", plat_now_ms() - e->start_ms);
+        jw_kstr(w, "backend", e->be->name);
         jw_kuint(w, "queue", e->o->fw.queue);
         ports_format(&e->o->fw.ports, &s, ",", "-");
         jw_kstr(w, "ports", s.data);
         jw_kbool(w, "server_side", e->o->fw.server_side);
-        jw_kstr(w, "firewall", e->o->apply_fw ? fw_backend_name(e->o->fw.backend) : "none");
+        jw_kstr(w, "firewall", e->fw_name ? e->fw_name : "none");
         jw_kstr(w, "log_level", log_level_name(log_get_level()));
         sb_reset(&s);
         strategy_print(e->st, &s);
@@ -581,6 +571,7 @@ static void emit_start(engine *e)
     jw_kstr(&ev.w, "version", GENEVA_VERSION);
     jw_kstr(&ev.w, "mode", "run");
     jw_kint(&ev.w, "pid", plat_getpid());
+    jw_kstr(&ev.w, "backend", e->be->name);
     jw_kuint(&ev.w, "queue", e->o->fw.queue);
     jw_kstr(&ev.w, "ports", s.data);
     jw_kbool(&ev.w, "server_side", e->o->fw.server_side);
@@ -588,17 +579,25 @@ static void emit_start(engine *e)
     sb_free(&s);
 }
 
+#define MAX_POLL (8 + CTL_MAX_CLIENTS + 1)
+
 int engine_run(engine_opts *o)
 {
     engine e;
     sbuf err;
-    nfq_config qc;
-    int rc = EXIT_OK, fw_on = 0, errnum;
+    int rc = EXIT_OK, opened = 0, running = 0;
     uint64_t next_stats, deadline;
     const char *reason = "signal";
 
+#ifndef HAVE_BACKEND
+    LOGE("engine", "no packet engine on %s: geneva run needs Linux (NFQUEUE) or Windows (WinDivert)",
+         plat_os_name());
+    return EXIT_PRIV;
+#endif
     memset(&e, 0, sizeof(e));
     e.o = o;
+    e.be = BACKEND;
+    plat_mutex_init(&e.lock);
     sb_init(&err);
     sb_init(&e.line);
     e.start_ms = plat_now_ms();
@@ -622,30 +621,6 @@ int engine_run(engine_opts *o)
         }
     }
     install_signals();
-
-    memset(&qc, 0, sizeof(qc));
-    qc.queue = o->fw.queue;
-    qc.maxlen = o->queue_maxlen;
-    qc.fail_open = o->fail_open;
-    qc.rcvbuf = 4 << 20;
-    sb_reset(&err);
-    e.q = nfq_open(&qc, &errnum, &err);
-    if (!e.q) {
-        LOGE("engine", "%s", err.data);
-        emit_error("nfqueue", err.data);
-        rc = (errnum == EPERM || errnum == EACCES || errnum == EPROTONOSUPPORT) ? EXIT_PRIV : EXIT_FAIL;
-        goto out;
-    }
-    sb_reset(&err);
-    e.rs = rawsend_open(o->fw.mark, &err);
-    if (!e.rs) {
-        LOGE("engine", "%s", err.data);
-        emit_error("rawsend", err.data);
-        rc = EXIT_PRIV;
-        goto out;
-    }
-    if (err.len)
-        LOGW("engine", "%s", err.data);
     if (o->control) {
         sb_reset(&err);
         e.ctl = ctl_open(o->control, o->control_token, &err);
@@ -658,39 +633,43 @@ int engine_run(engine_opts *o)
         ev_set_tap(ctl_broadcast, e.ctl);
         LOGI("engine", "control socket %s", o->control);
     }
-    if (o->apply_fw) {
-        sb_reset(&err);
-        if (fw_up(&o->fw, &err) < 0) {
-            LOGE("engine", "firewall: %s", err.data);
-            emit_error("firewall", err.data);
-            rc = EXIT_FIREWALL;
-            goto out;
-        }
-        fw_on = 1;
-        LOGI("engine", "firewall rules applied (%s)", fw_backend_name(o->fw.backend));
+    sb_reset(&err);
+    opened = 1;
+    rc = e.be->open(&e, &err);
+    if (rc != EXIT_OK) {
+        LOGE("engine", "%s", err.data);
+        emit_error(e.err_where ? e.err_where : e.be->name, err.data);
+        goto out;
     }
+    running = 1;
+    if (err.len)
+        LOGW("engine", "%s", err.data);
+    plat_mutex_lock(&e.lock);
     emit_strategy(&e);
     if (ev_enabled()) {
         ev_t ev;
         ev_begin(&ev, "ready");
-        jw_kstr(&ev.w, "firewall", o->apply_fw ? fw_backend_name(o->fw.backend) : "none");
+        jw_kstr(&ev.w, "backend", e.be->name);
+        jw_kstr(&ev.w, "firewall", e.fw_name ? e.fw_name : "none");
         ev_emit(&ev);
     }
-    LOGI("engine", "listening on NFQUEUE %u", o->fw.queue);
+    plat_mutex_unlock(&e.lock);
 
     next_stats = o->stats_interval > 0 ? e.start_ms + (uint64_t)(o->stats_interval * 1000) : 0;
     deadline = o->duration > 0 ? e.start_ms + (uint64_t)(o->duration * 1000) : 0;
     while (!sig_stop && !e.stop_request) {
-        struct pollfd pfd[2 + CTL_MAX_CLIENTS];
-        size_t nctl;
-        uint64_t now = plat_now_ms();
+        plat_pollfd pfd[MAX_POLL];
+        size_t nbe, nctl;
+        uint64_t now;
         int timeout = 1000, r;
-        pfd[0].fd = nfq_fd(e.q);
-        pfd[0].events = POLLIN;
-        pfd[0].revents = 0;
-        nctl = ctl_pollfds(e.ctl, pfd + 1, ARRAY_LEN(pfd) - 1);
+
+        plat_mutex_lock(&e.lock);
+        nbe = e.be->pollfds(&e, pfd, 8);
+        nctl = ctl_pollfds(e.ctl, pfd + nbe, MAX_POLL - nbe);
+        now = plat_now_ms();
         if (e.ndl)
             timeout = e.dl[0].due <= now ? 0 : (int)MIN(e.dl[0].due - now, 1000);
+        plat_mutex_unlock(&e.lock);
         if (next_stats && next_stats > now && next_stats - now < (uint64_t)timeout)
             timeout = (int)(next_stats - now);
         if (deadline) {
@@ -701,30 +680,30 @@ int engine_run(engine_opts *o)
             if (deadline - now < (uint64_t)timeout)
                 timeout = (int)(deadline - now);
         }
-        r = poll(pfd, (nfds_t)(1 + nctl), timeout);
-        if (r < 0 && errno != EINTR) {
-            LOGE("engine", "poll: %s", strerror(errno));
+        r = plat_poll(pfd, (unsigned)(nbe + nctl), timeout);
+        if (r < 0) {
+#ifdef _WIN32
+            int perr = plat_sock_err();
+            if (perr != WSAEINTR) {
+                LOGE("engine", "poll: %s", plat_sock_strerror(perr));
+#else
+            if (errno != EINTR) {
+                LOGE("engine", "poll: %s", strerror(errno));
+#endif
+                rc = EXIT_FAIL;
+                reason = "error";
+                break;
+            }
+        }
+        plat_mutex_lock(&e.lock);
+        if (r > 0 && e.be->ready(&e, pfd, nbe) < 0) {
+            plat_mutex_unlock(&e.lock);
             rc = EXIT_FAIL;
             reason = "error";
             break;
         }
-        if (r > 0 && (pfd[0].revents & POLLIN)) {
-            /* drain a batch, but keep timers responsive */
-            for (int i = 0; i < 64; i++) {
-                int n = nfq_read(e.q, on_packet, &e, &e.c.overruns);
-                if (n < 0) {
-                    LOGE("engine", "NFQUEUE read: %s", strerror(errno));
-                    rc = EXIT_FAIL;
-                    reason = "error";
-                    sig_stop = -1;
-                    break;
-                }
-                if (n == 0)
-                    break;
-            }
-        }
         if (r > 0 && nctl)
-            ctl_dispatch(e.ctl, pfd + 1, nctl, on_control, &e);
+            ctl_dispatch(e.ctl, pfd + nbe, nctl, on_control, &e);
         run_timers(&e, 0);
         if (sig_hup) {
             sbuf herr;
@@ -742,6 +721,7 @@ int engine_run(engine_opts *o)
                 while (next_stats <= now)
                     next_stats += (uint64_t)(o->stats_interval * 1000);
         }
+        plat_mutex_unlock(&e.lock);
     }
     if (sig_stop > 0)
         LOGI("engine", "stopping (signal %d)", (int)sig_stop);
@@ -751,15 +731,14 @@ int engine_run(engine_opts *o)
     }
 
 out:
-    if (fw_on)
-        fw_down(&o->fw);
-    if (e.q) {
-        /* packets queued while the rules came down pass unchanged */
-        while (nfq_read(e.q, pass_packet, &e, NULL) > 0)
-            ;
-        run_timers(&e, 1); /* let held packets go before the queue closes */
-        if (e.st)
+    if (opened) {
+        e.be->stop(&e);
+        plat_mutex_lock(&e.lock);
+        run_timers(&e, 1); /* let held packets go before the capture closes */
+        if (running)
             emit_stats(&e);
+        plat_mutex_unlock(&e.lock);
+        e.be->close(&e);
     }
     if (ev_enabled()) {
         ev_t ev;
@@ -772,23 +751,15 @@ out:
         ev_set_tap(NULL, NULL);
         ctl_close(e.ctl);
     }
+    remove_signals();
+    for (size_t i = 0; i < e.ndl; i++)
+        free(e.dl[i].data);
     free(e.dl);
-    nfq_close(e.q);
-    rawsend_close(e.rs);
     if (e.pw && pcap_close_write(e.pw) < 0 && rc == EXIT_OK)
         rc = EXIT_IO;
     strategy_free(e.st);
     sb_free(&err);
     sb_free(&e.line);
+    plat_mutex_destroy(&e.lock);
     return rc;
 }
-
-#else /* !__linux__ */
-
-int engine_run(engine_opts *o)
-{
-    LOGE("engine", "the NFQUEUE engine runs on Linux only; the Windows engine comes in stage 5");
-    return EXIT_PRIV;
-}
-
-#endif

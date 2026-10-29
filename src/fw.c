@@ -316,6 +316,80 @@ void fw_script(const fw_config *c, fw_backend b, int up, sbuf *out)
     fwlist_free(&l);
 }
 
+/* ---- WinDivert ----------------------------------------------------------- */
+
+static void wd_ports(const fw_config *c, sbuf *out, const char *field)
+{
+    int nproto = 0;
+    sb_putc(out, '(');
+    for (int pr = 0; pr < 2; pr++) {
+        const char *proto = pr ? "udp" : "tcp";
+        if (!(pr ? c->udp : c->tcp))
+            continue;
+        for (int i = 0; i < c->ports.n; i++) {
+            if (nproto++)
+                sb_puts(out, " or ");
+            if (c->ports.lo[i] == c->ports.hi[i])
+                sb_printf(out, "%s.%s == %u", proto, field, c->ports.lo[i]);
+            else
+                sb_printf(out, "(%s.%s >= %u and %s.%s <= %u)", proto, field, c->ports.lo[i], proto,
+                          field, c->ports.hi[i]);
+        }
+    }
+    sb_putc(out, ')');
+}
+
+int fw_windivert_filter(const fw_config *c, sbuf *out, sbuf *err)
+{
+    /* client side: out to the ports, in from them; server side: the reverse */
+    const char *out_field = c->server_side ? "SrcPort" : "DstPort";
+    const char *in_field = c->server_side ? "DstPort" : "SrcPort";
+    if (!c->tcp && !c->udp) {
+        sb_puts(err, "no protocol to capture");
+        return -1;
+    }
+    if (!c->ports.n) {
+        sb_puts(err, "no ports to capture");
+        return -1;
+    }
+    if (!c->out && !c->in) {
+        sb_puts(err, "no direction to capture");
+        return -1;
+    }
+    if (!c->ipv4 && !c->ipv6) {
+        sb_puts(err, "neither IPv4 nor IPv6");
+        return -1;
+    }
+    sb_puts(out, "!loopback");
+    if (!c->ipv4 || !c->ipv6)
+        sb_puts(out, c->ipv4 ? " and ip" : " and ipv6");
+    if (c->iface) {
+        char *end;
+        unsigned long idx = strtoul(c->iface, &end, 10);
+        if (!*c->iface || *end || !idx || idx > 0xffffffffUL) {
+            sb_printf(err, "on Windows --iface takes an interface index (see \"netsh interface ipv4 show interfaces\"), not \"%s\"",
+                      c->iface);
+            return -1;
+        }
+        sb_printf(out, " and ifIdx == %lu", idx);
+    }
+    sb_puts(out, " and (");
+    if (c->out) {
+        sb_puts(out, "(outbound and ");
+        wd_ports(c, out, out_field);
+        sb_putc(out, ')');
+    }
+    if (c->in) {
+        if (c->out)
+            sb_puts(out, " or ");
+        sb_puts(out, "(inbound and ");
+        wd_ports(c, out, in_field);
+        sb_putc(out, ')');
+    }
+    sb_putc(out, ')');
+    return 0;
+}
+
 /* ---- execution ----------------------------------------------------------- */
 
 #ifdef __linux__

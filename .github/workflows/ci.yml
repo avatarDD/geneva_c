@@ -52,6 +52,36 @@ jobs:
       # is exhausted, and releases publish binaries directly instead.
       - run: ls -la build/geneva.exe && file build/geneva.exe
 
+  # Native Windows build, unit tests and a live smoke test of the WinDivert
+  # engine. WinDivert comes from its author's official release, pinned by
+  # version and SHA-256.
+  windows:
+    runs-on: windows-latest
+    env:
+      WINDIVERT_VERSION: 2.2.2
+      WINDIVERT_SHA256: 63cb41763bb4b20f600b6de04e991a9c2be73279e317d4d82f237b150c5f3f15
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc make unzip
+      - run: make -j4 CC=gcc STATIC=1 CFLAGS="-O2 -Werror"
+      - run: make CC=gcc STATIC=1 CFLAGS="-O2 -Werror" test
+      - name: Fetch WinDivert (official release)
+        run: |
+          curl -fsSL -o windivert.zip "https://github.com/basil00/WinDivert/releases/download/v${WINDIVERT_VERSION}/WinDivert-${WINDIVERT_VERSION}-A.zip"
+          echo "${WINDIVERT_SHA256}  windivert.zip" | sha256sum -c -
+          unzip -q windivert.zip
+          cp "WinDivert-${WINDIVERT_VERSION}-A/x64/WinDivert.dll" "WinDivert-${WINDIVERT_VERSION}-A/x64/WinDivert64.sys" build/
+      - name: Smoke test
+        shell: pwsh
+        run: ./tests/windows/smoke.ps1 -Bin build/geneva.exe
+
   # Differential test against the Python Geneva at a pinned commit: the same
   # strategies must parse and print alike and produce identical packets.
   geneva-diff:

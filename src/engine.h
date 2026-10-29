@@ -1,9 +1,10 @@
 /*
- * The strategy engine on Linux: packets from NFQUEUE go through the strategy
- * and leave as verdicts (exact bytes, possibly delayed) or raw sends.
+ * The strategy engine: captured packets go through the strategy and leave as
+ * verdicts (exact bytes, possibly delayed) or extra sends. Packets come from
+ * NFQUEUE on Linux and WinDivert on Windows (see engine_int.h).
  *
- * Single-threaded: one poll loop serves the queue, the timers of delayed
- * packets (the sleep action), signals and periodic statistics.
+ * One poll loop serves the capture, the timers of delayed packets (the sleep
+ * action), the control socket, signals and periodic statistics.
  */
 #ifndef GENEVA_ENGINE_H
 #define GENEVA_ENGINE_H
