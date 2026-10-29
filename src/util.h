@@ -10,7 +10,7 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-#if defined(__MINGW32__)
+#if defined(__MINGW32__) && !defined(__clang__)
 #  define PRINTF_LIKE(f, a) __attribute__((format(gnu_printf, f, a)))
 #  define UNUSED __attribute__((unused))
 #elif defined(__GNUC__) || defined(__clang__)
