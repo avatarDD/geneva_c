@@ -33,6 +33,8 @@ jobs:
       - run: make -j"$(nproc)" CFLAGS="-O1 -g -Werror"
       - name: e2e (auto, iptables, nft)
         run: sudo env FIREWALLS="auto iptables nft" tests/e2e/run.sh build/geneva
+      - name: evaluator e2e (evolve against a keyword censor)
+        run: sudo tests/e2e/evolve.sh build/geneva
 
   musl-static:
     runs-on: ubuntu-24.04

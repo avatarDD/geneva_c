@@ -39,6 +39,11 @@ void engine_opts_default(engine_opts *o)
 #  define BACKEND NULL
 #endif
 
+/* Embedded in the evaluator, the engine emits no events of its own. Only one
+ * engine runs per process. */
+static int ev_quiet;
+#define ev_on() (!ev_quiet && ev_enabled())
+
 /* ---- signals ------------------------------------------------------------- */
 
 static volatile sig_atomic_t sig_stop, sig_hup, sig_usr1;
@@ -219,13 +224,46 @@ static void trace_pkt(engine *e, strat_dir dir, const gpkt *p, const pktlist *ou
     }
 }
 
+/* The slot whose local port the packet uses, or NULL. */
+static eng_slot *find_slot(eng_slots *ss, const gpkt *p, strat_dir dir)
+{
+    uint16_t lport;
+    size_t i;
+    if (p->l4 == LAYER_NONE)
+        return NULL;
+    lport = dir == DIR_OUT ? p->sport : p->dport;
+    if (lport < ss->base)
+        return NULL;
+    i = (size_t)(lport - ss->base) / ss->size;
+    return i < ss->n ? &ss->v[i] : NULL;
+}
+
+static void slot_capture(eng_slot *sl, const gpkt *p)
+{
+    gpkt *c;
+    if (sl->ncap >= ENG_SLOT_CAP_MAX)
+        return;
+    if (sl->ncap == sl->capcap) {
+        size_t nc = sl->capcap ? sl->capcap * 2 : 16;
+        gpkt **v = realloc(sl->cap, nc * sizeof(*v));
+        if (!v)
+            return;
+        sl->cap = v;
+        sl->capcap = nc;
+    }
+    c = pkt_copy(p);
+    if (c)
+        sl->cap[sl->ncap++] = c;
+}
+
+static void packet(engine *e, strategy *st, eng_slot *sl, gpkt *p, strat_dir dir, const uint8_t *data,
+                   size_t len, const void *pctx);
+
 void engine_packet(engine *e, const uint8_t *data, size_t len, int d, const void *pctx)
 {
-    gpkt *p = pkt_parse(data, len), *orig = NULL;
-    pktlist out = {0};
+    gpkt *p = pkt_parse(data, len);
+    eng_slots *ss = e->o->slots;
     strat_dir dir;
-    int fired;
-    size_t first = 0;
 
     if (!p) {
         e->c.parse_errors++;
@@ -243,7 +281,32 @@ void engine_packet(engine *e, const uint8_t *data, size_t len, int d, const void
         e->c.pkts_out++;
     else
         e->c.pkts_in++;
-    if (e->paused) {
+    if (ss) {
+        eng_slot *sl;
+        plat_mutex_lock(&ss->lock);
+        sl = find_slot(ss, p, dir);
+        if (sl) {
+            sl->pkts++;
+            if (sl->capture)
+                slot_capture(sl, p);
+        }
+        packet(e, sl ? sl->st : NULL, sl, p, dir, data, len, pctx);
+        plat_mutex_unlock(&ss->lock);
+        return;
+    }
+    packet(e, e->st, NULL, p, dir, data, len, pctx);
+}
+
+/* Runs a parsed packet through st (NULL: it passes) and frees it. */
+static void packet(engine *e, strategy *st, eng_slot *sl, gpkt *p, strat_dir dir, const uint8_t *data,
+                   size_t len, const void *pctx)
+{
+    gpkt *orig = NULL;
+    pktlist out = {0};
+    int fired;
+    size_t first = 0;
+
+    if (e->paused || !st) {
         pkt_free(p);
         e->c.accepted++;
         give_verdict(e, pctx, 1, NULL, 0);
@@ -251,7 +314,7 @@ void engine_packet(engine *e, const uint8_t *data, size_t len, int d, const void
     }
     if (log_enabled(LOG_TRACE))
         orig = pkt_copy(p);
-    fired = strategy_apply(e->st, p, dir, &out);
+    fired = strategy_apply(st, p, dir, &out);
     if (orig) {
         trace_pkt(e, dir, orig, &out, fired);
         pkt_free(orig);
@@ -263,6 +326,8 @@ void engine_packet(engine *e, const uint8_t *data, size_t len, int d, const void
         give_verdict(e, pctx, 0, NULL, 0);
         return;
     }
+    if (sl && dir == DIR_OUT)
+        sl->overhead += out.n - 1;
     if (dir == DIR_IN) {
         /* Geneva's in-path: only the first result goes on, without delay */
         while (out.n > 1)
@@ -350,16 +415,18 @@ static void stats_fields(engine *e, jw *w)
     jw_kuint(w, "verdict_errors", c->verdict_errors);
     jw_kuint(w, "parse_errors", c->parse_errors);
     jw_kuint(w, "overruns", c->overruns);
-    jw_key(w, "out_trees");
-    forest_json(w, e->st->out, e->st->nout);
-    jw_key(w, "in_trees");
-    forest_json(w, e->st->in, e->st->nin);
+    if (e->st) {
+        jw_key(w, "out_trees");
+        forest_json(w, e->st->out, e->st->nout);
+        jw_key(w, "in_trees");
+        forest_json(w, e->st->in, e->st->nin);
+    }
 }
 
 static void emit_stats(engine *e)
 {
     ev_t ev;
-    if (!ev_enabled())
+    if (!ev_on())
         return;
     ev_begin(&ev, "stats");
     stats_fields(e, &ev.w);
@@ -370,7 +437,7 @@ static void emit_state(engine *e, const char *state)
 {
     ev_t ev;
     LOGI("engine", "%s", state);
-    if (!ev_enabled())
+    if (!ev_on())
         return;
     ev_begin(&ev, "state");
     jw_kstr(&ev.w, "state", state);
@@ -384,7 +451,7 @@ static void emit_strategy(engine *e)
     sb_init(&s);
     strategy_print(e->st, &s);
     LOGI("engine", "strategy: %s", s.data);
-    if (ev_enabled()) {
+    if (ev_on()) {
         ev_begin(&ev, "strategy");
         jw_kstr(&ev.w, "strategy", s.data);
         ev_emit(&ev);
@@ -395,7 +462,7 @@ static void emit_strategy(engine *e)
 static void emit_error(const char *where, const char *msg)
 {
     ev_t ev;
-    if (!ev_enabled())
+    if (!ev_on())
         return;
     ev_begin(&ev, "error");
     jw_kstr(&ev.w, "where", where);
@@ -562,7 +629,7 @@ static void emit_start(engine *e)
 {
     ev_t ev;
     sbuf s;
-    if (!ev_enabled())
+    if (!ev_on())
         return;
     sb_init(&s);
     ports_format(&e->o->fw.ports, &s, ",", "-");
@@ -602,13 +669,16 @@ int engine_run(engine_opts *o)
     sb_init(&e.line);
     e.start_ms = plat_now_ms();
     sig_stop = sig_hup = sig_usr1 = 0;
+    ev_quiet = o->embedded;
 
-    e.st = load_strategy(o, &err);
-    if (!e.st) {
-        LOGE("engine", "%s", err.data);
-        emit_error("strategy", err.data);
-        rc = EXIT_STRATEGY;
-        goto out;
+    if (!o->slots) {
+        e.st = load_strategy(o, &err);
+        if (!e.st) {
+            LOGE("engine", "%s", err.data);
+            emit_error("strategy", err.data);
+            rc = EXIT_STRATEGY;
+            goto out;
+        }
     }
     emit_start(&e);
     if (o->pcap) {
@@ -620,7 +690,8 @@ int engine_run(engine_opts *o)
             goto out;
         }
     }
-    install_signals();
+    if (!o->embedded)
+        install_signals();
     if (o->control) {
         sb_reset(&err);
         e.ctl = ctl_open(o->control, o->control_token, &err);
@@ -644,9 +715,14 @@ int engine_run(engine_opts *o)
     running = 1;
     if (err.len)
         LOGW("engine", "%s", err.data);
+    if (o->on_ready) {
+        o->on_ready(o->ready_ctx, 0);
+        o->on_ready = NULL;
+    }
     plat_mutex_lock(&e.lock);
-    emit_strategy(&e);
-    if (ev_enabled()) {
+    if (e.st)
+        emit_strategy(&e);
+    if (ev_on()) {
         ev_t ev;
         ev_begin(&ev, "ready");
         jw_kstr(&ev.w, "backend", e.be->name);
@@ -657,7 +733,7 @@ int engine_run(engine_opts *o)
 
     next_stats = o->stats_interval > 0 ? e.start_ms + (uint64_t)(o->stats_interval * 1000) : 0;
     deadline = o->duration > 0 ? e.start_ms + (uint64_t)(o->duration * 1000) : 0;
-    while (!sig_stop && !e.stop_request) {
+    while (!sig_stop && !e.stop_request && !(o->stop && atomic_load_int(o->stop))) {
         plat_pollfd pfd[MAX_POLL];
         size_t nbe, nctl;
         uint64_t now;
@@ -667,8 +743,10 @@ int engine_run(engine_opts *o)
         nbe = e.be->pollfds(&e, pfd, 8);
         nctl = ctl_pollfds(e.ctl, pfd + nbe, MAX_POLL - nbe);
         now = plat_now_ms();
+        if (o->stop)
+            timeout = 100; /* the stop flag is polled */
         if (e.ndl)
-            timeout = e.dl[0].due <= now ? 0 : (int)MIN(e.dl[0].due - now, 1000);
+            timeout = e.dl[0].due <= now ? 0 : (int)MIN(e.dl[0].due - now, (uint64_t)timeout);
         plat_mutex_unlock(&e.lock);
         if (next_stats && next_stats > now && next_stats - now < (uint64_t)timeout)
             timeout = (int)(next_stats - now);
@@ -740,7 +818,9 @@ out:
         plat_mutex_unlock(&e.lock);
         e.be->close(&e);
     }
-    if (ev_enabled()) {
+    if (o->on_ready)
+        o->on_ready(o->ready_ctx, rc == EXIT_OK ? EXIT_FAIL : rc);
+    if (ev_on()) {
         ev_t ev;
         ev_begin(&ev, "exit");
         jw_kint(&ev.w, "code", rc);
@@ -751,7 +831,8 @@ out:
         ev_set_tap(NULL, NULL);
         ctl_close(e.ctl);
     }
-    remove_signals();
+    if (!o->embedded)
+        remove_signals();
     for (size_t i = 0; i < e.ndl; i++)
         free(e.dl[i].data);
     free(e.dl);

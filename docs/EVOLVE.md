@@ -1,20 +1,23 @@
 # Подборщик (`geneva evolve`) и база стратегий (`geneva db`)
 
 ```
-geneva evolve --no-eval --population 50 --generations 5 -o run1
-geneva evolve --mock-eval drop --checkpoint /opt/geneva/search.ckpt --db /opt/geneva/db.jsonl --target test
-geneva evolve --mock-eval drop --checkpoint /opt/geneva/search.ckpt --resume --generations 100
+sudo geneva evolve --probe http --host blocked.example --population 50 --generations 20 --workers 8
+sudo geneva evolve --probe tls --host blocked.example --checkpoint /opt/geneva/search.ckpt --db /opt/geneva/db.jsonl
+sudo geneva evolve --probe tls --host blocked.example --checkpoint /opt/geneva/search.ckpt --resume --generations 100
 geneva db --db /opt/geneva/db.jsonl top -n 5
 ```
 
 Это генетический алгоритм Geneva (`evolve.py`). Популяция стратегий
 проходит скрещивание и мутации, затем оценку, турнирный отбор и элиту, и так
-`--generations` поколений. Оценка стратегий против настоящего цензора (пробы
-http/tls/dns и т. д.) появится на этапе 7. Пока доступны два режима:
+`--generations` поколений. Каждую стратегию оценивает проба через движок:
+опции `--probe`, `--host` и остальные, а также baseline и фитнес описаны в
+`docs/EVAL.md`. Движку нужны права root (на Windows — администратора).
+
+Режимы без сети:
 - `--no-eval` — фитнес всегда 0, как в Geneva;
 - `--mock-eval TEXT` — тестовый оценщик: стратегия «проходит», если её текст
   содержит TEXT, и чем она короче, тем выше фитнес. Он проверяет цикл GA,
-  checkpoint и базу без сети.
+  checkpoint и базу.
 
 В stdout в конце печатаются лучшие стратегии зала славы, по одной строке:
 средний фитнес, число оценок и стратегия (`--top N`, по умолчанию 5).
@@ -37,6 +40,11 @@ http/tls/dns и т. д.) появится на этапе 7. Пока досту
 | `--disable-action` | `sleep,trace` | запрещённые действия |
 | `--no-gas` | выкл. | триггеры без «газа» |
 | `--packets PCAP` | — | настоящие пакеты, из которых берутся значения триггеров и tamper (как пакеты canary-фазы Geneva) |
+| `--probe`, `--host`, `--ip`, `--port`, ... | `http` | проба и цель (`docs/EVAL.md`) |
+| `--runs`, `--fitness-by` | 1, `avg` | прогонов на стратегию и как их объединять, как в Geneva |
+| `--workers` | 1 | стратегий, которые оцениваются одновременно |
+| `--residual-wait` | 0 | пауза после неудачи (остаточная цензура) |
+| `--no-baseline`, `--no-canary` | выкл. | не проверять блокировку без стратегии; не брать значения из её пакетов |
 | `-o DIR` | — | файлы `generationN.txt` и `hallN.txt`, как в Geneva |
 | `--rng-seed N` | — | воспроизводимый запуск |
 
@@ -74,8 +82,9 @@ SQLite. Каждая оценка дописывает строку в коне�
 {"s":"[TCP:flags:S]-drop-| \/","t":"http:example.com","runs":3,"ok":2,"fit_sum":512.5,"fit_best":397,"first":1730000000000,"last":1730000500000,"last_ok":1730000400000}
 ```
 
-- `s` — каноническая стратегия, `t` — профиль цели (`--target`: проба, хост,
-  порт, сеть — чтобы результаты для разных цензоров не смешивались).
+- `s` — каноническая стратегия, `t` — профиль цели (`--target`, по
+  умолчанию из пробы: `http:blocked.example:80`, `dns:name@8.8.8.8`), чтобы
+  результаты для разных целей и цензоров не смешивались.
 - `runs`, `ok` — оценки и успехи (фитнес > 0). `fit_sum`, `fit_best` —
   сумма и лучший фитнес.
 - `first`, `last`, `last_ok` — время в мс от эпохи.
@@ -103,10 +112,12 @@ geneva db --db FILE compact
 
 С `--events` подборщик пишет:
 - `start` с `mode: "evolve"`, `population`, `generations`, `target`, `resume`;
+- `baseline`: `blocked`, `fitness`, `outcome`, `detail` — проба без стратегии;
+- `eval` после каждой оценки: `strategy`, `fitness`, `runs`, `outcome`, `detail`;
 - `generation` после каждого поколения: `gen`, `unique`, `evaluated`,
   `avg_fitness`, `best_fitness`, `best`;
 - `result` в конце: `stopped` и `best` — список `{strategy, avg_fitness, runs}`;
-- `exit`: `code` и `reason` (`done`, `signal`, `error`).
+- `exit`: `code` и `reason` (`done`, `signal`, `not_blocked`, `error`).
 
 ## Отличия от Geneva
 
