@@ -20,6 +20,7 @@ typedef struct {
 
 static const command commands[] = {
     {"apply", cmd_apply, "run a strategy over a pcap file offline"},
+    {"censor", cmd_censor, "run one of Geneva's lab censors on a Linux router"},
     {"check", cmd_check, "parse, validate and print strategies"},
     {"ctl", cmd_ctl, "talk to a running engine over its control socket"},
     {"db", cmd_db, "list, rank, export and prune the strategy database"},

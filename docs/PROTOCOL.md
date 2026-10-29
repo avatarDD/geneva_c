@@ -17,6 +17,9 @@
 | `ev` | Когда | Поля |
 |---|---|---|
 | `start` | запуск движка | `proto`, `version`, `mode` (`run`), `pid`, `backend` (`nfqueue`, `windivert`), `queue`, `ports`, `server_side` |
+| `start` | запуск цензора (`geneva censor`, `docs/CENSOR.md`) | `proto`, `version`, `mode` (`censor`), `pid`, `censor`, `queue`, `ports` |
+| `censorship` | (censor) цензор сработал | `censor`, `action` (`drop`, `rst`, `dns`), `src`, `dst`, `proto`, `sport`, `dport`, `injected` |
+| `reset` | (censor) SIGHUP сбросил состояние цензора | — |
 | `start` | запуск подборщика | `proto`, `version`, `mode` (`evolve`), `pid`, `population`, `generations`, `target`, `resume` |
 | `generation` | (evolve) поколение оценено | `gen`, `unique`, `evaluated`, `avg_fitness`, `best_fitness`, `best` |
 | `baseline` | (evolve) проба без стратегии | `blocked`, `fitness`, `outcome`, `detail` |
@@ -113,7 +116,7 @@ geneva ctl --json '{"cmd":"pause"}'
 
 | Сигнал | Действие |
 |---|---|
-| SIGHUP | перечитать `--strategy-file` |
+| SIGHUP | перечитать `--strategy-file`; у `geneva censor` — сбросить состояние цензора |
 | SIGUSR1 | событие `stats` |
 | SIGINT, SIGTERM | выход со снятием правил firewall |
 
