@@ -48,11 +48,12 @@ Write-Host "geneva: $(& $Bin version)"
 Check ((Fetch) -match '^[23]') "example.com answers without the engine"
 
 # Duplicate every SYN, the copy with window 7: a harmless change that shows
-# both the verdict path and injection work.
-$strategy = '[TCP:flags:S]-duplicate(tamper{TCP:window:replace:7},)-| \/'
+# both the verdict path and injection work. Windows may negotiate ECN, and
+# then its SYNs carry flags SEC, so each strategy has a tree for both.
+$strategy = '[TCP:flags:S]-duplicate(tamper{TCP:window:replace:7},)-|[TCP:flags:SEC]-duplicate(tamper{TCP:window:replace:7},)-| \/'
 $p = Start-Process -FilePath $Bin -PassThru -NoNewWindow -ArgumentList @(
     "run", "-s", "`"$strategy`"", "-p", "80", "-c", $Ctl, "-e", "`"$Events`"",
-    "--stats-interval", "1", "-l", "debug", "--log-file", "`"$Log`"")
+    "--stats-interval", "1", "-v", "--log-file", "`"$Log`"")
 try {
     Check (Wait-Event "ready" 20) "engine is ready"
     $st = Ctl @("status")
@@ -68,7 +69,7 @@ try {
     Check ($s.send_errors -eq 0 -and $s.verdict_errors -eq 0) "no send or verdict errors"
 
     # Dropping every SYN must break HTTP: proof that the capture is in path.
-    $r = Ctl @("set_strategy", 'strategy=[TCP:flags:S]-drop-| \/')
+    $r = Ctl @("set_strategy", 'strategy=[TCP:flags:S]-drop-|[TCP:flags:SEC]-drop-| \/')
     Check $r.ok "set_strategy drop"
     Check ((Fetch 5) -notmatch '^[23]') "HTTP fails while SYNs are dropped"
     $r = Ctl @("pause")
@@ -87,7 +88,8 @@ try {
 } finally {
     if (!$p.HasExited) { $p.Kill(); $p.WaitForExit() }
     if ($script:Failed) {
-        Write-Host "---- engine log"; if (Test-Path $Log) { Get-Content $Log | Select-Object -Last 80 }
+        Write-Host "---- engine log"; if (Test-Path $Log) { Get-Content $Log | Select-Object -Last 150 }
+        Write-Host "---- tcp settings"; netsh int tcp show global
         Write-Host "---- events"; if (Test-Path $Events) { Get-Content $Events | Select-Object -Last 30 }
     }
 }

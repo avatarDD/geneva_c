@@ -122,6 +122,10 @@ geneva.exe fw print -p 80,443        # показать фильтр WinDivert
   `--mark` на Windows не используются. Ctrl+C и закрытие консоли
   останавливают движок; SIGHUP/SIGUSR1 нет — используйте команды `reload` и
   `stats` управляющего сокета (unix-сокетов на Windows нет, только `tcp:`).
+- Windows может договариваться об ECN, и тогда её SYN несут флаги `SEC`, а не
+  `S`: триггер `[TCP:flags:S]` из стратегий, найденных на Linux, на них не
+  сработает. Добавьте дерево с `[TCP:flags:SEC]` или отключите ECN
+  (`netsh int tcp set global ecncapability=disabled`).
 - В событиях `start`/`ready` и в ответе `status` поле `backend` равно
   `windivert`, `firewall` — тоже `windivert`.
 
