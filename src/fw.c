@@ -474,24 +474,54 @@ static int find_bin(const char *name, char *out, size_t cap)
     return -1;
 }
 
+static int run_argv_(char *const argv[], const char *input, sbuf *output);
+
 /* Runs argv with optional stdin, collecting stdout+stderr. Returns the exit
- * status, or -1 if the program could not be started. */
+ * status, or -1 if the program could not be started or waited for (the
+ * reason is appended to output).
+ *
+ * A parent may start us with SIGCHLD ignored (Keenetic's service manager
+ * does): the kernel then reaps our children itself, waitpid() fails with
+ * ECHILD and every command looks like it could not run. The default
+ * disposition is restored for the duration of the call. */
 static int run_argv(char *const argv[], const char *input, sbuf *output)
+{
+    struct sigaction dfl, old;
+    int rc, restore;
+    memset(&dfl, 0, sizeof(dfl));
+    dfl.sa_handler = SIG_DFL;
+    sigemptyset(&dfl.sa_mask);
+    restore = sigaction(SIGCHLD, NULL, &old) == 0 && old.sa_handler == SIG_IGN &&
+              sigaction(SIGCHLD, &dfl, NULL) == 0;
+    rc = run_argv_(argv, input, output);
+    if (restore)
+        sigaction(SIGCHLD, &old, NULL);
+    return rc;
+}
+
+static int run_argv_(char *const argv[], const char *input, sbuf *output)
 {
     int in[2] = {-1, -1}, outp[2];
     pid_t pid;
     int st;
     char buf[1024];
     ssize_t n;
-    if (pipe(outp) < 0)
+    if (pipe(outp) < 0) {
+        if (output)
+            sb_printf(output, "pipe: %s", strerror(errno));
         return -1;
+    }
     if (input && pipe(in) < 0) {
+        if (output)
+            sb_printf(output, "pipe: %s", strerror(errno));
         close(outp[0]);
         close(outp[1]);
         return -1;
     }
     pid = fork();
     if (pid < 0) {
+        if (output)
+            sb_printf(output, "fork: %s", strerror(errno));
         close(outp[0]);
         close(outp[1]);
         if (input) {
@@ -515,6 +545,12 @@ static int run_argv(char *const argv[], const char *input, sbuf *output)
         close(outp[0]);
         close(outp[1]);
         execv(argv[0], argv);
+        {
+            /* async-signal-safe report of the reason on the output pipe */
+            const char *m = strerror(errno);
+            if (write(1, "exec: ", 6) >= 0 && write(1, m, strlen(m)) >= 0)
+                (void)0;
+        }
         _exit(127);
     }
     close(outp[1]);
@@ -544,10 +580,16 @@ static int run_argv(char *const argv[], const char *input, sbuf *output)
     }
     close(outp[0]);
     while (waitpid(pid, &st, 0) < 0)
-        if (errno != EINTR)
+        if (errno != EINTR) {
+            if (output)
+                sb_printf(output, "waitpid: %s", strerror(errno));
             return -1;
-    if (!WIFEXITED(st))
+        }
+    if (!WIFEXITED(st)) {
+        if (output && WIFSIGNALED(st))
+            sb_printf(output, "killed by signal %d", WTERMSIG(st));
         return -1;
+    }
     return WEXITSTATUS(st) == 127 ? -1 : WEXITSTATUS(st);
 }
 
@@ -637,7 +679,10 @@ static int ipt_apply(const fw_config *c, ipt_env *env, int v6, sbuf *err)
             opt_failed = 1;
             continue;
         }
-        sb_printf(err, "%s: %s", cmd->text, r < 0 ? "cannot run" : out.len ? out.data : "failed");
+        if (r < 0)
+            sb_printf(err, "%s: cannot run%s%s", cmd->text, out.len ? ": " : "", out.data);
+        else
+            sb_printf(err, "%s: %s", cmd->text, out.len ? out.data : "failed");
         rc = -1;
     }
     if (rc) {
