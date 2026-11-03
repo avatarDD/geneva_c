@@ -61,6 +61,8 @@ static void engine_thread(void *arg)
     atomic_store_int(&ev->eng_state, ev->eng_rc + 2);
 }
 
+int eval_needs_udp(probe_kind k) { return k == PROBE_DNS || k == PROBE_EXEC || k == PROBE_EXTERNAL; }
+
 static int stopped(const evaluator *ev) { return ev->o->stop && *ev->o->stop; }
 
 int evaluator_open(eval_opts *o, evaluator **out, sbuf *err)
@@ -101,12 +103,8 @@ int evaluator_open(eval_opts *o, evaluator **out, sbuf *err)
     engine_opts_default(&ev->eng);
     ev->eng.fw = o->fw;
     ev->eng.apply_fw = o->apply_fw;
-    ev->eng.fw.ports.n = 1;
-    ev->eng.fw.ports.lo[0] = o->port_base;
-    ev->eng.fw.ports.hi[0] = (uint16_t)(o->port_base + nw * o->ports_per_worker - 1);
-    ev->eng.fw.server_side = 1; /* outbound packets come from our ports (or the service port) */
-    ev->eng.fw.tcp = 1;
-    ev->eng.fw.udp = o->probe.kind == PROBE_DNS || o->probe.kind == PROBE_EXEC || o->probe.kind == PROBE_EXTERNAL;
+    fw_eval_slots(&ev->eng.fw, o->port_base, (uint32_t)(nw * o->ports_per_worker), eval_needs_udp(o->probe.kind));
+    ev->eng.fw.filter_narrow = 1; /* --filter narrows the slots' capture */
     ev->eng.slots = &ev->slots;
     ev->eng.embedded = 1;
     ev->eng.stop = &ev->eng_stop;

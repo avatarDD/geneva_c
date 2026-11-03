@@ -82,6 +82,17 @@ int cmd_version(int argc, char **argv)
         jw_str(&w, "ipv6");
         jw_str(&w, "pcap");
         jw_str(&w, "control");
+        /* 1.1: integrators switch on these, not on version numbers */
+#ifdef _WIN32
+        jw_str(&w, "filter");     /* --filter, --filter-file, --priority */
+        jw_str(&w, "set_filter"); /* set_filter, reload_filter, the "filter" event */
+#endif
+#if defined(PLAT_LINUX) || defined(_WIN32)
+        jw_str(&w, "first");      /* --first N works here (Windows: counted by the engine) */
+#endif
+#ifdef PLAT_LINUX
+        jw_str(&w, "firewall_none_eval"); /* eval/evolve --firewall none */
+#endif
         jw_arr_end(&w);
         jw_obj_end(&w);
         printf("%s\n", sb.data);

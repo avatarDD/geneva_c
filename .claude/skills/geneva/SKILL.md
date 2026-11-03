@@ -18,7 +18,8 @@ English twin.
 |---|---|
 | `src/pkt*.c` | packet model; Geneva's fields with scapy semantics (`dataofs < 5` means a 20-byte header, flags compared as strings) |
 | `src/strategy.c` | parser, printer, action trees (`tamper`, `duplicate`, `fragment`, `drop`, `sleep`, `trace`) |
-| `src/engine.c`, `eng_nfq.c`, `eng_windivert.c`, `nfq.c`, `rawsend.c`, `fw.c` | live engine: NFQUEUE / WinDivert, firewall rules (nft or iptables), control socket |
+| `src/engine.c`, `eng_nfq.c`, `eng_windivert.c`, `nfq.c`, `rawsend.c`, `fw.c` | live engine: NFQUEUE / WinDivert, firewall rules (nft or iptables), WinDivert filters (`--filter`, `set_filter` handle switch), control socket |
+| `src/flowtab.c` | `--first N` on Windows: flow table (5-tuple by direction, FIN/RST/idle expiry, LRU at 65536) |
 | `src/evolve.c`, `mutate.c` | Geneva's genetic algorithm; checkpoints |
 | `src/evaluator.c`, `probe.c` | fitness, probes (http, tls, dns, tcp, exec, external), engine slots per worker |
 | `src/agent.c`, `cmd_agent.c` | server-side evaluation: remote probes over the control protocol |
@@ -87,7 +88,7 @@ action   := name["{" params "}"]["(" left "," right ")"]
 
 | Command | Purpose | Root |
 |---|---|---|
-| `run -s S -p PORTS [-c ADDR] [-e FILE]` | engine on live traffic | yes |
+| `run -s S -p PORTS [-c ADDR] [-e FILE]` | engine on live traffic; Windows: `--filter EXPR`/`--filter-file F`, `--priority N`, `--first N` | yes |
 | `eval [-s S]... [-f FILE\|-]` | fitness per strategy; without strategies the baseline | for strategies |
 | `evolve --host H ...` | genetic search; `--checkpoint`/`--resume`, `--db` | yes |
 | `agent --listen ADDR \| --connect ADDR --token T` | probes for server-side evaluation | no |
@@ -95,7 +96,7 @@ action   := name["{" params "}"]["(" left "," right ")"]
 | `db --db F list\|top\|show\|export\|import\|prune\|compact` | strategy database | no |
 | `censor -c N` | lab censor on a Linux router; SIGHUP resets | yes |
 | `check`, `apply` | validate, apply to a pcap | no |
-| `fw print\|up\|down` | the rules `run` uses | yes |
+| `fw print\|up\|down` | the rules `run` uses; `--local-ports/--workers/--probe`: the evaluator's (for `--firewall none`); Windows: the filter | yes |
 | `ctl CMD [k=v]` | control socket client | — |
 | `version --json` | version, `proto`, os, arch, features | no |
 
@@ -117,7 +118,15 @@ target not blocked.
   object per line, answers carry the request `id` and `ok`; events have no
   `ok`. Commands: `auth`, `ping`, `version`, `subscribe`, `status`,
   `stats`, `reset_stats`, `set_strategy`, `reload`, `pause`, `resume`,
-  `log_level`, `stop`. A non-loopback address needs a token.
+  `log_level`, `stop`, and (Windows) `set_filter {filter}`, `reload_filter`.
+  A non-loopback address needs a token. Request lines up to 64 KB, 1 MB for
+  `set_filter`.
+- Since 1.1: event `filter {filter, source}`, `status.filter` (null on
+  Linux), `stats.passed_first`, `stats.flow_evictions`, `error.pos` for a
+  filter that does not compile (exit 2 at start). `version --json`
+  `features`: `filter`, `set_filter` (Windows), `first`,
+  `firewall_none_eval` (Linux). Integrators switch on features, not
+  versions.
 - External probe (`--probe external --events - --workers 1`): geneva emits
   `eval_request {id, strategy, run, lports}`; the controller connects from
   a local port in `lports` and writes `{"id":N,"ok":true}` or
@@ -155,3 +164,12 @@ request (`auth`, `hello`, `probe` over the control protocol) and refuses
 - `curl` in e2e probes needs `-f`, or HTTP errors count as success.
 - On Windows there are no unix sockets: use `tcp:PORT` with a token for
   non-loopback.
+- `--filter` replaces the built WinDivert filter for `run` (`(EXPR) and not
+  loopback`) but narrows the slots for `eval`/`evolve` (`(slots) and
+  (EXPR)`): `fw_config.filter_narrow`. `-p`/`--proto` stay required.
+- WinDivert diverts a packet once per priority level: instances with the
+  same `--priority` need disjoint filters. `set_filter` relies on it (old
+  and new handle share the level).
+- `set_filter` runs locked inside `ctl_dispatch`; waiting for a previous
+  switch releases `e->lock` so the receiver can drain the old handle.
+- No `nft_queue` in some containers: e2e with `FIREWALLS=iptables`.

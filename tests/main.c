@@ -26,6 +26,7 @@ void suite_ctl(void);
 void suite_evolve(void);
 void suite_probe(void);
 void suite_censor(void);
+void suite_flow(void);
 
 int main(void)
 {
@@ -39,6 +40,7 @@ int main(void)
     suite_evolve();
     suite_probe();
     suite_censor();
+    suite_flow();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }

@@ -29,6 +29,11 @@ Windows через WinDivert).
 - **Исполнитель** (`geneva run`): NFQUEUE на Linux, WinDivert на Windows.
   Правила firewall (nft или iptables) ставятся сами и снимаются при выходе.
   Есть управляющий сокет, события JSON Lines и замена стратегии на лету.
+  С 1.1 на Windows — внешний фильтр WinDivert (`--filter`,
+  `--filter-file`, смена на лету `set_filter`), `--first N` и
+  `--priority` для нескольких экземпляров; на Linux `eval`/`evolve
+  --firewall none`. Так стратегия применяется только к трафику
+  заблокированных ресурсов (`docs/INTEGRATION.md`).
 - **Подборщик** (`geneva evolve`): генетический алгоритм Geneva с
   сохранением и продолжением поиска, базой найденных стратегий и
   параллельной оценкой.

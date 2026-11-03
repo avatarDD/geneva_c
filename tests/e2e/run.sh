@@ -244,5 +244,43 @@ check "wrong token: refused" '! ip netns exec $NC $GENEVA ctl -c tcp:127.0.0.1:4
 check "right token: status" 'ip netns exec $NC $GENEVA ctl -c tcp:127.0.0.1:47123 -t t0k status | grep -q "\"ok\":true"'
 stop_case
 
+# the evaluator with --firewall none: the rules come from "geneva fw print"
+# (as an integrator installs them) and the search gets past its baseline
+echo "== evaluator with --firewall none"
+FW=iptables
+case " $FIREWALLS " in *" nft "*) FW=nft ;; esac
+CASE="eval/evolve --firewall none"
+EVPROBE="--probe tcp --ip 10.77.0.2 --port $PORT --valid-contains echo --timeout 1 --local-ports 30000 -q 311"
+"$GENEVA" fw print --local-ports 30000 --workers 1 -q 311 --firewall $FW > "$WORK/fw.txt"
+awk -v h="# $FW: apply" '$0 == h {on=1; next} /^# /{on=0} on' "$WORK/fw.txt" > "$WORK/fw-up.sh"
+awk -v h="# $FW: remove" '$0 == h {on=1; next} /^# /{on=0} on' "$WORK/fw.txt" > "$WORK/fw-down.sh"
+check "fw print has the slots' rules" 'grep -Eq "30000(-|:)30063" "$WORK/fw-up.sh" && grep -Eq "queue.num 311" "$WORK/fw-up.sh"'
+ip netns exec "$NC" "$GENEVA" eval $EVPROBE --payload 'hi\n' --firewall none \
+    -s '[TCP:flags:S]-drop-| \/' --quiet > "$WORK/noop.txt" 2>&1
+check "without rules the strategy sees nothing" '[ $? -eq 0 ]'
+ip netns exec "$NC" sh "$WORK/fw-up.sh"
+check "rules installed by hand" '! rules_gone'
+ip netns exec "$NC" "$GENEVA" eval $EVPROBE --payload 'hi\n' --firewall none \
+    -s '[TCP:flags:S]-drop-| \/' --quiet > "$WORK/drop.txt" 2>&1
+check "with them it applies (dropped SYNs fail)" '[ $? -eq 1 ]'
+# a keyword censor on the server side makes the target blocked
+ip netns exec "$NS" iptables -I INPUT -p tcp --dport $PORT -m string --string forbidden --algo bm \
+    -j REJECT --reject-with tcp-reset 2>/dev/null && HAVE_STRING=1 || HAVE_STRING=0
+if [ $HAVE_STRING -eq 1 ]; then
+    ip netns exec "$NC" timeout 120 "$GENEVA" evolve $EVPROBE --payload 'forbidden\n' --firewall none \
+        --population 4 --generations 1 --no-canary --rng-seed 7 --events "$WORK/evo.jsonl" --quiet \
+        > "$WORK/evo.txt" 2>&1
+    EVO_RC=$?
+    check "evolve: the baseline is blocked" 'grep "\"ev\":\"baseline\"" "$WORK/evo.jsonl" | grep -q "\"blocked\":true"'
+    check "evolve: got past the baseline (exit $EVO_RC)" '[ $EVO_RC -eq 0 -o $EVO_RC -eq 1 ] && grep -q "\"ev\":\"generation\"" "$WORK/evo.jsonl"'
+    check "evolve left the rules alone" '! rules_gone'
+    ip netns exec "$NS" iptables -D INPUT -p tcp --dport $PORT -m string --string forbidden --algo bm \
+        -j REJECT --reject-with tcp-reset
+else
+    echo "  skip evolve --firewall none: no iptables string match"
+fi
+ip netns exec "$NC" sh "$WORK/fw-down.sh"
+check "rules removed by hand" rules_gone
+
 echo "e2e: $passes passed, $fails failed"
 [ $fails -eq 0 ]

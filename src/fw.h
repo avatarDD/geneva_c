@@ -13,6 +13,7 @@
 
 #include <stdint.h>
 
+#include "args.h"
 #include "ports.h"
 #include "util.h"
 
@@ -35,7 +36,23 @@ typedef struct {
     const char *forward_to; /* Geneva's forwarder: DNAT the ports to this address */
     int forward;     /* router: queue forwarded packets from and to the ports, both
                       * directions (geneva censor); out, in and notrack are unused */
+    /* Windows (WinDivert) */
+    const char *filter;      /* a WinDivert expression: replaces the filter built from the
+                              * ports, protocols and directions; with filter_narrow it is
+                              * ANDed with that filter instead (evaluator slots) */
+    const char *filter_file; /* where filter was read from (reload_filter) */
+    int filter_narrow;
+    int priority;            /* WinDivert handle priority, -30000..30000 */
 } fw_config;
+
+#define FW_FILTER_FILE_MAX 65536 /* bytes of a --filter-file */
+#define FW_PRIORITY_MAX 30000
+
+#ifdef _WIN32
+#  define FW_WINDOWS 1
+#else
+#  define FW_WINDOWS 0
+#endif
 
 void fw_config_default(fw_config *c);
 const char *fw_backend_name(fw_backend b);
@@ -49,6 +66,22 @@ void fw_script(const fw_config *c, fw_backend b, int up, sbuf *out);
  * Windows engine needs no firewall). iface must be an interface index there.
  * Returns 0, or -1 with a message. */
 int fw_windivert_filter(const fw_config *c, sbuf *out, sbuf *err);
+/* The same with expr (NULL: none) in place of c->filter: set_filter. */
+int fw_windivert_filter_expr(const fw_config *c, const char *expr, sbuf *out, sbuf *err);
+
+/* Reads a --filter-file: at most FW_FILTER_FILE_MAX bytes, its non-empty
+ * lines joined by spaces. Returns 0, or -1 with a message. */
+int fw_read_filter_file(const char *path, sbuf *out, sbuf *err);
+
+/* --filter, --filter-file and --priority of run, eval, evolve and fw.
+ * windows tells the platform (FW_WINDOWS; a parameter so that tests cover
+ * both): elsewhere the options are refused. A file's expression goes to
+ * *owned (free it). Returns 0, or -1 with a message (a usage error). */
+int fw_parse_filter_args(const args_t *a, int windows, fw_config *c, char **owned, sbuf *err);
+
+/* The rules of the evaluator's engine: local ports base .. base + span - 1
+ * are the probes' (server_side: outbound packets come from them). */
+void fw_eval_slots(fw_config *c, uint16_t base, uint32_t span, int udp);
 
 /* Applies the rules. With FW_AUTO tries nft, then iptables, and stores the
  * backend that worked in c->backend. Returns 0 or -1 with a message. */

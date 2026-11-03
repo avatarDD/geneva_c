@@ -39,9 +39,12 @@
         {"agent-wait", 0, 1, "SEC", "--agent-listen: wait for the agent this long (default 300)"}, \
         {"queue", 'q', 1, "N", "NFQUEUE number (default 311)"},                                    \
         {"mark", 0, 1, "MASK", "fwmark of packets the engine sends (default 0x20000000)"},         \
-        {"firewall", 0, 1, "TYPE", "auto, nft or iptables"}
+        {"firewall", 0, 1, "TYPE", "auto, nft, iptables, or none (rules for the slots by hand: geneva fw print)"}, \
+        {"filter", 0, 1, "EXPR", "Windows: WinDivert expression that narrows the slots' capture"},  \
+        {"filter-file", 0, 1, "FILE", "Windows: read the --filter expression from FILE (up to 64 KB)"}, \
+        {"priority", 0, 1, "N", "Windows: WinDivert handle priority, -30000..30000 (default 0)"}
 
-/* Reads EVAL_OPTS into o (the payload is allocated; free o->probe.payload).
+/* Reads EVAL_OPTS into o (allocated: o->probe.payload, o->filter_owned).
  * Resolves the address. Prints an error and returns -1 on bad options. */
 int eval_parse_args(const args_t *a, const char *cmd, eval_opts *o);
 

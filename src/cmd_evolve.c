@@ -404,6 +404,7 @@ finish:
 done:
     evaluator_close(evr);
     free(eo.probe.payload);
+    free(eo.filter_owned);
     sb_free(&tname);
     sdb_close(db);
     hof_free(&hall);
