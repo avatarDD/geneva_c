@@ -198,6 +198,84 @@ static void test_windivert(void)
     sb_free(&e);
 }
 
+#ifdef __linux__
+#include <signal.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static void write_exe(const char *path, const char *body)
+{
+    FILE *f = fopen(path, "w");
+    if (f) {
+        fputs(body, f);
+        fclose(f);
+    }
+    chmod(path, 0755);
+}
+
+/* Applies iptables rules through a fake iptables on PATH. */
+static void test_exec(void)
+{
+    char dir[] = "/tmp/geneva-fw-XXXXXX", bin[300], log[300], body[400];
+    const char *old = getenv("PATH");
+    char *saved = old ? xstrdup(old) : NULL;
+    fw_config c;
+    sbuf e, s;
+    FILE *f;
+    t_current = "fw exec";
+    if (!mkdtemp(dir)) {
+        CHECK(0);
+        free(saved);
+        return;
+    }
+    snprintf(bin, sizeof(bin), "%s/iptables", dir);
+    snprintf(log, sizeof(log), "%s/log", dir);
+    snprintf(body, sizeof(body), "#!/bin/sh\necho \"$*\" >> %s\nexit 0\n", log);
+    write_exe(bin, body);
+    setenv("PATH", dir, 1);
+    sb_init(&e);
+    sb_init(&s);
+    fw_config_default(&c);
+    CHECK_INT(ports_parse("443", &c.ports), 0);
+    c.backend = FW_IPTABLES;
+    c.ipv6 = 0;
+
+    /* Keenetic starts services with SIGCHLD ignored; children are then
+     * reaped by the kernel and waitpid() cannot report their status. */
+    signal(SIGCHLD, SIG_IGN);
+    CHECK_INT(fw_up(&c, &e), 0);
+    CHECK_INT((int)e.len, 0);
+    CHECK(signal(SIGCHLD, SIG_DFL) == SIG_IGN); /* the disposition is restored */
+    if ((f = fopen(log, "r")) != NULL) {
+        char line[256];
+        while (fgets(line, sizeof(line), f))
+            sb_puts(&s, line);
+        fclose(f);
+    }
+    CHECK(strstr(s.data, "-t mangle -N GENEVA_") != NULL);
+    fw_down(&c);
+
+    /* a binary that cannot be executed: the reason is reported */
+    write_exe(bin, "#!/nonexistent/interpreter\n");
+    sb_reset(&e);
+    CHECK_INT(fw_up(&c, &e), -1);
+    CHECK(strstr(e.data, "cannot run") != NULL);
+    CHECK(strstr(e.data, "No such file") != NULL);
+
+    remove(bin);
+    remove(log);
+    rmdir(dir);
+    if (saved)
+        setenv("PATH", saved, 1);
+    else
+        unsetenv("PATH");
+    free(saved);
+    sb_free(&e);
+    sb_free(&s);
+}
+#endif
+
 void suite_fw(void)
 {
     test_ports();
@@ -205,4 +283,7 @@ void suite_fw(void)
     test_nft();
     test_forward();
     test_windivert();
+#ifdef __linux__
+    test_exec();
+#endif
 }

@@ -4,6 +4,9 @@
  */
 #include <stdio.h>
 #include <string.h>
+#ifndef _WIN32
+#  include <signal.h>
+#endif
 
 #include "args.h"
 #include "geneva.h"
@@ -107,6 +110,12 @@ int cmd_version(int argc, char **argv)
 int main(int argc, char **argv)
 {
     const char *cmd;
+#ifndef _WIN32
+    /* Keenetic's service manager starts programs with SIGCHLD ignored, which
+     * makes waitpid() lose the exit status of iptables, nft and exec probes;
+     * we always reap our children ourselves. */
+    signal(SIGCHLD, SIG_DFL);
+#endif
     log_init();
     if (plat_net_init() < 0) {
         fprintf(stderr, "geneva: network initialization failed\n");
