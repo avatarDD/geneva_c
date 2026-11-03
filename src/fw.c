@@ -395,6 +395,142 @@ static void wd_ports(const fw_config *c, sbuf *out, const char *field)
 
 int fw_windivert_filter(const fw_config *c, sbuf *out, sbuf *err)
 {
+    return fw_windivert_filter_expr(c, c->filter, out, err);
+}
+
+/* The filter built from the ports, protocols and directions. */
+static int wd_built(const fw_config *c, sbuf *out, sbuf *err);
+
+int fw_windivert_filter_expr(const fw_config *c, const char *expr, sbuf *out, sbuf *err)
+{
+    if (expr && !*expr) {
+        sb_puts(err, "empty filter expression");
+        return -1;
+    }
+    if (expr && !c->filter_narrow) {
+        /* the caller's expression; loopback traffic is never captured */
+        sb_printf(out, "(%s) and not loopback", expr);
+        return 0;
+    }
+    if (wd_built(c, out, err) < 0)
+        return -1;
+    if (expr) {
+        /* evaluator: the slots' filter narrowed by the expression */
+        sbuf b;
+        sb_init(&b);
+        sb_printf(&b, "(%s) and (%s)", out->data, expr);
+        sb_reset(out);
+        sb_puts(out, b.data);
+        sb_free(&b);
+    }
+    return 0;
+}
+
+int fw_read_filter_file(const char *path, sbuf *out, sbuf *err)
+{
+    size_t len;
+    char *text = read_file(path, &len), *line, *next;
+    if (!text) {
+        sb_printf(err, "cannot read %s", path);
+        return -1;
+    }
+    if (len > FW_FILTER_FILE_MAX) {
+        sb_printf(err, "%s: more than %d bytes", path, FW_FILTER_FILE_MAX);
+        free(text);
+        return -1;
+    }
+    if (memchr(text, 0, len)) {
+        sb_printf(err, "%s: not a text file", path);
+        free(text);
+        return -1;
+    }
+    for (line = text; line && *line; line = next) {
+        char *p = line, *end;
+        next = strchr(line, '\n');
+        if (next)
+            *next++ = 0;
+        while (*p == ' ' || *p == '\t' || *p == '\r')
+            p++;
+        end = p + strlen(p);
+        while (end > p && (end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t'))
+            *--end = 0;
+        if (!*p)
+            continue;
+        if (out->len)
+            sb_putc(out, ' ');
+        sb_puts(out, p);
+    }
+    free(text);
+    if (!out->len) {
+        sb_printf(err, "%s: no filter expression", path);
+        return -1;
+    }
+    return 0;
+}
+
+int fw_parse_filter_args(const args_t *a, int windows, fw_config *c, char **owned, sbuf *err)
+{
+    const char *f = arg_str(a, "filter", NULL), *ff = arg_str(a, "filter-file", NULL);
+    const char *pr = arg_str(a, "priority", NULL);
+    *owned = NULL;
+    if (!windows) {
+        if (f || ff) {
+            sb_printf(err, "--%s is Windows only: on Linux use --firewall none and your own rules",
+                      f ? "filter" : "filter-file");
+            return -1;
+        }
+        if (pr) {
+            sb_puts(err, "--priority is Windows only (WinDivert handle priority)");
+            return -1;
+        }
+        return 0;
+    }
+    if (f && ff) {
+        sb_puts(err, "--filter and --filter-file exclude each other");
+        return -1;
+    }
+    if (pr) {
+        int64_t v;
+        if (parse_i64(pr, &v) < 0 || v < -FW_PRIORITY_MAX || v > FW_PRIORITY_MAX) {
+            sb_printf(err, "--priority must be a number from %d to %d", -FW_PRIORITY_MAX, FW_PRIORITY_MAX);
+            return -1;
+        }
+        c->priority = (int)v;
+    }
+    if (f) {
+        while (*f == ' ' || *f == '\t')
+            f++;
+        if (!*f) {
+            sb_puts(err, "--filter: empty expression");
+            return -1;
+        }
+        c->filter = f;
+    } else if (ff) {
+        sbuf s;
+        sb_init(&s);
+        if (fw_read_filter_file(ff, &s, err) < 0) {
+            sb_free(&s);
+            return -1;
+        }
+        *owned = sb_take(&s);
+        c->filter = *owned;
+        c->filter_file = ff;
+    }
+    return 0;
+}
+
+void fw_eval_slots(fw_config *c, uint16_t base, uint32_t span, int udp)
+{
+    c->ports.n = 1;
+    c->ports.lo[0] = base;
+    c->ports.hi[0] = (uint16_t)(base + span - 1);
+    c->server_side = 1; /* outbound packets come from our ports (or the service port) */
+    c->tcp = 1;
+    c->udp = udp;
+}
+
+static int wd_built(const fw_config *c, sbuf *out, sbuf *err)
+{
     /* client side: out to the ports, in from them; server side: the reverse */
     const char *out_field = c->server_side ? "SrcPort" : "DstPort";
     const char *in_field = c->server_side ? "DstPort" : "SrcPort";

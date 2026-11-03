@@ -152,10 +152,25 @@ int eval_parse_args(const args_t *a, const char *cmd, eval_opts *o)
         }
         o->fw.mark = (uint32_t)m;
     }
-    if ((s = arg_str(a, "firewall", NULL)) != NULL && fw_backend_parse(s, &o->fw.backend) < 0) {
-        fprintf(stderr, "geneva %s: --firewall must be auto, nft or iptables\n", cmd);
+    if ((s = arg_str(a, "firewall", NULL)) != NULL) {
+        if (!strcmp(s, "none")) {
+#ifdef _WIN32
+            fprintf(stderr, "geneva %s: --firewall is Linux-only (WinDivert needs no rules)\n", cmd);
+            return -1;
+#endif
+            o->apply_fw = 0; /* the caller sets up the rules for the slots */
+        } else if (fw_backend_parse(s, &o->fw.backend) < 0) {
+            fprintf(stderr, "geneva %s: --firewall must be auto, nft, iptables or none\n", cmd);
+            return -1;
+        }
+    }
+    sb_init(&err);
+    if (fw_parse_filter_args(a, FW_WINDOWS, &o->fw, &o->filter_owned, &err) < 0) {
+        fprintf(stderr, "geneva %s: %s\n", cmd, err.data);
+        sb_free(&err);
         return -1;
     }
+    sb_free(&err);
 
     if (arg_has(a, "agent") && arg_has(a, "agent-listen")) {
         fprintf(stderr, "geneva %s: --agent and --agent-listen exclude each other\n", cmd);
@@ -426,6 +441,7 @@ done:
         free(strats[i]);
     free(strats);
     free(o.probe.payload);
+    free(o.filter_owned);
     sb_free(&err);
     args_free(&a);
     return rc;

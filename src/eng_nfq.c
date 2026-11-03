@@ -179,6 +179,9 @@ const backend nfq_backend = {
     nfq_be_ready,
     nfq_be_verdict,
     nfq_be_inject,
+    0,    /* --first: conntrack in the rules */
+    NULL, /* no capture filter: rules */
+    NULL,
 };
 
 #endif

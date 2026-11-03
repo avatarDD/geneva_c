@@ -369,7 +369,7 @@ static void respond_error(client *k, const json_val *id, const char *msg)
     sb_free(&sb);
 }
 
-static void handle_line(ctl *c, client *k, const char *line, ctl_handler h, void *ctx)
+static void handle_line(ctl *c, client *k, const char *line, size_t len, ctl_handler h, void *ctx)
 {
     const char *perr = NULL, *cmd;
     json_val *req = json_parse(line, &perr);
@@ -387,6 +387,13 @@ static void handle_line(ctl *c, client *k, const char *line, ctl_handler h, void
     cmd = json_get_str(req, "cmd", NULL);
     if (!cmd) {
         respond_error(k, id, "missing \"cmd\"");
+        json_free(req);
+        return;
+    }
+    if (len > CTL_MAX_LINE && strcmp(cmd, "set_filter")) {
+        /* only set_filter may carry a long line (a filter of many addresses) */
+        respond_error(k, id, "request line too long");
+        k->closing = 1;
         json_free(req);
         return;
     }
@@ -507,12 +514,12 @@ static int read_client(ctl *c, client *k, ctl_handler h, void *ctx)
             if (n && nl[-1] == '\r')
                 nl[-1] = 0;
             if (k->in.data[0] && !k->closing)
-                handle_line(c, k, k->in.data, h, ctx);
+                handle_line(c, k, k->in.data, n, h, ctx);
             memmove(k->in.data, nl + 1, k->in.len - n - 1);
             k->in.len -= n + 1;
             k->in.data[k->in.len] = 0;
         }
-        if (k->in.len > CTL_MAX_LINE) {
+        if (k->in.len > CTL_MAX_FILTER_LINE) {
             respond_error(k, NULL, "request line too long");
             k->closing = 1;
             sb_reset(&k->in);
@@ -620,7 +627,7 @@ int ctl_read_line(ctl_conn *c, sbuf *out, int timeout_ms)
             c->in.data[c->in.len] = 0;
             return 1;
         }
-        if (c->in.len > CTL_MAX_LINE)
+        if (c->in.len > CTL_MAX_READ)
             return -1;
         if (deadline) {
             uint64_t now = plat_now_ms();

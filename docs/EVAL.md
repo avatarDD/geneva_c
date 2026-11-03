@@ -89,6 +89,26 @@ Windows, поэтому чужие соединения в блок не поп�
 `--firewall`, `--mark` — как у `geneva run`) и снимаются при выходе. На
 Windows WinDivert ловит те же порты.
 
+`--firewall none` (Linux) — правила для портов слотов ставит вызывающий,
+как у `geneva run --firewall none`. Какие правила нужны, печатает
+`geneva fw print` с теми же опциями:
+
+```
+geneva fw print --local-ports 30000 --workers 2 -q 311 [--probe dns] [--firewall nft]
+sudo geneva evolve --firewall none --local-ports 30000 --workers 2 -q 311 ...
+```
+
+`--probe dns|exec|external` добавляет в правила UDP, как это делает сам
+оценщик.
+
+`--filter EXPR` / `--filter-file PATH` (Windows) сужают перехват слотов:
+итоговый фильтр слота — `(<фильтр слотов из --local-ports>) and (EXPR)`.
+Так контроллер ограничивает пробу, например, `ip.DstAddr == 1.2.3.4`.
+Выражение проверяется `WinDivertHelperCompileFilter`, ошибка — код 2 и
+событие `error` с `where: "filter"` и `pos`. `--priority N` — приоритет
+хэндла WinDivert, как у `run` (`docs/ENGINE.md`). На Linux эти опции
+отклоняются (код 2).
+
 `--residual-wait SEC` — пауза воркера после неудачного прогона. Она нужна
 для цензоров, которые после срабатывания блокируют ещё какое-то время все
 соединения к серверу (так делает, например, GFW): иначе следующая стратегия

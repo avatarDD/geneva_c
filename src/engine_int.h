@@ -19,6 +19,7 @@
 
 #include "ctl.h"
 #include "engine.h"
+#include "flowtab.h"
 #include "pcap.h"
 #include "plat.h"
 #include "strategy.h"
@@ -47,6 +48,16 @@ typedef struct {
     int (*verdict)(engine *e, const void *pctx, int accept, const uint8_t *data, size_t len);
     /* Sends an extra packet in the captured packet's direction. */
     int (*inject)(engine *e, const void *pctx, const uint8_t *data, size_t len);
+    /* --first N: 1 when the engine counts packets per flow itself (no
+     * conntrack rules do it). */
+    int engine_first;
+    /* The capture filter in use, or NULL when rules capture (Linux). */
+    const char *(*filter)(engine *e);
+    /* Replaces the capture filter with expr (called locked). Returns 0 with
+     * the new filter in out, or -1 with a message in err and, for an
+     * expression that does not compile, its position in *pos (else -1).
+     * NULL: the backend has no filter. */
+    int (*set_filter)(engine *e, const char *expr, sbuf *out, sbuf *err, int *pos);
 } backend;
 
 /* A packet waiting for its sleep to end. */
@@ -62,6 +73,8 @@ typedef struct {
 typedef struct {
     uint64_t pkts_out, pkts_in, triggered, accepted, modified, dropped;
     uint64_t injected, delayed, send_errors, verdict_errors, parse_errors, overruns;
+    uint64_t passed_first;  /* --first: packets past the first N of their flow */
+    uint64_t flow_evictions; /* --first: live flows pushed out of a full table */
 } counters;
 
 struct engine {
@@ -81,6 +94,9 @@ struct engine {
     int stop_request; /* "stop" over the control socket */
     const char *fw_name; /* what installed the rules, for events and status */
     const char *err_where; /* set by a failing open(): "firewall", "nfqueue"... */
+    int err_pos;      /* set by a failing open(): where the filter does not compile */
+    flowtab *flows;     /* --first counted by the engine (engine_first) */
+    uint64_t next_expire;
     plat_mutex_t lock;
 };
 

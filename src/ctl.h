@@ -22,8 +22,10 @@
 #include "util.h"
 
 #define CTL_MAX_CLIENTS 16
-#define CTL_MAX_LINE 65536
-#define CTL_MAX_QUEUED (1u << 20) /* bytes of pending output per client */
+#define CTL_MAX_LINE 65536             /* bytes of a request line */
+#define CTL_MAX_FILTER_LINE (1u << 20)  /* ... of a set_filter request */
+#define CTL_MAX_READ (4u << 20)         /* bytes of a line geneva ctl reads */
+#define CTL_MAX_QUEUED (4u << 20)       /* bytes of pending output per client */
 
 typedef struct ctl ctl;
 

@@ -114,6 +114,89 @@ geneva (`geneva run`). В интерфейсе это отдельный дви�
    zapret-gui. Применять её на роутере — только с подтверждения
    пользователя. В конфиг zapret2/nfqws2 она не экспортируется.
 
+## Внешний фильтр: обход только заблокированного
+
+Режим «Авто» AutoTuner (затем zapret-gui) пассивно смотрит на трафик,
+находит заблокированные ресурсы и подбирает каждому стратегию geneva.
+Стратегия должна применяться **только** к их трафику. Разным ресурсам
+нужны разные стратегии, поэтому работает несколько `geneva run`, по одному
+на стратегию, каждый со своим набором адресов, портов и протоколов,
+который меняется на лету. Включать эти пути — по `features` из
+`geneva version --json` (`filter`, `set_filter`, `first`,
+`firewall_none_eval`), а не по версии.
+
+### Linux: свои правила NFQUEUE
+
+`geneva run --firewall none -q Q`, а правила ставит интегратор. Пример для
+одной стратегии на очереди 320: наборы `адрес . протокол . порт`,
+пропуск пакетов, которые отправил сам движок (метка `0x20000000`), —
+первой строкой каждой цепочки:
+
+```
+table inet autotuner_320 {
+	set dst4 { type ipv4_addr . inet_proto . inet_service; flags interval; }
+	set dst6 { type ipv6_addr . inet_proto . inet_service; flags interval; }
+	chain out {
+		type filter hook postrouting priority 101; policy accept;
+		meta mark & 0x20000000 == 0x20000000 return
+		ip daddr . meta l4proto . th dport @dst4 ct original packets 1-12 queue num 320 bypass
+		ip6 daddr . meta l4proto . th dport @dst6 ct original packets 1-12 queue num 320 bypass
+	}
+	chain in {
+		type filter hook prerouting priority -99; policy accept;
+		meta mark & 0x20000000 == 0x20000000 return
+		ip saddr . meta l4proto . th sport @dst4 ct reply packets 1-6 queue num 320 bypass
+		ip6 saddr . meta l4proto . th sport @dst6 ct reply packets 1-6 queue num 320 bypass
+	}
+}
+```
+
+```
+nft add element inet autotuner_320 dst4 '{ 1.2.3.4 . tcp . 443, 5.6.7.8 . udp . 51820 }'
+sudo geneva run -f strategy.txt -p 443 --proto tcp,udp -q 320 --firewall none -c unix:/run/at-320.sock
+```
+
+- Хуки postrouting 101 (после SNAT) и prerouting −99 (после conntrack):
+  направление даёт хук, и пакеты считает conntrack (`ct original packets
+  1-12` / `ct reply packets 1-6` — аналог `--first`).
+- `queue num Q bypass`: пока geneva не слушает очередь, трафик идёт мимо.
+- Набор пополняется на лету (`nft add element`), перезапуск geneva не
+  нужен. Правила интегратор снимает сам при выходе.
+- Для `eval`/`evolve` с `--firewall none` нужные правила печатает
+  `geneva fw print --local-ports BASE --workers N -q Q` (`docs/EVAL.md`).
+
+**Внимание, роутер:** не ставьте `geneva run -p 1-65535` в хук FORWARD. Там
+направление пакета движок определяет по портам (`-p`), и с диапазоном на
+все порты любой ответ сервера тоже окажется «исходящим». Используйте
+postrouting/prerouting, как выше.
+
+### Windows: `--filter` и `set_filter`
+
+Каждый экземпляр получает выражение WinDivert на свой набор, например для
+адреса `A` на TCP 443 и для DHT на UDP 6881:
+
+```
+(outbound and ((ip.DstAddr == A and tcp.DstPort == 443) or (udp and udp.SrcPort == 6881)))
+ or (inbound and ((ip.SrcAddr == A and tcp.SrcPort == 443) or (udp and udp.DstPort == 6881)))
+```
+
+```
+geneva.exe run -f strategy.txt -p 443 --proto tcp,udp --first 12 ^
+  --filter-file C:\ProgramData\autotuner\s1.filter -c tcp:47201 --control-token T
+geneva.exe ctl -c tcp:47201 -t T set_filter "filter=<новое выражение>"
+geneva.exe ctl -c tcp:47201 -t T reload_filter
+```
+
+- Фильтр на сотни адресов — через `--filter-file` (до 64 КБ) и
+  `reload_filter`, или `set_filter` (строка запроса до 1 МБ).
+- Смена фильтра не рвёт открытые соединения; некомпилируемое выражение
+  получает `ok:false` и `pos`, прежний фильтр остаётся. Каждая смена — событие
+  `filter`.
+- Выражения экземпляров должны быть непересекающимися (одинаковый
+  `--priority`): WinDivert на одном уровне приоритета отдаёт пакет только
+  одному хэндлу (`docs/ENGINE.md`, «Несколько экземпляров»).
+- `--first N` на Windows считает движок (`stats.passed_first`).
+
 ## Server-side
 
 Если у пользователя есть свой сервер (VPS) с сервисом, стратегию можно

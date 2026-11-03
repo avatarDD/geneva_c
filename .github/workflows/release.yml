@@ -62,5 +62,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # the notes: this version's section of CHANGELOG.md, else GitHub's
+          awk -v h="## $GITHUB_REF_NAME" '$0 == h {on=1; next} /^## /{on=0} on' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ -s "$RUNNER_TEMP/notes.md" ]; then notes="--notes-file $RUNNER_TEMP/notes.md"; else notes=--generate-notes; fi
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
-            --title "geneva $VERSION" --generate-notes
+            --title "geneva $VERSION" $notes

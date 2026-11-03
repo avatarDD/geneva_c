@@ -29,12 +29,13 @@
 | `eval_request` | (`--probe external`) контроллер должен сделать прогон и ответить в stdin (`docs/EVAL.md`) | `id`, `strategy`, `run`, `lports` |
 | `result` | (evolve) поиск закончен | `stopped`, `best` — `[{"strategy", "avg_fitness", "runs"}]` |
 | `strategy` | стратегия установлена (при старте, `set_strategy`, `reload`, SIGHUP) | `strategy` (каноническая строка) |
+| `filter` | (Windows) фильтр WinDivert установлен: при старте и после каждой успешной смены | `filter` (итоговое выражение, с `and not loopback`), `source` (`start`, `set_filter`, `reload_filter`) |
 | `ready` | правила firewall стоят (или открыт WinDivert), пакеты идут через движок | `backend`, `firewall` (`nft`, `iptables`, `windivert`, `none`) |
 | `ready` | (agent) агент ждёт оценщика или начал к нему подключаться | `addr` |
 | `state` | `pause` / `resume` | `state` (`paused`, `running`) |
 | `stats` | каждые `--stats-interval` с (по умолчанию 10 с, если есть `--events` или `--control`), по SIGUSR1 и при выходе | см. ниже |
 | `log` | сообщение лога (в `--log-format json` и для подписчиков) | `level`, `mod`, `msg` |
-| `error` | ошибка | `where` (`strategy`, `nfqueue`, `rawsend`, `firewall`, `windivert`, `control`, `reload`), `message` |
+| `error` | ошибка | `where` (`strategy`, `nfqueue`, `rawsend`, `firewall`, `windivert`, `control`, `reload`, `filter`), `message`; у `filter` для некомпилируемого выражения ещё `pos` |
 | `dropped` | только подписчику: он читал слишком медленно и потерял события | `count` |
 | `exit` | завершение | `code` (код возврата), `reason` (`signal`, `control`, `duration`, `error`; у evolve — `done`, `signal`, `not_blocked`, `error`) |
 
@@ -54,6 +55,8 @@
 | `pending` | отложенные пакеты, ещё не отправленные |
 | `send_errors`, `verdict_errors`, `parse_errors` | ошибки |
 | `overruns` | переполнения очереди сокета (ядро теряло пакеты для движка) |
+| `passed_first` | (`--first` на Windows) пакеты сверх первых N своего потока, пропущенные без стратегии |
+| `flow_evictions` | (`--first` на Windows) живые потоки, вытесненные из заполненной таблицы (65536) |
 | `out_trees`, `in_trees` | `[{"tree": "...", "fired": N}]` — срабатывания каждого дерева |
 
 ## Управляющий сокет
@@ -78,7 +81,9 @@
 <- {"id":2,"ok":false,"error":"..."}
 ```
 
-Строка запроса — не длиннее 64 КБ. Подписчику события приходят в то же
+Строка запроса — не длиннее 64 КБ, у `set_filter` — до 1 МБ (фильтр на
+много адресов). Более длинная строка получает `ok:false` («request line too
+long»), и соединение закрывается. Подписчику события приходят в то же
 соединение; у событий нет `ok`, у ответов есть, так их и различают.
 
 ### Команды
@@ -89,11 +94,13 @@
 | `ping` | — | `ts` |
 | `version` | — | `version`, `proto` |
 | `subscribe` / `unsubscribe` | — | включить / выключить поток событий в это соединение |
-| `status` | — | `mode`, `state`, `version`, `pid`, `uptime_ms`, `backend`, `queue`, `ports`, `server_side`, `firewall`, `log_level`, `strategy`, `strategy_file` |
+| `status` | — | `mode`, `state`, `version`, `pid`, `uptime_ms`, `backend`, `queue`, `ports`, `server_side`, `firewall`, `filter` (текущее выражение WinDivert; на Linux `null`), `filter_file`, `log_level`, `strategy`, `strategy_file` |
 | `stats` | — | поля `stats` |
 | `reset_stats` | — | обнулить счётчики и состояние стратегии (gas триггеров) |
 | `set_strategy` | `strategy` | заменить стратегию; ответ — каноническая `strategy`. Ошибка разбора оставляет прежнюю |
 | `reload` | — | перечитать `--strategy-file` |
+| `set_filter` | `filter` | (Windows) заменить фильтр WinDivert на лету (`docs/ENGINE.md`); ответ — итоговый `filter`. Некомпилируемое выражение: `ok:false`, `error`, `pos`, прежний фильтр остаётся. На Linux `ok:false`, `error: "windows only"` |
+| `reload_filter` | — | (Windows) перечитать `--filter-file` и установить, как `set_filter`; без `--filter-file` — `ok:false`. На Linux `ok:false`, `error: "windows only"` |
 | `pause` / `resume` | — | на паузе пакеты проходят без изменений, правила остаются |
 | `log_level` | `level` (необязателен) | установить / узнать уровень: `error`, `warn`, `info`, `debug`, `trace` |
 | `stop` | — | корректный выход со снятием правил (`exit` с `reason: control`) |
@@ -117,6 +124,20 @@ geneva ctl --json '{"cmd":"pause"}'
 Адрес по умолчанию — `$GENEVA_CONTROL` или `unix:/var/run/geneva.sock`,
 токен — `-t` или `$GENEVA_CONTROL_TOKEN`. Печатается ответ сервера,
 код возврата 1 при `ok:false`, 6 при ошибке соединения.
+
+### Возможности сборки
+
+`geneva version --json` даёт массив `features`. Новые пути интеграторы
+включают по этим флагам, а не по номеру версии:
+
+| Флаг | Где | Смысл |
+|---|---|---|
+| `nfqueue` / `windivert` | Linux / Windows | бэкенд движка |
+| `ipv6`, `pcap`, `control` | везде | IPv6, `--pcap`, управляющий сокет |
+| `filter` | Windows | `--filter`, `--filter-file`, `--priority` |
+| `set_filter` | Windows | команды `set_filter`, `reload_filter`, событие `filter` |
+| `first` | Linux, Windows | `--first N` работает (Windows: счёт в движке, с 1.1) |
+| `firewall_none_eval` | Linux | `eval`/`evolve --firewall none` |
 
 ## Сигналы (POSIX)
 

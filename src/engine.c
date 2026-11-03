@@ -277,6 +277,20 @@ void engine_packet(engine *e, const uint8_t *data, size_t len, int d, const void
     } else {
         dir = (strat_dir)d;
     }
+    if (e->flows) {
+        /* --first N without conntrack: later packets of a flow go on as
+         * they are, outside the strategy and the counters */
+        int evicted;
+        int in_first = flowtab_packet(e->flows, p, dir, (uint32_t)e->o->fw.first, plat_now_ms(), &evicted);
+        if (evicted)
+            e->c.flow_evictions++;
+        if (!in_first) {
+            e->c.passed_first++;
+            pkt_free(p);
+            give_verdict(e, pctx, 1, NULL, 0);
+            return;
+        }
+    }
     if (dir == DIR_OUT)
         e->c.pkts_out++;
     else
@@ -415,6 +429,8 @@ static void stats_fields(engine *e, jw *w)
     jw_kuint(w, "verdict_errors", c->verdict_errors);
     jw_kuint(w, "parse_errors", c->parse_errors);
     jw_kuint(w, "overruns", c->overruns);
+    jw_kuint(w, "passed_first", c->passed_first);
+    jw_kuint(w, "flow_evictions", c->flow_evictions);
     if (e->st) {
         jw_key(w, "out_trees");
         forest_json(w, e->st->out, e->st->nout);
@@ -459,7 +475,8 @@ static void emit_strategy(engine *e)
     sb_free(&s);
 }
 
-static void emit_error(const char *where, const char *msg)
+/* pos >= 0: where a filter expression stops compiling */
+static void emit_error_pos(const char *where, const char *msg, int pos)
 {
     ev_t ev;
     if (!ev_on())
@@ -467,7 +484,51 @@ static void emit_error(const char *where, const char *msg)
     ev_begin(&ev, "error");
     jw_kstr(&ev.w, "where", where);
     jw_kstr(&ev.w, "message", msg);
+    if (pos >= 0)
+        jw_kint(&ev.w, "pos", pos);
     ev_emit(&ev);
+}
+
+static void emit_error(const char *where, const char *msg) { emit_error_pos(where, msg, -1); }
+
+static void emit_filter(engine *e, const char *source)
+{
+    ev_t ev;
+    const char *f = e->be->filter ? e->be->filter(e) : NULL;
+    if (!f)
+        return;
+    LOGI("engine", "filter (%s): %s", source, f);
+    if (!ev_on())
+        return;
+    ev_begin(&ev, "filter");
+    jw_kstr(&ev.w, "filter", f);
+    jw_kstr(&ev.w, "source", source);
+    ev_emit(&ev);
+}
+
+/* set_filter and reload_filter: a new capture filter, or -1 with err (the
+ * current one stays). */
+static int change_filter(engine *e, const char *expr, const char *source, jw *w, sbuf *err)
+{
+    sbuf out;
+    int pos = -1;
+    if (!e->be->set_filter) {
+        sb_puts(err, "windows only");
+        return -1;
+    }
+    sb_init(&out);
+    if (e->be->set_filter(e, expr, &out, err, &pos) < 0) {
+        LOGW("engine", "%s failed, keeping the current filter: %s", source, err->data);
+        emit_error_pos("filter", err->data, pos);
+        if (pos >= 0)
+            jw_kint(w, "pos", pos);
+        sb_free(&out);
+        return -1;
+    }
+    jw_kstr(w, "filter", out.data);
+    sb_free(&out);
+    emit_filter(e, source);
+    return 0;
 }
 
 /* ---- strategy loading ---------------------------------------------------- */
@@ -551,6 +612,13 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
         jw_kstr(w, "ports", s.data);
         jw_kbool(w, "server_side", e->o->fw.server_side);
         jw_kstr(w, "firewall", e->fw_name ? e->fw_name : "none");
+        jw_key(w, "filter");
+        if (e->be->filter && e->be->filter(e))
+            jw_str(w, e->be->filter(e));
+        else
+            jw_null(w);
+        if (e->o->fw.filter_file)
+            jw_kstr(w, "filter_file", e->o->fw.filter_file);
         jw_kstr(w, "log_level", log_level_name(log_get_level()));
         sb_reset(&s);
         strategy_print(e->st, &s);
@@ -588,6 +656,39 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
         jw_kstr(w, "strategy", out.data);
         sb_free(&out);
         return 0;
+    }
+    if (!strcmp(cmd, "set_filter")) {
+        const char *text = json_get_str(req, "filter", NULL);
+        if (!e->be->set_filter) {
+            sb_puts(err, "windows only");
+            return -1;
+        }
+        if (!text) {
+            sb_puts(err, "set_filter needs \"filter\"");
+            return -1;
+        }
+        return change_filter(e, text, "set_filter", w, err);
+    }
+    if (!strcmp(cmd, "reload_filter")) {
+        sbuf text;
+        int rc;
+        if (!e->be->set_filter) {
+            sb_puts(err, "windows only");
+            return -1;
+        }
+        if (!e->o->fw.filter_file) {
+            sb_puts(err, "no --filter-file to re-read");
+            return -1;
+        }
+        sb_init(&text);
+        if (fw_read_filter_file(e->o->fw.filter_file, &text, err) < 0) {
+            emit_error("filter", err->data);
+            sb_free(&text);
+            return -1;
+        }
+        rc = change_filter(e, text.data, "reload_filter", w, err);
+        sb_free(&text);
+        return rc;
     }
     if (!strcmp(cmd, "reload")) {
         if (reload(e, err) < 0)
@@ -704,12 +805,15 @@ int engine_run(engine_opts *o)
         ev_set_tap(ctl_broadcast, e.ctl);
         LOGI("engine", "control socket %s", o->control);
     }
+    if (o->fw.first > 0 && e.be->engine_first)
+        e.flows = flowtab_new(FLOW_MAX);
     sb_reset(&err);
     opened = 1;
+    e.err_pos = -1;
     rc = e.be->open(&e, &err);
     if (rc != EXIT_OK) {
         LOGE("engine", "%s", err.data);
-        emit_error(e.err_where ? e.err_where : e.be->name, err.data);
+        emit_error_pos(e.err_where ? e.err_where : e.be->name, err.data, e.err_pos);
         goto out;
     }
     running = 1;
@@ -722,6 +826,7 @@ int engine_run(engine_opts *o)
     plat_mutex_lock(&e.lock);
     if (e.st)
         emit_strategy(&e);
+    emit_filter(&e, "start");
     if (ev_on()) {
         ev_t ev;
         ev_begin(&ev, "ready");
@@ -783,6 +888,10 @@ int engine_run(engine_opts *o)
         if (r > 0 && nctl)
             ctl_dispatch(e.ctl, pfd + nbe, nctl, on_control, &e);
         run_timers(&e, 0);
+        if (e.flows && plat_now_ms() >= e.next_expire) {
+            flowtab_expire(e.flows, plat_now_ms());
+            e.next_expire = plat_now_ms() + 5000;
+        }
         if (sig_hup) {
             sbuf herr;
             sig_hup = 0;
@@ -839,6 +948,7 @@ out:
     if (e.pw && pcap_close_write(e.pw) < 0 && rc == EXIT_OK)
         rc = EXIT_IO;
     strategy_free(e.st);
+    flowtab_free(e.flows);
     sb_free(&err);
     sb_free(&e.line);
     plat_mutex_destroy(&e.lock);

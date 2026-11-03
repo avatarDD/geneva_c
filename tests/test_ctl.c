@@ -21,6 +21,10 @@ static int handler(void *ctx, const char *cmd, const json_val *req, jw *w, sbuf 
         jw_kstr(w, "said", json_get_str(req, "text", ""));
         return 0;
     }
+    if (!strcmp(cmd, "set_filter")) {
+        jw_kuint(w, "len", strlen(json_get_str(req, "filter", "")));
+        return 0;
+    }
     sb_puts(err, "unknown command");
     return -1;
 }
@@ -126,6 +130,104 @@ static void test_ctl_tcp(void)
     sb_free(&spec);
 }
 
+
+/* Sends a long line while serving the server, then reads one answer line
+ * (only its first bytes are kept). */
+static int long_exchange(ctl *c, sock_t s, const char *text, char *line, size_t cap, int *calls)
+{
+    size_t len = strlen(text), off = 0;
+    sbuf in;
+    uint64_t end = plat_now_ms() + 5000;
+    int rc = -1;
+    sb_init(&in);
+    plat_sock_nonblock(s, 1);
+    while (plat_now_ms() < end) {
+        plat_pollfd fds[CTL_MAX_CLIENTS + 2];
+        size_t n = ctl_pollfds(c, fds, CTL_MAX_CLIENTS + 1);
+        char buf[4096], *nl;
+        int r;
+        if (off < len) {
+            r = (int)send(s, text + off, (int)MIN(len - off, (size_t)16384), MSG_NOSIGNAL);
+            if (r > 0)
+                off += (size_t)r;
+            if (off == len)
+                send(s, "\n", 1, MSG_NOSIGNAL);
+        }
+        fds[n].fd = s;
+        fds[n].events = POLLIN;
+        fds[n].revents = 0;
+        plat_poll(fds, (unsigned)n + 1, 10);
+        ctl_dispatch(c, fds, n, handler, calls);
+        r = (int)recv(s, buf, sizeof(buf), 0);
+        if (r > 0)
+            sb_append(&in, buf, (size_t)r);
+        else if (r == 0)
+            break;
+        if (in.len && (nl = memchr(in.data, '\n', in.len)) != NULL) {
+            snprintf(line, cap, "%.*s", (int)(nl - in.data), in.data);
+            rc = 0;
+            break;
+        }
+    }
+    plat_sock_nonblock(s, 0);
+    sb_free(&in);
+    return rc;
+}
+
+static void test_ctl_long_lines(void)
+{
+    sbuf err, spec, req;
+    ctl *c;
+    sock_t s;
+    char line[4096];
+    int calls = 0;
+    size_t flen = 300000; /* past 64 KB, within the 1 MB of set_filter */
+    t_current = "ctl long lines";
+    sb_init(&err);
+    sb_init(&spec);
+    sb_init(&req);
+    c = ctl_open("tcp:127.0.0.1:0", NULL, &err);
+    CHECK(c != NULL);
+    if (!c)
+        return;
+    sb_printf(&spec, "tcp:127.0.0.1:%d", ctl_port(c));
+    s = ctl_connect(spec.data, &err);
+
+    sb_puts(&req, "{\"id\":1,\"filter\":\"");
+    for (size_t i = 0; i < flen; i++)
+        sb_putc(&req, 'a');
+    sb_puts(&req, "\",\"cmd\":\"set_filter\"}"); /* cmd after the long value */
+    CHECK_INT(long_exchange(c, s, req.data, line, sizeof(line), &calls), 0);
+    CHECK_STR(line, "{\"id\":1,\"ok\":true,\"len\":300000}");
+
+    /* another command may not be longer than 64 KB */
+    sb_reset(&req);
+    sb_puts(&req, "{\"id\":2,\"cmd\":\"echo\",\"text\":\"");
+    for (size_t i = 0; i < 70000; i++)
+        sb_putc(&req, 'b');
+    sb_puts(&req, "\"}");
+    CHECK_INT(long_exchange(c, s, req.data, line, sizeof(line), &calls), 0);
+    CHECK(strstr(line, "\"ok\":false") && strstr(line, "too long"));
+    CHECK_INT(calls, 1);
+    plat_sock_close(s);
+
+    /* nor set_filter longer than 1 MB */
+    s = ctl_connect(spec.data, &err);
+    sb_reset(&req);
+    sb_puts(&req, "{\"id\":3,\"cmd\":\"set_filter\",\"filter\":\"");
+    for (size_t i = 0; i < CTL_MAX_FILTER_LINE + 10; i++)
+        sb_putc(&req, 'c');
+    sb_puts(&req, "\"}");
+    CHECK_INT(long_exchange(c, s, req.data, line, sizeof(line), &calls), 0);
+    CHECK(strstr(line, "too long") != NULL);
+    CHECK_INT(calls, 1);
+    plat_sock_close(s);
+    ctl_close(c);
+    sb_free(&err);
+    sb_free(&spec);
+    sb_free(&req);
+}
+
 #ifndef _WIN32
 static void test_ctl_unix(void)
 {
@@ -176,6 +278,7 @@ static void test_ctl_unix(void)
 void suite_ctl(void)
 {
     test_ctl_tcp();
+    test_ctl_long_lines();
 #ifndef _WIN32
     test_ctl_unix();
 #endif

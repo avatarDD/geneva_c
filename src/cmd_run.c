@@ -8,6 +8,7 @@
 
 #include "args.h"
 #include "engine.h"
+#include "evaluator.h"
 #include "fw.h"
 #include "geneva.h"
 #include "log.h"
@@ -26,20 +27,31 @@
     {"dir", 0, 1, "both|out|in", "directions to intercept (default both)"},                       \
     {"ipv4-only", '4', 0, NULL, "handle IPv4 only"},                                               \
     {"ipv6-only", '6', 0, NULL, "handle IPv6 only"},                                               \
-    {"first", 0, 1, "N", "intercept only the first N packets of each connection (needs conntrack)"}, \
+    {"first", 0, 1, "N", "apply the strategy to the first N packets of each connection per direction"}, \
     {"prenat", 0, 0, NULL, "nft: intercept outgoing packets before SNAT (default after)"},         \
     {"no-notrack", 0, 0, NULL, "leave packets the engine sends in conntrack"},                     \
     {"no-bypass", 0, 0, NULL, "drop instead of pass traffic while no engine listens"},            \
-    {"forward-to", 0, 1, "ADDR", "Geneva forwarder: DNAT the ports to ADDR and masquerade"}
+    {"forward-to", 0, 1, "ADDR", "Geneva forwarder: DNAT the ports to ADDR and masquerade"},     \
+    {"filter", 0, 1, "EXPR", "Windows: WinDivert filter to capture, replaces the one from -p/--proto/--dir"}, \
+    {"filter-file", 0, 1, "FILE", "Windows: read the --filter expression from FILE (up to 64 KB)"}, \
+    {"priority", 0, 1, "N", "Windows: WinDivert handle priority, -30000..30000 (default 0)"}
 
 /* Fills the firewall part of the configuration. Returns 0 or prints an
- * error and returns -1. */
-static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw)
+ * error and returns -1. The expression of a --filter-file goes to *owned.
+ * With eval (geneva fw for the evaluator) the ports come from elsewhere. */
+static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw, char **owned, int eval)
 {
     int64_t v;
     const char *s;
+    sbuf ferr;
     *use_fw = 1;
-    if (!arg_has(a, "server-port") || ports_parse(arg_str(a, "server-port", ""), &c->ports) < 0) {
+    *owned = NULL;
+    if (eval) {
+        if (arg_has(a, "server-port") || arg_has(a, "server-side")) {
+            fprintf(stderr, "geneva %s: --local-ports/--workers print the evaluator's rules: no -p or --server-side\n", cmd);
+            return -1;
+        }
+    } else if (!arg_has(a, "server-port") || ports_parse(arg_str(a, "server-port", ""), &c->ports) < 0) {
         fprintf(stderr, "geneva %s: need --server-port PORTS (like 443 or 80,443 or 8000-8100)\n", cmd);
         return -1;
     }
@@ -57,7 +69,7 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw)
             return -1;
         }
     }
-    if (arg_int(a, "queue", 310, 0, 65535, &v) < 0)
+    if (arg_int(a, "queue", eval ? 311 : 310, 0, 65535, &v) < 0)
         return -1;
     c->queue = (uint16_t)v;
     if ((s = arg_str(a, "mark", NULL)) != NULL) {
@@ -113,12 +125,20 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw)
         c->forward_to = s;
     }
 #ifdef _WIN32
-    /* WinDivert captures by a filter: the Linux-only rule options mean nothing */
-    if (c->first || c->forward_to || c->prenat || !*use_fw || c->backend != FW_AUTO) {
-        fprintf(stderr, "geneva %s: --first, --forward-to, --prenat and --firewall are Linux-only\n", cmd);
+    /* WinDivert captures by a filter: the Linux-only rule options mean
+     * nothing (--first is counted by the engine itself there) */
+    if (c->forward_to || c->prenat || !*use_fw || c->backend != FW_AUTO) {
+        fprintf(stderr, "geneva %s: --forward-to, --prenat and --firewall are Linux-only\n", cmd);
         return -1;
     }
 #endif
+    sb_init(&ferr);
+    if (fw_parse_filter_args(a, FW_WINDOWS, c, owned, &ferr) < 0) {
+        fprintf(stderr, "geneva %s: %s\n", cmd, ferr.data);
+        sb_free(&ferr);
+        return -1;
+    }
+    sb_free(&ferr);
     return 0;
 }
 
@@ -182,6 +202,7 @@ int cmd_run(int argc, char **argv)
     args_t a;
     char err[128];
     engine_opts o;
+    char *filter_owned = NULL;
     int64_t v;
     int rc;
 
@@ -211,7 +232,7 @@ int cmd_run(int argc, char **argv)
         fprintf(stderr, "geneva run: give exactly one of --strategy and --strategy-file\n");
         goto done;
     }
-    if (parse_fw(&a, "run", &o.fw, &o.apply_fw) < 0 || parse_logging(&a, "run") < 0)
+    if (parse_fw(&a, "run", &o.fw, &o.apply_fw, &filter_owned, 0) < 0 || parse_logging(&a, "run") < 0)
         goto done;
     o.pcap = arg_str(&a, "pcap", NULL);
     o.control = arg_str(&a, "control", NULL);
@@ -231,6 +252,7 @@ int cmd_run(int argc, char **argv)
         rng_global_seed((uint64_t)v);
     rc = engine_run(&o);
 done:
+    free(filter_owned);
     args_free(&a);
     return rc;
 }
@@ -239,6 +261,9 @@ int cmd_fw(int argc, char **argv)
 {
     static const optdef defs[] = {
         FW_OPTS,
+        {"local-ports", 0, 1, "BASE", "the evaluator's rules (eval/evolve --firewall none): ports from BASE"},
+        {"workers", 0, 1, "N", "with --local-ports: the evaluator's workers, 64 ports each (default 1)"},
+        {"probe", 0, 1, "KIND", "with --local-ports: dns, exec and external probes add UDP"},
         {"log-level", 'l', 1, "LEVEL", "debug shows every command"},
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
@@ -246,8 +271,9 @@ int cmd_fw(int argc, char **argv)
     args_t a;
     char err[128];
     fw_config c;
-    int use_fw, rc = EXIT_USAGE;
+    int use_fw, rc = EXIT_USAGE, eval;
     const char *act;
+    char *filter_owned = NULL;
 
     if (args_parse(&a, argc, argv, defs, err, sizeof(err)) < 0) {
         fprintf(stderr, "geneva fw: %s\n", err);
@@ -255,8 +281,12 @@ int cmd_fw(int argc, char **argv)
     }
     if (arg_has(&a, "help")) {
         args_help("Usage: geneva fw print|up|down -p PORTS [options]\n"
+                  "       geneva fw print|up|down --local-ports BASE [--workers N] [-q N] [--probe KIND]\n"
                   "Prints, applies or removes the rules \"geneva run\" uses. Give the same\n"
-                  "options as to \"geneva run\"; then run it with --firewall none.",
+                  "options as to \"geneva run\"; then run it with --firewall none. With\n"
+                  "--local-ports or --workers: the rules of \"geneva eval/evolve\" for its\n"
+                  "worker slots (then run those with --firewall none and the same options).\n"
+                  "On Windows \"print\" shows the WinDivert filter, --filter included.",
                   defs);
         args_free(&a);
         return EXIT_OK;
@@ -267,8 +297,24 @@ int cmd_fw(int argc, char **argv)
         goto done;
     }
     act = a.pos[0];
-    if (parse_fw(&a, "fw", &c, &use_fw) < 0 || parse_logging(&a, "fw") < 0)
+    eval = arg_has(&a, "local-ports") || arg_has(&a, "workers") || arg_has(&a, "probe");
+    if (parse_fw(&a, "fw", &c, &use_fw, &filter_owned, eval) < 0 || parse_logging(&a, "fw") < 0)
         goto done;
+    if (eval) {
+        /* the evaluator's engine: geneva eval/evolve's defaults */
+        int64_t base, workers;
+        probe_kind k = PROBE_HTTP;
+        const char *ps = arg_str(&a, "probe", NULL);
+        if (arg_int(&a, "local-ports", 30000, 1024, 65535 - EVAL_MAX_WORKERS * 64, &base) < 0 ||
+            arg_int(&a, "workers", 1, 1, EVAL_MAX_WORKERS, &workers) < 0)
+            goto done;
+        if (ps && probe_kind_parse(ps, &k) < 0) {
+            fprintf(stderr, "geneva fw: --probe must be http, tls, dns, tcp, exec or external\n");
+            goto done;
+        }
+        fw_eval_slots(&c, (uint16_t)base, (uint32_t)(workers * 64), eval_needs_udp(k) || c.udp);
+        c.filter_narrow = 1;
+    }
 #ifdef _WIN32
     if (!strcmp(act, "print")) {
         sbuf s, e;
@@ -322,6 +368,7 @@ int cmd_fw(int argc, char **argv)
         fprintf(stderr, "geneva fw: unknown action \"%s\" (print, up or down)\n", act);
     }
 done:
+    free(filter_owned);
     args_free(&a);
     return rc;
 }

@@ -48,9 +48,13 @@ typedef struct {
     int agent_listen;       /* the agent dials in */
     const char *agent_token;
     double agent_wait;      /* agent_listen: seconds to wait for it */
+    char *filter_owned;     /* --filter-file's expression (fw.filter points here) */
 } eval_opts;
 
 void eval_opts_default(eval_opts *o);
+
+/* Whether the probe's slots capture UDP too (dns, exec, external). */
+int eval_needs_udp(probe_kind k);
 
 typedef struct {
     double fitness;         /* combined over the runs */
