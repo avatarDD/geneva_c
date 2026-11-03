@@ -399,8 +399,10 @@ static void handle_line(ctl *c, client *k, const char *line, size_t len, ctl_han
         json_free(req);
         return;
     }
-    if (len > CTL_MAX_LINE && strcmp(cmd, "set_filter")) {
-        /* only set_filter may carry a long line (a filter of many addresses) */
+    if (len > (strcmp(cmd, "set_filter") ? CTL_MAX_LINE : CTL_MAX_FILTER_LINE)) {
+        /* only set_filter may carry a long line (a filter of many addresses);
+         * read_client checks the buffer only between reads, so a whole line
+         * slightly past the limit may still arrive here */
         respond_error(k, id, "request line too long");
         k->closing = 1;
         json_free(req);
