@@ -47,10 +47,16 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw,
     *use_fw = 1;
     *owned = NULL;
     if (eval) {
-        if (arg_has(a, "server-port") || arg_has(a, "server-side")) {
-            fprintf(stderr, "geneva %s: --local-ports/--workers print the evaluator's rules: no -p or --server-side\n", cmd);
-            return -1;
-        }
+        /* only what geneva eval/evolve themselves use */
+        static const char *const run_only[] = {"server-port", "server-side", "iface", "dir", "ipv4-only",
+                                               "ipv6-only", "first", "prenat", "no-notrack", "no-bypass",
+                                               "forward-to"};
+        for (size_t i = 0; i < ARRAY_LEN(run_only); i++)
+            if (arg_has(a, run_only[i])) {
+                fprintf(stderr, "geneva %s: --local-ports/--workers print the evaluator's rules, which have no --%s\n",
+                        cmd, run_only[i]);
+                return -1;
+            }
     } else if (!arg_has(a, "server-port") || ports_parse(arg_str(a, "server-port", ""), &c->ports) < 0) {
         fprintf(stderr, "geneva %s: need --server-port PORTS (like 443 or 80,443 or 8000-8100)\n", cmd);
         return -1;

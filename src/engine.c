@@ -659,11 +659,7 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
     }
     if (!strcmp(cmd, "set_filter")) {
         const char *text = json_get_str(req, "filter", NULL);
-        if (!e->be->set_filter) {
-            sb_puts(err, "windows only");
-            return -1;
-        }
-        if (!text) {
+        if (!text && e->be->set_filter) {
             sb_puts(err, "set_filter needs \"filter\"");
             return -1;
         }
@@ -672,7 +668,7 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
     if (!strcmp(cmd, "reload_filter")) {
         sbuf text;
         int rc;
-        if (!e->be->set_filter) {
+        if (!e->be->set_filter) { /* before the file: the platform comes first */
             sb_puts(err, "windows only");
             return -1;
         }

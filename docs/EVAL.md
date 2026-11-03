@@ -99,7 +99,10 @@ sudo geneva evolve --firewall none --local-ports 30000 --workers 2 -q 311 ...
 ```
 
 `--probe dns|exec|external` добавляет в правила UDP, как это делает сам
-оценщик.
+оценщик. Опции, которых у оценщика нет (`-p`, `--dir`, `--first`,
+`--iface`, `-4`/`-6`, `--forward-to`...), в этом режиме отклоняются. Для
+server-side (`--agent`, стратегия на порту сервиса) правила те же, что у
+`geneva fw print -p PORT --server-side -q 311`.
 
 `--filter EXPR` / `--filter-file PATH` (Windows) сужают перехват слотов:
 итоговый фильтр слота — `(<фильтр слотов из --local-ports>) and (EXPR)`.

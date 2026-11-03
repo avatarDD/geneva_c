@@ -429,11 +429,23 @@ int fw_windivert_filter_expr(const fw_config *c, const char *expr, sbuf *out, sb
 int fw_read_filter_file(const char *path, sbuf *out, sbuf *err)
 {
     size_t len;
-    char *text = read_file(path, &len), *line, *next;
-    if (!text) {
+    char *text, *line, *next;
+    FILE *f = fopen(path, "rb");
+    if (!f) {
         sb_printf(err, "cannot read %s", path);
         return -1;
     }
+    /* never more than the limit in memory, whatever the file holds */
+    text = xmalloc(FW_FILTER_FILE_MAX + 2);
+    len = fread(text, 1, FW_FILTER_FILE_MAX + 1, f);
+    if (ferror(f)) {
+        fclose(f);
+        free(text);
+        sb_printf(err, "cannot read %s", path);
+        return -1;
+    }
+    fclose(f);
+    text[len] = 0;
     if (len > FW_FILTER_FILE_MAX) {
         sb_printf(err, "%s: more than %d bytes", path, FW_FILTER_FILE_MAX);
         free(text);

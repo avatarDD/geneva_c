@@ -403,14 +403,14 @@ static int wd_be_set_filter(engine *e, const char *expr, sbuf *out, sbuf *err, i
         goto fail;
     if (wd_check(s, expr, err, pos) < 0 || wd_check(s, f.data, err, NULL) < 0)
         goto fail;
-    for (int i = 0;; i++) {
+    for (ULONGLONG deadline = GetTickCount64() + 2000;;) {
         HANDLE pending;
         plat_mutex_lock(&s->hlock);
         pending = s->rx_next;
         plat_mutex_unlock(&s->hlock);
         if (!pending)
             break;
-        if (i >= 5000 || InterlockedCompareExchange(&s->failed, 0, 0)) {
+        if (GetTickCount64() >= deadline || InterlockedCompareExchange(&s->failed, 0, 0)) {
             sb_puts(err, "the previous filter change is still in progress");
             goto fail;
         }

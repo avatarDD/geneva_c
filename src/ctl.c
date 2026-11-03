@@ -320,7 +320,7 @@ void ctl_broadcast(const char *line, size_t len, void *arg)
         client *k = &c->cl[i];
         if (!k->subscribed || k->closing)
             continue;
-        if (k->out.len + len > CTL_MAX_QUEUED) {
+        if (k->out.len && k->out.len + len > CTL_MAX_QUEUED) {
             k->dropped++; /* a slow reader loses events, not the engine */
             continue;
         }
@@ -347,7 +347,8 @@ static int token_ok(const char *want, const char *got)
     return diff == 0;
 }
 
-static void respond_error(client *k, const json_val *id, const char *msg)
+/* extra: raw fields (",\"pos\":5") the handler wrote before failing */
+static void respond_error_extra(client *k, const json_val *id, const char *msg, const char *extra)
 {
     sbuf sb;
     jw w;
@@ -363,10 +364,17 @@ static void respond_error(client *k, const json_val *id, const char *msg)
     }
     jw_kbool(&w, "ok", 0);
     jw_kstr(&w, "error", msg);
+    if (extra && *extra)
+        sb_puts(&sb, extra);
     jw_obj_end(&w);
     sb_putc(&sb, '\n');
     queue(k, sb.data, sb.len);
     sb_free(&sb);
+}
+
+static void respond_error(client *k, const json_val *id, const char *msg)
+{
+    respond_error_extra(k, id, msg, NULL);
 }
 
 static void handle_line(ctl *c, client *k, const char *line, size_t len, ctl_handler h, void *ctx)
@@ -377,6 +385,7 @@ static void handle_line(ctl *c, client *k, const char *line, size_t len, ctl_han
     sbuf sb, err;
     jw w;
     int rc = 0;
+    size_t hdr;
 
     if (!req || req->type != JSON_OBJ) {
         respond_error(k, NULL, perr ? perr : "request must be a JSON object");
@@ -414,6 +423,7 @@ static void handle_line(ctl *c, client *k, const char *line, size_t len, ctl_han
             jw_str(&w, id->str);
     }
     jw_kbool(&w, "ok", 1);
+    hdr = sb.len;
     if (!strcmp(cmd, "auth")) {
         if (!c->token || token_ok(c->token, json_get_str(req, "token", NULL)))
             k->authed = 1;
@@ -442,7 +452,8 @@ static void handle_line(ctl *c, client *k, const char *line, size_t len, ctl_han
         rc = -1;
     }
     if (rc < 0) {
-        respond_error(k, id, err.len ? err.data : "failed");
+        /* fields the handler added (set_filter's "pos") go into the error */
+        respond_error_extra(k, id, err.len ? err.data : "failed", sb.data + hdr);
     } else {
         jw_obj_end(&w);
         sb_putc(&sb, '\n');
@@ -519,7 +530,7 @@ static int read_client(ctl *c, client *k, ctl_handler h, void *ctx)
             k->in.len -= n + 1;
             k->in.data[k->in.len] = 0;
         }
-        if (k->in.len > CTL_MAX_FILTER_LINE) {
+        if (k->in.len > (k->authed ? CTL_MAX_FILTER_LINE : CTL_MAX_LINE)) {
             respond_error(k, NULL, "request line too long");
             k->closing = 1;
             sb_reset(&k->in);

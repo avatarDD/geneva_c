@@ -21,6 +21,11 @@ static int handler(void *ctx, const char *cmd, const json_val *req, jw *w, sbuf 
         jw_kstr(w, "said", json_get_str(req, "text", ""));
         return 0;
     }
+    if (!strcmp(cmd, "failpos")) { /* fields written before a failure reach the error */
+        jw_kint(w, "pos", 7);
+        sb_puts(err, "bad");
+        return -1;
+    }
     if (!strcmp(cmd, "set_filter")) {
         jw_kuint(w, "len", strlen(json_get_str(req, "filter", "")));
         return 0;
@@ -102,6 +107,9 @@ static void test_ctl_tcp(void)
     CHECK_INT(calls, 1);
     CHECK_INT(exchange(c, s, "{\"id\":4,\"cmd\":\"nope\"}", line, sizeof(line), &calls), 0);
     CHECK_STR(line, "{\"id\":4,\"ok\":false,\"error\":\"unknown command\"}");
+    CHECK_INT(exchange(c, s, "{\"id\":44,\"cmd\":\"failpos\"}", line, sizeof(line), &calls), 0);
+    CHECK_STR(line, "{\"id\":44,\"ok\":false,\"error\":\"bad\",\"pos\":7}");
+    calls--;
     CHECK_INT(exchange(c, s, "not json", line, sizeof(line), &calls), 0);
     CHECK(strstr(line, "\"ok\":false") != NULL);
     CHECK_INT(exchange(c, s, "{\"id\":5}", line, sizeof(line), &calls), 0);
