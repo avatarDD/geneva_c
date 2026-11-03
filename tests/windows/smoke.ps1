@@ -119,8 +119,9 @@ foreach ($n in @("example.com", "example.org", "example.net", "iana.org")) {
 Write-Host "addresses: A $A ($HostA), B $B ($HostB)"
 
 function FetchAt([string]$ip, [string]$name, [int]$timeout = 10, [int]$times = 1) {
-    $urls = @(); for ($i = 0; $i -lt $times; $i++) { $urls += "http://$name/" }
-    $codes = & curl.exe -s -o NUL -w "%{http_code} " --max-time $timeout --resolve "${name}:80:$ip" @urls
+    # one -o per URL: with a single -o, curl prints the later bodies
+    $urls = @(); for ($i = 0; $i -lt $times; $i++) { $urls += @("-o", "NUL", "http://$name/") }
+    $codes = & curl.exe -s -w "%{http_code} " --max-time $timeout --resolve "${name}:80:$ip" @urls
     return "$codes".Trim()
 }
 function FilterFor([string]$ip) {
