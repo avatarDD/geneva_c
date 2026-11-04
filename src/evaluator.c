@@ -13,6 +13,13 @@
 #include "json.h"
 #include "log.h"
 
+/* An answer of the external controller that arrived for another worker. */
+#define EXT_BOX (EVAL_MAX_WORKERS * 2)
+typedef struct {
+    uint64_t id; /* 0: free */
+    probe_res r;
+} ext_answer;
+
 struct evaluator {
     eval_opts *o;
     eng_slots slots;
@@ -25,6 +32,12 @@ struct evaluator {
     volatile int eng_state; /* 0 starting, 1 running, else the exit code + 2 */
     int eng_rc;
     uint64_t ext_id;
+    /* external probe with several workers: one of them reads stdin at a
+     * time, and answers for the others wait here by id (ext_lock) */
+    plat_mutex_t ext_lock;
+    int ext_reading;
+    int ext_closed;
+    ext_answer ext_box[EXT_BOX];
     agent_conn *agent;
     plat_mutex_t lock; /* the GA batch: next individual */
 };
@@ -71,6 +84,7 @@ int evaluator_open(eval_opts *o, evaluator **out, sbuf *err)
     size_t nw = (size_t)o->workers;
     ev->o = o;
     plat_mutex_init(&ev->lock);
+    plat_mutex_init(&ev->ext_lock);
     plat_mutex_init(&ev->slots.lock);
     ev->slots.base = o->port_base;
     ev->slots.size = o->ports_per_worker;
@@ -147,6 +161,7 @@ void evaluator_close(evaluator *ev)
     }
     agent_close(ev->agent);
     plat_mutex_destroy(&ev->slots.lock);
+    plat_mutex_destroy(&ev->ext_lock);
     plat_mutex_destroy(&ev->lock);
     free(ev);
 }
@@ -188,14 +203,48 @@ static double combine(fitness_by by, const double *v, size_t n, double total)
     return r;
 }
 
+/* One line of the controller: {"id":N,"fitness":F,"detail":"..."} or
+ * {"id":N,"ok":true}. Returns the id (0 when the line is not an answer). */
+static uint64_t external_parse(const char *line, probe_res *r)
+{
+    const char *jerr = NULL;
+    json_val *v = json_parse(line, &jerr);
+    const json_val *fit;
+    uint64_t id;
+    if (!v) {
+        LOGW("eval", "external result: %s", jerr ? jerr : "bad JSON");
+        return 0;
+    }
+    id = (uint64_t)json_get_int(v, "id", 0);
+    memset(r, 0, sizeof(*r));
+    fit = json_get(v, "fitness");
+    if (fit && fit->type == JSON_NUM) {
+        r->fitness = json_get_num(v, "fitness", 0);
+        r->outcome = r->fitness > 0 ? PO_OK : PO_FAILED;
+    } else {
+        r->outcome = json_get_bool(v, "ok", 0) ? PO_OK : PO_FAILED;
+        r->fitness = probe_fitness(r->outcome);
+    }
+    snprintf(r->detail, sizeof(r->detail), "%s", json_get_str(v, "detail", "external"));
+    json_free(v);
+    return id;
+}
+
 /* Waits for the controller's verdict on an external run. Returns 0, or -1
- * when its input closed. */
+ * when its input closed. With several workers the requests are in flight
+ * together and the controller answers in any order: whichever worker reads
+ * stdin keeps the answers that belong to the others (by id) until they
+ * look; the rest wait their turn to read. */
 static int external_run(evaluator *ev, size_t w, const char *text, int run, probe_res *r)
 {
-    uint64_t id = ++ev->ext_id;
+    uint64_t id;
     ev_t e;
     char line[4096];
+    int multi = ev->o->workers > 1;
     memset(r, 0, sizeof(*r));
+    plat_mutex_lock(&ev->ext_lock);
+    id = ++ev->ext_id;
+    plat_mutex_unlock(&ev->ext_lock);
     ev_begin(&e, "eval_request");
     jw_kuint(&e.w, "id", id);
     jw_kstr(&e.w, "strategy", text ? text : "");
@@ -206,29 +255,65 @@ static int external_run(evaluator *ev, size_t w, const char *text, int run, prob
         jw_kstr(&e.w, "lports", lp);
     }
     ev_emit(&e);
-    while (fgets(line, sizeof(line), ev->o->ext_in)) {
-        const char *jerr = NULL;
-        json_val *v = json_parse(line, &jerr);
-        const json_val *fit;
-        if (!v) {
-            LOGW("eval", "external result: %s", jerr ? jerr : "bad JSON");
+    for (;;) {
+        probe_res got;
+        uint64_t gid;
+        int eof;
+        plat_mutex_lock(&ev->ext_lock);
+        for (size_t i = 0; i < EXT_BOX; i++) {
+            if (ev->ext_box[i].id == id) {
+                *r = ev->ext_box[i].r;
+                ev->ext_box[i].id = 0;
+                plat_mutex_unlock(&ev->ext_lock);
+                return 0;
+            }
+        }
+        if (ev->ext_closed) {
+            plat_mutex_unlock(&ev->ext_lock);
+            break;
+        }
+        if (ev->ext_reading) {
+            /* another worker reads: it leaves this answer in the box */
+            plat_mutex_unlock(&ev->ext_lock);
+            if (stopped(ev))
+                return -1;
+            plat_sleep_ms(5);
             continue;
         }
-        if ((uint64_t)json_get_int(v, "id", 0) != id) {
-            json_free(v);
-            continue;
+        ev->ext_reading = 1;
+        plat_mutex_unlock(&ev->ext_lock);
+        eof = !fgets(line, sizeof(line), ev->o->ext_in);
+        gid = eof ? 0 : external_parse(line, &got);
+        plat_mutex_lock(&ev->ext_lock);
+        ev->ext_reading = 0;
+        if (eof) {
+            ev->ext_closed = 1;
+            plat_mutex_unlock(&ev->ext_lock);
+            break;
         }
-        fit = json_get(v, "fitness");
-        if (fit && fit->type == JSON_NUM) {
-            r->fitness = json_get_num(v, "fitness", 0);
-            r->outcome = r->fitness > 0 ? PO_OK : PO_FAILED;
-        } else {
-            r->outcome = json_get_bool(v, "ok", 0) ? PO_OK : PO_FAILED;
-            r->fitness = probe_fitness(r->outcome);
+        if (gid == id) {
+            plat_mutex_unlock(&ev->ext_lock);
+            *r = got;
+            return 0;
         }
-        snprintf(r->detail, sizeof(r->detail), "%s", json_get_str(v, "detail", "external"));
-        json_free(v);
-        return 0;
+        if (multi && gid && gid + EXT_BOX > ev->ext_id && gid <= ev->ext_id + EXT_BOX) {
+            /* another worker's (or one whose request is being written):
+             * the oldest slot goes when the box is full, an answer nobody
+             * waits for any more */
+            size_t free_i = EXT_BOX, old_i = 0;
+            for (size_t i = 0; i < EXT_BOX; i++) {
+                if (!ev->ext_box[i].id && free_i == EXT_BOX)
+                    free_i = i;
+                if (ev->ext_box[i].id && ev->ext_box[i].id < ev->ext_box[old_i].id)
+                    old_i = i;
+            }
+            if (free_i == EXT_BOX)
+                free_i = old_i;
+            ev->ext_box[free_i].id = gid;
+            ev->ext_box[free_i].r = got;
+        }
+        /* else: a stale or unknown id, skipped as before */
+        plat_mutex_unlock(&ev->ext_lock);
     }
     LOGE("eval", "the controller closed the input of external results");
     return -1;
