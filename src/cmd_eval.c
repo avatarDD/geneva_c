@@ -227,7 +227,7 @@ int eval_parse_args(const args_t *a, const char *cmd, eval_opts *o)
             return -1;
         }
         /* several workers: the controller answers each eval_request by its id,
-         * in any order (1.1.2, feature "external_workers") */
+         * in any order (1.2, feature "external_workers") */
         o->ext_in = stdin;
         break;
     default:

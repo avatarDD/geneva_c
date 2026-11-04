@@ -10,7 +10,7 @@ CC      ?= cc
 AR      ?= ar
 STRIP   ?= strip
 O       ?= build
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 1.1.2)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 1.2.0)
 
 TARGET_TRIPLE := $(shell $(CC) -dumpmachine 2>/dev/null)
 ifneq (,$(findstring mingw,$(TARGET_TRIPLE))$(findstring windows,$(TARGET_TRIPLE)))

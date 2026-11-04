@@ -96,7 +96,7 @@ int cmd_version(int argc, char **argv)
 #ifdef PLAT_LINUX
         jw_str(&w, "firewall_none_eval"); /* eval/evolve --firewall none */
 #endif
-        jw_str(&w, "external_workers"); /* 1.1.2: --probe external with --workers N */
+        jw_str(&w, "external_workers"); /* 1.2: --probe external with --workers N */
         jw_arr_end(&w);
         jw_obj_end(&w);
         printf("%s\n", sb.data);
