@@ -36,7 +36,9 @@ Windows через WinDivert).
   заблокированных ресурсов (`docs/INTEGRATION.md`).
 - **Подборщик** (`geneva evolve`): генетический алгоритм Geneva с
   сохранением и продолжением поиска, базой найденных стратегий и
-  параллельной оценкой.
+  параллельной оценкой (`--workers N`, до 32 стратегий одновременно). С 1.2
+  параллельно работает и внешний контроллер (`--probe external --workers
+  N`): так программа с проверкой в браузере подбирает в несколько потоков.
 - **Оценщик** (`geneva eval`): пробы `http`, `tls`, `dns`, `tcp`, внешняя
   команда или внешний контроллер. Фитнес и штрафы как в Geneva. Успехом
   считается полный ответ, а не рукопожатие.
@@ -48,6 +50,20 @@ Windows через WinDivert).
   DNS-цензор для проверки стратегий на стенде.
 - **Офлайн** (`geneva apply`, `geneva check`): стратегия над pcap, проверка
   и каноническая форма стратегий.
+
+## Где используется
+
+geneva_c — движок режима «Авто» в
+[Zapret2_AutoTuner](https://github.com/avatarDD/Zapret2_AutoTuner) (ПК,
+Windows и Linux) и в [zapret-gui](https://github.com/avatarDD/zapret-gui)
+(роутер). Программа сама замечает заблокированные сервисы, подбирает каждому
+стратегию geneva (`geneva evolve --probe external`, каждая стратегия
+проверяется полной загрузкой страницы) и применяет её только к трафику этого
+сервиса (`geneva run --filter` на Windows, свои правила NFQUEUE на Linux).
+Найденными стратегиями обе программы обмениваются одним файлом
+(`zapret-gui/geneva-strategies`, `docs/INTEGRATION.md`).
+
+![Режим «Авто» в Zapret2_AutoTuner](docs/img/autotuner-auto.png)
 
 ## Как пользоваться: пример
 
@@ -121,6 +137,7 @@ build/geneva eval --host blocked.example                  # заблокиров
 sudo build/geneva eval --host blocked.example -s '[TCP:flags:PA]-fragment{tcp:-1:True}-| \/'
 build/geneva library -q --country china | sudo build/geneva eval --host blocked.example -f -
 sudo build/geneva evolve --host blocked.example --workers 8 --checkpoint search.ckpt --db db.jsonl
+build/geneva version --json                               # версия и features сборки
 build/geneva db --db db.jsonl top -n 5
 sudo build/geneva run -s '[TCP:flags:PA]-fragment{tcp:8:False}-| \/' -p 80,443 -c unix:/var/run/geneva.sock
 sudo build/geneva ctl stats
@@ -176,6 +193,7 @@ make CC=x86_64-w64-mingw32-gcc            # Windows
 | лабораторные цензоры и стенд | `docs/CENSOR.md` |
 | встраивание в zapret-gui и Zapret2_AutoTuner | `docs/INTEGRATION.md` |
 | план работ | `docs/PLAN.md` |
+| история версий | `CHANGELOG.md` |
 
 Справочник для ИИ-агентов, которые работают с этим репозиторием или
 встраивают geneva, — `.claude/skills/geneva/SKILL.md`.

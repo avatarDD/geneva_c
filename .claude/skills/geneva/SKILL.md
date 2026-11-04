@@ -125,8 +125,8 @@ target not blocked.
   Linux), `stats.passed_first`, `stats.flow_evictions`, `error.pos` for a
   filter that does not compile (exit 2 at start). `version --json`
   `features`: `filter`, `set_filter` (Windows), `first`,
-  `firewall_none_eval` (Linux). Integrators switch on features, not
-  versions.
+  `firewall_none_eval` (Linux); since 1.2 `external_workers`.
+  Integrators switch on features, not versions.
 - External probe (`--probe external --events - [--workers N]`): geneva
   emits `eval_request {id, strategy, run, lports}`; the controller connects
   from a local port in `lports` and writes `{"id":N,"ok":true}` or

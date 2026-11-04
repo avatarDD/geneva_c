@@ -42,7 +42,7 @@ geneva db --db /opt/geneva/db.jsonl top -n 5
 | `--packets PCAP` | — | настоящие пакеты, из которых берутся значения триггеров и tamper (как пакеты canary-фазы Geneva) |
 | `--probe`, `--host`, `--ip`, `--port`, ... | `http` | проба и цель (`docs/EVAL.md`) |
 | `--runs`, `--fitness-by` | 1, `avg` | прогонов на стратегию и как их объединять, как в Geneva |
-| `--workers` | 1 | стратегий, которые оцениваются одновременно |
+| `--workers` | 1 | стратегий, которые оцениваются одновременно (до 32; с `--probe external` — с 1.2, `docs/EVAL.md`; с `--agent` — только 1) |
 | `--residual-wait` | 0 | пауза после неудачи (остаточная цензура) |
 | `--no-baseline`, `--no-canary` | выкл. | не проверять блокировку без стратегии; не брать значения из её пакетов |
 | `-o DIR` | — | файлы `generationN.txt` и `hallN.txt`, как в Geneva |

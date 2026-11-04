@@ -26,7 +26,10 @@ WinDivert).
   none`. A strategy then applies only to the traffic of blocked resources
   (`docs/INTEGRATION.md`).
 - **Search** (`geneva evolve`): Geneva's genetic algorithm with saving and
-  resuming, a database of found strategies, and parallel evaluation.
+  resuming, a database of found strategies, and parallel evaluation
+  (`--workers N`, up to 32 strategies at once). Since 1.2 an external
+  controller works in parallel too (`--probe external --workers N`), so a
+  program that checks in a browser searches in several threads.
 - **Evaluation** (`geneva eval`): `http`, `tls`, `dns`, `tcp` probes, an
   external command or an external controller. Fitness and punishments as in
   Geneva. Success is a complete answer, not a handshake.
@@ -39,6 +42,20 @@ WinDivert).
   censor, to test strategies on a test bed.
 - **Offline** (`geneva apply`, `geneva check`): a strategy over a pcap,
   validation and the canonical form of strategies.
+
+## Where it is used
+
+geneva_c is the engine of the Auto mode in
+[Zapret2_AutoTuner](https://github.com/avatarDD/Zapret2_AutoTuner) (a PC,
+Windows and Linux) and in [zapret-gui](https://github.com/avatarDD/zapret-gui)
+(a router). The program notices blocked services by itself, searches a geneva
+strategy for each (`geneva evolve --probe external`, every strategy judged by
+a full page load) and applies it to that service's traffic only (`geneva run
+--filter` on Windows, its own NFQUEUE rules on Linux). Both programs share
+found strategies in one file format (`zapret-gui/geneva-strategies`,
+`docs/INTEGRATION.md`).
+
+![The Auto mode in Zapret2_AutoTuner](docs/img/autotuner-auto.png)
 
 ## How to use: an example
 
@@ -110,6 +127,7 @@ build/geneva eval --host blocked.example                  # is it blocked (no pr
 sudo build/geneva eval --host blocked.example -s '[TCP:flags:PA]-fragment{tcp:-1:True}-| \/'
 build/geneva library -q --country china | sudo build/geneva eval --host blocked.example -f -
 sudo build/geneva evolve --host blocked.example --workers 8 --checkpoint search.ckpt --db db.jsonl
+build/geneva version --json                               # version and build features
 build/geneva db --db db.jsonl top -n 5
 sudo build/geneva run -s '[TCP:flags:PA]-fragment{tcp:8:False}-| \/' -p 80,443 -c unix:/var/run/geneva.sock
 sudo build/geneva ctl stats
@@ -168,6 +186,7 @@ The documents are in Russian.
 | lab censors and the test bed | `docs/CENSOR.md` |
 | embedding in zapret-gui and Zapret2_AutoTuner | `docs/INTEGRATION.md` |
 | work plan | `docs/PLAN.md` |
+| version history | `CHANGELOG.md` |
 
 A reference for AI agents that work on this repository or embed geneva:
 `.claude/skills/geneva/SKILL.md` (in English).
