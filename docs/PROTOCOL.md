@@ -138,6 +138,7 @@ geneva ctl --json '{"cmd":"pause"}'
 | `set_filter` | Windows | команды `set_filter`, `reload_filter`, событие `filter` |
 | `first` | Linux, Windows | `--first N` работает (Windows: счёт в движке, с 1.1) |
 | `firewall_none_eval` | Linux | `eval`/`evolve --firewall none` |
+| `external_workers` | везде | `--probe external` с `--workers N`: запросы воркеров идут одновременно, ответы по `id` в любом порядке (с 1.2) |
 
 ## Сигналы (POSIX)
 
