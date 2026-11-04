@@ -127,10 +127,13 @@ target not blocked.
   `features`: `filter`, `set_filter` (Windows), `first`,
   `firewall_none_eval` (Linux). Integrators switch on features, not
   versions.
-- External probe (`--probe external --events - --workers 1`): geneva emits
-  `eval_request {id, strategy, run, lports}`; the controller connects from
-  a local port in `lports` and writes `{"id":N,"ok":true}` or
-  `{"id":N,"fitness":F}` to stdin.
+- External probe (`--probe external --events - [--workers N]`): geneva
+  emits `eval_request {id, strategy, run, lports}`; the controller connects
+  from a local port in `lports` and writes `{"id":N,"ok":true}` or
+  `{"id":N,"fitness":F}` to stdin. Since 1.2 (feature `external_workers`)
+  N workers ask at once, each with its own `lports`, and the controller
+  answers by id in any order (`external_run` in `evaluator.c` keeps the
+  answers for the other workers).
 
 ## Server-side (docs/SERVER_SIDE.md)
 

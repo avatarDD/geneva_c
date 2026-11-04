@@ -930,6 +930,60 @@ static void test_library(void)
     sb_free(&err);
 }
 
+/* --probe external with several workers: the requests are in flight
+ * together and the controller answers them in any order, by id. */
+static void test_external_workers(void)
+{
+    eval_opts o;
+    evaluator *ev = NULL;
+    sbuf err;
+    ga_ind inds[4];
+    FILE *in;
+    double sum = 0;
+    char path[256];
+    t_current = "evaluator (external, 2 workers)";
+    snprintf(path, sizeof(path), "geneva-test-ext-%d.txt", plat_getpid());
+    in = fopen(path, "w");
+    CHECK(in != NULL);
+    if (!in)
+        return;
+    /* answers before the requests and out of order; a stale id is skipped */
+    fputs("{\"id\":99,\"fitness\":1}\n{\"id\":2,\"fitness\":20}\nnot json\n{\"id\":1,\"fitness\":10}\n"
+          "{\"id\":4,\"ok\":true}\n{\"id\":3,\"fitness\":-30}\n", in);
+    fclose(in);
+    in = fopen(path, "r");
+    eval_opts_default(&o);
+    cfg_init(&o.probe, PROBE_EXTERNAL, srv.port);
+    o.use_engine = 0;
+    o.workers = 2;
+    o.ext_in = in;
+    sb_init(&err);
+    CHECK_INT(evaluator_open(&o, &ev, &err), 0);
+    memset(inds, 0, sizeof(inds));
+    for (size_t i = 0; i < ARRAY_LEN(inds); i++) {
+        inds[i].str = "[TCP:flags:PA]-drop-| \\/";
+        inds[i].s = strategy_parse(inds[i].str, &err);
+    }
+    CHECK_INT(evaluator_ga(ev, inds, ARRAY_LEN(inds)), 0);
+    for (size_t i = 0; i < ARRAY_LEN(inds); i++) {
+        CHECK(inds[i].fit > -1000);
+        sum += inds[i].fit;
+        strategy_free(inds[i].s);
+    }
+    /* 10 + 20 - 30 + 400 (ok), less one point per action and ten per idle tree
+     * (no engine: the trees never fire) for the successes, ten for the failure */
+    CHECK(sum == (10 - 1 - 10) + (20 - 1 - 10) + (-30 - 10) + (400 - 1 - 10));
+    /* the input ended: the next request fails instead of waiting */
+    {
+        eval_result r;
+        CHECK_INT(evaluator_eval(ev, "", &r), -1);
+    }
+    evaluator_close(ev);
+    fclose(in);
+    remove(path);
+    sb_free(&err);
+}
+
 void suite_probe(void)
 {
     test_agent_json();
@@ -946,6 +1000,7 @@ void suite_probe(void)
     test_exec();
     test_punish();
     test_evaluator();
+    test_external_workers();
     test_agent();
     server_stop();
 }

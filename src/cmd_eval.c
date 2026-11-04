@@ -226,10 +226,8 @@ int eval_parse_args(const args_t *a, const char *cmd, eval_opts *o)
             fprintf(stderr, "geneva %s: the external probe sends its requests as events: add --events\n", cmd);
             return -1;
         }
-        if (o->workers > 1) {
-            fprintf(stderr, "geneva %s: the external probe runs one strategy at a time (--workers 1)\n", cmd);
-            return -1;
-        }
+        /* several workers: the controller answers each eval_request by its id,
+         * in any order (1.2, feature "external_workers") */
         o->ext_in = stdin;
         break;
     default:
