@@ -3,6 +3,18 @@
 Протокол событий и управления — `proto 1` во всех версиях 1.x: новые поля,
 события и команды только добавляются.
 
+## Не выпущено
+
+Расширения `--ext` по `docs/EXT_ROADMAP.md` (паритет с zapret2). Без
+`--ext` поведение всех команд прежнее.
+
+- X0: ключ `--ext` у `run`, `check`, `apply`, `eval`, `evolve`, `fw`;
+  опции `--ext-*` без `--ext` — ошибка 2; в `--help` ключ не выводится,
+  чтобы вывод без `--ext` не менялся. Сборка `make EXT=0` без
+  `src/ext/` (тогда `--ext` — ошибка 2). Фича `ext` в `geneva version
+  --json`. Golden-снимки вывода команд (`tests/golden/run.sh`) в CI для
+  обеих сборок, бюджет размера `tools/ext_size.sh`.
+
 ## v1.2.0
 
 - `eval`/`evolve --probe external --workers N`: запросы `eval_request`

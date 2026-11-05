@@ -9,6 +9,10 @@
 #endif
 
 #include "args.h"
+#include "ext_opt.h"
+#if GENEVA_EXT
+#  include "ext/ext.h"
+#endif
 #include "geneva.h"
 #include "json.h"
 #include "log.h"
@@ -97,6 +101,10 @@ int cmd_version(int argc, char **argv)
         jw_str(&w, "firewall_none_eval"); /* eval/evolve --firewall none */
 #endif
         jw_str(&w, "external_workers"); /* 1.2: --probe external with --workers N */
+#if GENEVA_EXT
+        for (const char *const *f = ext_features; *f; f++)
+            jw_str(&w, *f); /* --ext and what it can do, last in the list */
+#endif
         jw_arr_end(&w);
         jw_obj_end(&w);
         printf("%s\n", sb.data);

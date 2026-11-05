@@ -178,6 +178,8 @@ void args_help(const char *usage, const optdef *defs)
     printf("%s\n\nOptions:\n", usage);
     for (const optdef *d = defs; d->name; d++) {
         char left[64];
+        if (!d->help)
+            continue; /* hidden: --ext keeps every help text as it was */
         if (d->shortopt)
             snprintf(left, sizeof(left), "-%c, --%s%s%s", d->shortopt, d->name,
                      d->has_arg ? " " : "", d->has_arg ? (d->meta ? d->meta : "VAL") : "");

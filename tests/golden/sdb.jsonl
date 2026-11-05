@@ -1,0 +1,4 @@
+{"s":"[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:chksum:corrupt},),)-| \\/","t":"http:example.com","runs":3,"ok":2,"fit_sum":512.5,"fit_best":397,"first":1730000000000,"last":1730000100000,"last_ok":1730000100000}
+{"s":"[TCP:flags:S]-drop-| \\/","t":"http:example.com","runs":1,"ok":0,"fit_sum":-400,"fit_best":-400,"first":1730000000000,"last":1730000000000,"last_ok":0}
+{"s":"[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:chksum:corrupt},),)-| \\/","t":"http:example.com","runs":2,"ok":2,"fit_sum":790,"fit_best":395,"first":1730000200000,"last":1730000300000,"last_ok":1730000300000}
+{"s":"[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},),)-| \\/","t":"tls:example.org","runs":4,"ok":3,"fit_sum":1100,"fit_best":390,"first":1730000000000,"last":1730000400000,"last_ok":1730000400000}

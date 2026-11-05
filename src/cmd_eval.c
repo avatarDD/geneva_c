@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ext_opt.h"
 #include "geneva.h"
 #include "log.h"
 #include "plat.h"
@@ -319,6 +320,7 @@ int cmd_eval(int argc, char **argv)
         {"verbose", 'v', 0, NULL, "same as --log-level trace"},
         {"quiet", 0, 0, NULL, "no log on stderr"},
         {"events", 'e', 1, "SINK", "JSON Lines events: - (stdout), stderr, FILE or none"},
+        EXT_OPT,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
@@ -349,7 +351,7 @@ int cmd_eval(int argc, char **argv)
     }
     sb_init(&err);
     eval_opts_default(&o);
-    if (parse_logging(&a, "eval") < 0 || eval_parse_args(&a, "eval", &o) < 0)
+    if (ext_parse_args(&a, "eval") < 0 || parse_logging(&a, "eval") < 0 || eval_parse_args(&a, "eval", &o) < 0)
         goto done;
     while ((s = arg_next(&a, "strategy", &idx)) != NULL) {
         strats = xrealloc(strats, (ns + 1) * sizeof(*strats));

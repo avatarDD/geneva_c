@@ -5,11 +5,13 @@
 #   make CC="zig cc -target mipsel-linux-musleabi" STATIC=1
 #   make CC=x86_64-w64-mingw32-gcc        (Windows; detected from the target)
 #   make test                    unit tests
+#   make EXT=0                   without the --ext extensions (src/ext/)
 
 CC      ?= cc
 AR      ?= ar
 STRIP   ?= strip
 O       ?= build
+EXT     ?= 1
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 1.2.0)
 
 TARGET_TRIPLE := $(shell $(CC) -dumpmachine 2>/dev/null)
@@ -47,6 +49,14 @@ ifeq ($(SMALL),1)
 endif
 
 SRCS    := $(filter-out src/main.c,$(wildcard src/*.c))
+HDRS    := $(wildcard src/*.h)
+ifeq ($(EXT),1)
+  XCFLAGS += -DGENEVA_EXT=1
+  SRCS    += $(wildcard src/ext/*.c)
+  HDRS    += $(wildcard src/ext/*.h)
+else
+  XCFLAGS += -DGENEVA_EXT=0
+endif
 OBJS    := $(SRCS:src/%.c=$(O)/%.o)
 TSRCS   := $(wildcard tests/*.c)
 TOBJS   := $(TSRCS:tests/%.c=$(O)/tests/%.o)
@@ -54,20 +64,36 @@ TOBJS   := $(TSRCS:tests/%.c=$(O)/tests/%.o)
 BIN     := $(O)/geneva$(EXE)
 TBIN    := $(O)/geneva-tests$(EXE)
 
-.PHONY: all test clean strip
+# What the objects depend on besides their sources: a different EXT (or
+# compiler, or flags) in the same O= rebuilds everything instead of mixing
+# objects of both builds.
+CONFIG      := $(O)/config.mk
+CONFIG_TEXT := CC=$(CC) EXT=$(EXT) OS=$(OS_TARGET) SMALL=$(SMALL) CFLAGS=$(CFLAGS)
+
+.PHONY: all test clean strip FORCE
 
 all: $(BIN)
 
-$(O) $(O)/tests:
+$(O) $(O)/tests $(O)/ext:
 	@mkdir -p $@
 
-$(O)/%.o: src/%.c src/*.h | $(O)
-	$(CC) $(CFLAGS) $(XCFLAGS) -c -o $@ $<
+$(CONFIG): FORCE | $(O)
+	@if [ "$$(cat $@ 2>/dev/null)" != '$(CONFIG_TEXT)' ]; then echo '$(CONFIG_TEXT)' > $@; fi
 
-$(O)/tests/%.o: tests/%.c tests/*.h src/*.h | $(O)/tests
+# src/ext/ before the generic rule: GNU make before 3.82 takes the first
+# matching pattern rule, not the one with the shortest stem
+$(O)/ext/%.o: src/ext/%.c $(HDRS) $(CONFIG) | $(O)/ext
 	$(CC) $(CFLAGS) $(XCFLAGS) -Isrc -c -o $@ $<
 
+$(O)/%.o: src/%.c $(HDRS) $(CONFIG) | $(O)
+	$(CC) $(CFLAGS) $(XCFLAGS) -c -o $@ $<
+
+$(O)/tests/%.o: tests/%.c tests/*.h $(HDRS) $(CONFIG) | $(O)/tests
+	$(CC) $(CFLAGS) $(XCFLAGS) -Isrc -c -o $@ $<
+
+# a fresh archive: "ar r" would keep members whose objects are no longer built
 $(O)/libgeneva.a: $(OBJS)
+	rm -f $@
 	$(AR) rcs $@ $^
 
 $(BIN): $(O)/main.o $(O)/libgeneva.a

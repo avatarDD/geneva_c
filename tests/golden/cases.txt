@@ -1,0 +1,60 @@
+# Golden cases: NAME|TAGS|COMMAND (sh syntax; $G is the binary, $D this
+# directory, $T a scratch directory).
+# TAG "ext": the command is run a second time with --ext right after the
+# subcommand and must print exactly the same (only in builds with "ext").
+# Regenerate after a deliberate change: tests/golden/run.sh --update BIN
+usage||$G
+help||$G --help
+unknown-command||$G nosuch
+help-agent||$G agent --help
+help-apply||$G apply --help
+help-censor||$G censor --help
+help-check||$G check --help
+help-ctl||$G ctl --help
+help-db||$G db --help
+help-eval||$G eval --help
+help-evolve||$G evolve --help
+help-fw||$G fw --help
+help-library||$G library --help
+help-run||$G run --help
+help-version||$G version --help
+version||$G version
+version-json||$G version --json
+check-corpus|ext|$G check -f $D/ok.txt
+check-corpus-pretty|ext|$G check --pretty -f $D/ok.txt
+check-corpus-json|ext|$G check --json -f $D/ok.txt
+check-bad|ext|$G check -f $D/bad.txt
+check-bad-json|ext|$G check --json -f $D/bad.txt
+check-none|ext|$G check
+check-bad-option|ext|$G check --nosuch x
+check-stdin|ext|echo '[TCP:flags:S]-duplicate(tamper{TCP:flags:replace:SA},)-| \/ [TCP:flags:R]-drop-|' | $G check -f -
+apply-pass|ext|$G apply -s '\/' -i $D/in.pcap -v --json
+apply-dup-tamper|ext|$G apply --rng-seed 7 -s '[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:chksum:corrupt},),)-| \/' -i $D/in.pcap -p 80,443 -v --json -o $T/out.pcap && od -An -tx1 -v $T/out.pcap
+apply-fragment|ext|$G apply --rng-seed 7 -s '[TCP:flags:PA]-fragment{tcp:8:False}-| [UDP:dport:53]-fragment{ip:8:True}-| \/' -i $D/in.pcap -p 53,80,443 -v -o $T/out.pcap && od -An -tx1 -v $T/out.pcap
+apply-in|ext|$G apply --rng-seed 7 -s '\/ [TCP:flags:SA]-tamper{TCP:window:replace:10}-| [TCP:flags:R]-|' -i $D/in.pcap -p 80,443 -v --json -o $T/out.pcap && od -An -tx1 -v $T/out.pcap
+apply-dns|ext|$G apply --rng-seed 7 -s '[UDP:dport:53]-tamper{DNS:qd:compress}-| \/' -i $D/in.pcap -p 53 -v --json -o $T/out.pcap && od -An -tx1 -v $T/out.pcap
+apply-sleep|ext|$G apply --rng-seed 7 -s '[TCP:flags:PA]-duplicate(,sleep{0.5})-| \/' -i $D/in.pcap -p 80 -v --json
+apply-bad-strategy|ext|$G apply -s '[TCP:nosuch:1]-drop-|' -i $D/in.pcap
+apply-no-input|ext|$G apply -s '\/'
+library||$G library
+library-all||$G library --all
+library-json||$G library --json
+library-china-http||$G library --country china --test http -q
+library-censor||$G library --censor 3
+fw-print|ext|$G fw print -p 443
+fw-print-iptables|ext|$G fw print -p 80,443 --proto tcp,udp --firewall iptables -i eth0 --first 6
+fw-print-nft-prenat|ext|$G fw print -p 443 --firewall nft --prenat --dir out -4 --queue 320 --mark 0x10000000
+fw-print-server|ext|$G fw print -p 8000-8100 --server-side --no-notrack --no-bypass -6
+fw-print-forward|ext|$G fw print -p 80 --forward-to 10.0.0.2
+fw-print-eval|ext|$G fw print --local-ports 30000 --workers 2 --probe dns
+fw-print-bad|ext|$G fw print -p 443 --dir sideways
+fw-no-action|ext|$G fw -p 443
+run-no-strategy|ext|$G run -p 443
+run-bad-option|ext|$G run --nosuch
+eval-bad-option|ext|$G eval --nosuch
+evolve-bad-option|ext|$G evolve --nosuch
+db-list||$G db --db $D/sdb.jsonl list
+db-top||$G db --db $D/sdb.jsonl top
+db-show||$G db --db $D/sdb.jsonl show '[TCP:flags:S]-drop-| \/'
+db-export||$G db --db $D/sdb.jsonl export
+ctl-bad-option||$G ctl --nosuch
