@@ -455,10 +455,10 @@ static void emit(xsend *s, const uint8_t *p, size_t n)
         s->n++;
 }
 
-static void fired(censor_result *r, const char *action, int accept)
+static void fired(censor_result *r, const char *act, int accept)
 {
     r->what = CENSOR_FIRED;
-    r->action = action;
+    r->action = act;
     r->accept = accept;
 }
 

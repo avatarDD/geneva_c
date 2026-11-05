@@ -21,7 +21,10 @@ typedef struct {
     int fw_on;
 } nfq_state;
 
-typedef uint32_t nfq_pctx; /* the NFQUEUE packet id */
+/* the NFQUEUE packet id first, then what the extensions read (meta) */
+typedef struct {
+    uint32_t id, mark, indev, outdev;
+} nfq_pctx;
 
 static int nfq_be_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len)
 {
@@ -45,10 +48,17 @@ static int nfq_be_inject(eng_worker *w, const void *pctx, const uint8_t *data, s
     return 0;
 }
 
+static void nfq_be_meta(const void *pctx, uint32_t *mark, uint32_t *ifin, uint32_t *ifout)
+{
+    nfq_pctx c;
+    memcpy(&c, pctx, sizeof(c));
+    *mark = c.mark, *ifin = c.indev, *ifout = c.outdev;
+}
+
 static void on_msg(const nfq_msg *m, void *ctx)
 {
     eng_worker *w = ctx;
-    nfq_pctx id = m->id;
+    nfq_pctx id = {m->id, m->mark, m->indev, m->outdev};
     int dir;
     switch (m->hook) {
     case NFQ_HOOK_PRE_ROUTING:
@@ -67,7 +77,7 @@ static void on_msg(const nfq_msg *m, void *ctx)
 
 static void pass_msg(const nfq_msg *m, void *ctx)
 {
-    nfq_pctx id = m->id;
+    nfq_pctx id = {m->id, m->mark, m->indev, m->outdev};
     nfq_be_verdict(ctx, &id, 1, NULL, 0);
 }
 
@@ -183,6 +193,7 @@ const backend nfq_backend = {
     0,    /* --first: conntrack in the rules */
     NULL, /* no capture filter: rules */
     NULL,
+    nfq_be_meta,
 };
 
 #endif

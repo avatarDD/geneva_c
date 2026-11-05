@@ -414,11 +414,13 @@ static void packet(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir
     int fired;
     size_t first = 0;
 
-    if (e->o->ext && e->o->ext->packet && e->o->ext->packet(w, p, dir, data, len, pctx)) {
+    if (e->o->ext && e->o->ext->packet && e->o->ext->packet(w, st, p, dir, data, len, pctx)) {
+        w->xctx = NULL;
         pkt_free(p); /* the extensions gave the verdict */
         return;
     }
     if (e->paused || !st) {
+        w->xctx = NULL;
         pkt_free(p);
         w->c.accepted++;
         give_verdict(w, pctx, 1, NULL, 0);
@@ -426,7 +428,8 @@ static void packet(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir
     }
     if (log_enabled(LOG_TRACE))
         orig = pkt_copy(p);
-    fired = strategy_apply(st, p, dir, &out);
+    fired = strategy_apply_x(st, p, dir, &out, w->xctx);
+    w->xctx = NULL;
     if (orig) {
         trace_pkt(w, dir, orig, &out, fired);
         pkt_free(orig);

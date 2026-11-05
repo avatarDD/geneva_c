@@ -70,3 +70,10 @@ help-ext-run|extonly|$G run --help
 censor-ext-list|extonly|$G censor --ext --list
 censor-ext-17-needs-block-ip|extonly|$G censor --ext -c 17
 censor-ext-bad-block-ip|extonly|$G censor --ext -c 17 --block-ip 1.2.3
+flow-without-ext||$G check '[FLOW:n:1-3]-drop-| \/'
+check-ext-flow|extonly|$G check --ext '[FLOW:n:1-3]-drop-| [FLOW:rd:d2<d5]-drop-| [FLOW:state:est]-drop-| [META:mark:0x10/0xff]-drop-| \/'
+check-ext-flow-bad|extonly|$G check --ext '[FLOW:n:1~2]-drop-| \/'
+apply-ext-posdebug|extonly|$G apply --ext --ext-posdebug -s '\/' -i $D/in.pcap -p 53,80,443
+apply-ext-flow|extonly|$G apply --ext --rng-seed 7 -s '[FLOW:d:1-1]-tamper{TCP:window:replace:7}-| [FLOW:n:<2]-tamper{TCP:urgptr:replace:9}-| \/' -i $D/in.pcap -p 53,80,443 -v --json -o $T/out.pcap && od -An -tx1 -v $T/out.pcap
+apply-ext-ctrack-disable|extonly|$G apply --ext --ext-ctrack-disable --ext-posdebug -s '[FLOW:n:a]-tamper{TCP:window:replace:7}-| [FLOW:n:1-]-drop-| \/' -i $D/in.pcap -p 80 -v
+apply-ext-bad-timeouts|extonly|$G apply --ext --ext-ctrack-timeouts 1:2 -s '\/' -i $D/in.pcap

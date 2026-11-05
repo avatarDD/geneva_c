@@ -28,7 +28,7 @@ English twin.
 | `src/sdb.c` | strategy database (JSONL) |
 | `src/ctl.c`, `json.c`, `log.c` | line-JSON control socket, JSON reader/writer, logging and events |
 | `src/cmd_*.c`, `main.c` | commands |
-| `src/ext_opt.c`, `src/ext/` | the `--ext` extensions (zapret2 parity, `docs/EXT_ROADMAP.md`, done so far: `docs/EXT.md`); `src/ext/` is left out by `make EXT=0`. Options that need `--ext` get `EXT_HELP("...")` as help: `--help` lists them last under "Extensions (with --ext):". `crypto*` (AES-GCM, SHA-256, HKDF), `quic`/`tls` (Initial decryption, ClientHello SNI), `censor_x` (lab censors 12-20) |
+| `src/ext_opt.c`, `src/ext/` | the `--ext` extensions (zapret2 parity, `docs/EXT_ROADMAP.md`, done so far: `docs/EXT.md`); `src/ext/` is left out by `make EXT=0`. Options that need `--ext` get `EXT_HELP("...")` as help: `--help` lists them last under "Extensions (with --ext):". `crypto*` (AES-GCM, SHA-256, HKDF), `quic`/`tls` (Initial decryption, ClientHello SNI), `censor_x` (lab censors 12-20), `ctrack` (zapret2 conntrack), `range` (zapret2 position ranges), `xtrig` (`FLOW:`/`META:` triggers via `strategy_set_xtrig`, per-flow tree cutoff), `ext.c` (`ext_activate`, engine hooks, `xoff_*` for `apply --ext`) |
 | `tests/*.c` | unit tests (`make test`), no framework |
 | `tests/golden/` | snapshots of every command's output without `--ext` (and with it for strategies without x-actions); the "Extensions (with --ext):" help section is cut there and pinned in `expected-ext.txt` (tag `extonly`) |
 | `tests/e2e/*.sh` | root-only tests in network namespaces |
@@ -65,7 +65,7 @@ make CC=x86_64-w64-mingw32-gcc
 make EXT=0                   # without src/ext/ (--ext is then exit 2)
 make EXT_CRYPTO=0            # src/ext/ without crypto_*.c: no QUIC decryption, no censor 16
 tests/golden/run.sh build/geneva            # output snapshots; --update after a deliberate change
-tools/ext_size.sh 24576 CC=musl-gcc         # router size budget of src/ext/ (CI: ci.yml)
+tools/ext_size.sh 32768 CC=musl-gcc         # router size budget of src/ext/ (CI: ci.yml)
 sudo tests/e2e/run.sh build/geneva          # engine
 sudo tests/e2e/evolve.sh build/geneva       # search against a keyword censor
 sudo tests/e2e/censors.sh build/geneva [1 2 ... dns evolve server]

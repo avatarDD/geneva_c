@@ -17,6 +17,9 @@
 #include "rng.h"
 #include "strategy.h"
 #include "util.h"
+#if GENEVA_EXT
+#  include "ext/ext.h"
+#endif
 
 /* ---- check --------------------------------------------------------------- */
 
@@ -196,6 +199,8 @@ int cmd_apply(int argc, char **argv)
         {"json", 0, 0, NULL, "print a JSON summary to stdout"},
         {"verbose", 'v', 0, NULL, "log every packet and its result to stderr"},
         EXT_OPT,
+        EXT_CTRACK_OPTS,
+        {"ext-posdebug", 0, 0, NULL, EXT_HELP("print zapret2's posdebug line of every packet to stderr")},
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
@@ -212,6 +217,10 @@ int cmd_apply(int argc, char **argv)
     int64_t seed = 0;
     uint64_t n_in = 0, n_out = 0, n_skipped = 0, n_changed = 0;
     pcap_rec rec;
+#if GENEVA_EXT
+    xoffline *xo = NULL;
+    int posdebug = 0;
+#endif
 
     sb_init(&e);
     sb_init(&line);
@@ -270,6 +279,10 @@ int cmd_apply(int argc, char **argv)
         rc = EXIT_STRATEGY;
         goto done;
     }
+#if GENEVA_EXT
+    xo = xoff_new();
+    posdebug = arg_has(&a, "ext-posdebug");
+#endif
     rd = pcap_open_read(arg_str(&a, "input", "-"), &e);
     if (!rd) {
         fprintf(stderr, "geneva apply: %s\n", e.data);
@@ -313,13 +326,34 @@ int cmd_apply(int argc, char **argv)
         if (pass) {
             pktlist_push(&out, p);
         } else {
-            fired = strategy_apply(st, p, dir, &out);
+            void *xctx = NULL;
+#if GENEVA_EXT
+            int bypass = 0;
+            if (xo) {
+                xctx = xoff_packet(xo, st, p, dir, rec.ts_ns / 1000000, &bypass);
+                if (posdebug) {
+                    sb_reset(&line);
+                    xoff_posdebug(xo, dir, p, &line);
+                    fprintf(stderr, "%s\n", line.data);
+                    if (verbose)
+                        describe(p, &line);
+                }
+            }
+            if (bypass) {
+                pktlist_push(&out, p);
+                goto applied;
+            }
+#endif
+            fired = strategy_apply_x(st, p, dir, &out, xctx);
             /* inbound packets cannot branch: the engine accepts the first
              * result (possibly modified) or drops the packet */
             if (dir == DIR_IN)
                 while (out.n > 1)
                     pkt_free(out.v[--out.n]);
         }
+#if GENEVA_EXT
+    applied:
+#endif
         if (fired)
             n_changed++;
         if (verbose)
@@ -385,6 +419,9 @@ done:
         pcap_close_write(wr);
     pcap_close_read(rd);
     strategy_free(st);
+#if GENEVA_EXT
+    xoff_free(xo);
+#endif
     free(text);
     sb_free(&e);
     sb_free(&line);

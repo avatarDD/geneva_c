@@ -17,4 +17,33 @@
  * extensions; NULL-terminated. Integrators switch on these. */
 extern const char *const ext_features[];
 
+#include "args.h"
+#include "strategy.h"
+
+struct ext_hooks;
+
+/* Called by ext_parse_args() once a command took --ext: registers the
+ * triggers of the extensions and reads the --ext-* options common to the
+ * commands (--ext-ctrack-*). Prints "geneva CMD: ..." and returns -1 on a
+ * bad value. */
+int ext_activate(const args_t *a, const char *cmd);
+/* Back to the state before ext_activate() (tests). */
+void ext_deactivate(void);
+
+/* The engine hooks of the extensions (conntrack, FLOW and META triggers)
+ * for engine_opts.ext; NULL without --ext. */
+const struct ext_hooks *ext_engine_hooks(void);
+
+/* The same for "geneva apply --ext" over a capture: the conntrack fed with
+ * the capture's times. NULL without --ext. */
+typedef struct xoffline xoffline;
+xoffline *xoff_new(void);
+void xoff_free(xoffline *x);
+/* The context for strategy_apply_x() for p; *bypass is 1 when every tree
+ * of dir is cut off on its flow (the packet passes by the strategy). */
+void *xoff_packet(xoffline *x, const strategy *st, const gpkt *p, strat_dir dir, uint64_t now_ms, int *bypass);
+/* zapret2's posdebug line for the packet xoff_packet() just took, without
+ * its time ("posdebug: out direct n1 d0 b0 s0 p0 reverse n0 ... payload 0"). */
+void xoff_posdebug(const xoffline *x, strat_dir dir, const gpkt *p, sbuf *out);
+
 #endif
