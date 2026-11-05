@@ -186,6 +186,7 @@ The documents are in Russian.
 | lab censors and the test bed | `docs/CENSOR.md` |
 | embedding in zapret-gui and Zapret2_AutoTuner | `docs/INTEGRATION.md` |
 | work plan | `docs/PLAN.md` |
+| `--ext` design: comparison with zapret2, autonomous adaptation (Russian) | `docs/EXT_ROADMAP.md` |
 | version history | `CHANGELOG.md` |
 
 A reference for AI agents that work on this repository or embed geneva:
