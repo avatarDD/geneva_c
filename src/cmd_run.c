@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "args.h"
+#include "ext_opt.h"
 #include "engine.h"
 #include "evaluator.h"
 #include "fw.h"
@@ -202,6 +203,7 @@ int cmd_run(int argc, char **argv)
         {"log-file", 0, 1, "FILE", "also write the log to FILE"},
         {"verbose", 'v', 0, NULL, "log every packet (same as --log-level trace)"},
         {"quiet", 0, 0, NULL, "no log on stderr"},
+        EXT_OPT,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
@@ -228,6 +230,8 @@ int cmd_run(int argc, char **argv)
     }
     engine_opts_default(&o);
     rc = EXIT_USAGE;
+    if (ext_parse_args(&a, "run") < 0)
+        goto done;
     if (a.npos) {
         fprintf(stderr, "geneva run: unexpected argument \"%s\"\n", a.pos[0]);
         goto done;
@@ -271,6 +275,7 @@ int cmd_fw(int argc, char **argv)
         {"workers", 0, 1, "N", "with --local-ports: the evaluator's workers, 64 ports each (default 1)"},
         {"probe", 0, 1, "KIND", "with --local-ports: dns, exec and external probes add UDP"},
         {"log-level", 'l', 1, "LEVEL", "debug shows every command"},
+        EXT_OPT,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
@@ -297,6 +302,8 @@ int cmd_fw(int argc, char **argv)
         args_free(&a);
         return EXIT_OK;
     }
+    if (ext_parse_args(&a, "fw") < 0)
+        goto done;
     fw_config_default(&c);
     if (a.npos != 1) {
         fprintf(stderr, "geneva fw: need one action: print, up or down\n");

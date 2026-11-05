@@ -1,0 +1,16 @@
+# Geneva corpus, strategies Geneva rejects
+\/ [TCP:flags:SA]-sleep{1}-|
+[TCP:thisdontexist:1]-drop-|
+[]-asdfasdf
+[TCP:thing:1]-nooooooope
+[TCP:flags:R]-duplicate(drop, drop)-| \/
+[TCP:]-|
+[TCP:flags:0]-foo-|
+[TCP:flags:0]-duplicate(,,,)-|
+[TCP:flags:0]-duplicate()))-|
+[TCP:flags:0]-duplicate(((()-|
+[TCP:flags:0]-duplicate(,))))-|
+[TCP:flags:0]-drop(duplicate,)-|
+[TCP:flags:0]-drop(duplicate,duplicate)-|
+[TCP:flags:0]-tamper{TCP:flags:replace:S}(,duplicate)-|
+[TCP:flags:0]-tamper{TCP:flags:replace:S}(drop,duplicate)-|

@@ -159,6 +159,9 @@ if (!$A -or !$B) {
 
         $s0 = Ctl @("stats")
         Check ((FetchAt $A $HostA) -match '^[23]') "filter: HTTP to A works"
+        # the last ACK of A's teardown can leave after curl returns: let it
+        # pass before the counters that B must not move are read
+        Start-Sleep -Seconds 1
         $s1 = Ctl @("stats")
         Check ($s1.triggered -gt $s0.triggered) "filter: SYN to A duplicated ($($s0.triggered) -> $($s1.triggered))"
         Check ((FetchAt $B $HostB) -match '^[23]') "filter: HTTP to B works"

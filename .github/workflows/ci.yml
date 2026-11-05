@@ -16,6 +16,24 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and unit tests
         run: make -j"$(nproc)" CC=${{ matrix.cc }} CFLAGS="-O1 -g -Werror" test
+      # Without --ext every command prints what it printed before the
+      # extensions (docs/EXT_ROADMAP.md, X0); with --ext too, for strategies
+      # without x-actions. Same snapshots for the build without src/ext/.
+      - name: Golden snapshots
+        run: tests/golden/run.sh build/geneva
+      # the engine's worker contexts and the probes' threads (EXT_ROADMAP 7.1)
+      - name: ThreadSanitizer
+        if: matrix.cc == 'gcc'
+        run: |
+          make -j"$(nproc)" CC=gcc O=build-tsan \
+            CFLAGS="-O1 -g -Werror -fsanitize=thread" LDFLAGS="-fsanitize=thread" test
+      - name: Build without cryptography (EXT_CRYPTO=0)
+        run: |
+          make -j"$(nproc)" CC=${{ matrix.cc }} O=build-nocrypto EXT_CRYPTO=0 CFLAGS="-O1 -g -Werror" test
+      - name: Build without the extensions (EXT=0)
+        run: |
+          make -j"$(nproc)" CC=${{ matrix.cc }} O=build-noext EXT=0 CFLAGS="-O1 -g -Werror" test
+          tests/golden/run.sh build-noext/geneva
       - name: Sanitizers
         if: matrix.cc == 'clang'
         run: |
@@ -40,12 +58,40 @@ jobs:
       - name: service scripts e2e (Entware, OpenWrt procd)
         run: sudo tests/e2e/initscripts.sh build/geneva
 
+  # Lab censors 12-20 (--ext), and the official nfqws2 with reference
+  # strategies getting past them (docs/CENSOR.md). zapret2 comes from its
+  # official release, checked against the hash Zapret2_AutoTuner pins.
+  censors-ext:
+    runs-on: ubuntu-24.04
+    env:
+      ZAPRET2_TAG: v1.0.6
+      ZAPRET2_SHA256: e141b51b60c895fe9548f4d644365461dcad8155e068d284a9aae1724504237d
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ethtool nftables iptables curl openssl unzip
+      - run: make -j"$(nproc)" CFLAGS="-O1 -g -Werror"
+      - name: zapret2 release
+        run: |
+          curl -fsSL -o zapret2.zip \
+            "https://github.com/bol-van/zapret2/releases/download/$ZAPRET2_TAG/zapret2-$ZAPRET2_TAG.zip"
+          echo "$ZAPRET2_SHA256  zapret2.zip" | sha256sum -c -
+          sudo mkdir -p /opt/zapret2 && sudo unzip -q zapret2.zip -d /opt/zapret2
+          dir=$(dirname "$(dirname "$(dirname "$(find /opt/zapret2 -path '*/binaries/linux-x86_64/nfqws2' | head -1)")")")
+          sudo chmod -R a+rX /opt/zapret2 && sudo chmod +x "$dir/binaries/linux-x86_64/nfqws2"
+          echo "NFQWS2_DIR=$dir" >> "$GITHUB_ENV"
+      - name: censors 12-20 and nfqws2 against them
+        run: sudo env NFQWS2_DIR="$NFQWS2_DIR" tests/e2e/censors_x.sh build/geneva
+
   musl-static:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: make -j"$(nproc)" CC=musl-gcc STATIC=1 SMALL=1 CFLAGS="-Werror" test
+      # size of src/ext/ in the router build; the budget grows by stage (6.1)
+      # X2 (lab censors 12-20, TLS/QUIC reading, AES-GCM/HKDF): about 16 KB
+      - run: tools/ext_size.sh 24576 CC=musl-gcc CFLAGS="-Werror"
+      - run: tools/ext_size.sh 20480 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
       - run: ls -la build/geneva && file build/geneva
 
   windows-cross:
@@ -54,6 +100,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
       - run: make -j"$(nproc)" CC=x86_64-w64-mingw32-gcc STATIC=1 CFLAGS="-O2 -Werror"
+      - run: make -j"$(nproc)" CC=x86_64-w64-mingw32-gcc STATIC=1 O=build-noext EXT=0 CFLAGS="-O2 -Werror"
       # No upload-artifact here: the account's Actions artifact storage quota
       # is exhausted, and releases publish binaries directly instead.
       - run: ls -la build/geneva.exe && file build/geneva.exe

@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "args.h"
+#include "ext_opt.h"
 #include "geneva.h"
 #include "json.h"
 #include "log.h"
@@ -70,6 +71,7 @@ int cmd_check(int argc, char **argv)
         {"pretty", 'p', 0, NULL, "draw the action trees like Geneva's pretty_print()"},
         {"json", 0, 0, NULL, "one JSON object per strategy"},
         {"quiet", 'q', 0, NULL, "only report errors"},
+        EXT_OPT,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
@@ -87,6 +89,10 @@ int cmd_check(int argc, char **argv)
                   defs);
         args_free(&a);
         return EXIT_OK;
+    }
+    if (ext_parse_args(&a, "check") < 0) {
+        args_free(&a);
+        return EXIT_USAGE;
     }
     for (int i = 0; i < a.npos; i++, n++)
         bad |= check_one(a.pos[i], arg_has(&a, "pretty"), arg_has(&a, "json"), arg_has(&a, "quiet"));
@@ -189,6 +195,7 @@ int cmd_apply(int argc, char **argv)
         {"rng-seed", 0, 1, "N", "seed for corrupt/random values (reproducible output)"},
         {"json", 0, 0, NULL, "print a JSON summary to stdout"},
         {"verbose", 'v', 0, NULL, "log every packet and its result to stderr"},
+        EXT_OPT,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
@@ -216,6 +223,10 @@ int cmd_apply(int argc, char **argv)
         args_help("Usage: geneva apply -s STRATEGY -i IN.pcap [-o OUT.pcap] [options]\n"
                   "Runs every packet of a capture through a strategy, like the engine would.",
                   defs);
+        goto done;
+    }
+    if (ext_parse_args(&a, "apply") < 0) {
+        rc = EXIT_USAGE;
         goto done;
     }
     verbose = arg_has(&a, "verbose");

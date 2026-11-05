@@ -9,6 +9,10 @@
 #endif
 
 #include "args.h"
+#include "ext_opt.h"
+#if GENEVA_EXT
+#  include "ext/ext.h"
+#endif
 #include "geneva.h"
 #include "json.h"
 #include "log.h"
@@ -44,6 +48,11 @@ static void usage(FILE *f)
     for (size_t i = 0; i < ARRAY_LEN(commands); i++)
         fprintf(f, "  %-10s %s\n", commands[i].name, commands[i].summary);
     fprintf(f, "\nRun \"geneva <command> --help\" for command options.\n");
+#if GENEVA_EXT
+    fprintf(f, "\nExtensions (with --ext):\n"
+               "  --ext after a command turns on the extensions beyond Geneva:\n"
+               "  censor models 12-20 (geneva censor --ext --list). See docs/EXT.md.\n");
+#endif
 }
 
 int cmd_version(int argc, char **argv)
@@ -97,6 +106,10 @@ int cmd_version(int argc, char **argv)
         jw_str(&w, "firewall_none_eval"); /* eval/evolve --firewall none */
 #endif
         jw_str(&w, "external_workers"); /* 1.2: --probe external with --workers N */
+#if GENEVA_EXT
+        for (const char *const *f = ext_features; *f; f++)
+            jw_str(&w, *f); /* --ext and what it can do, last in the list */
+#endif
         jw_arr_end(&w);
         jw_obj_end(&w);
         printf("%s\n", sb.data);

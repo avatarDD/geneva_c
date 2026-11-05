@@ -1,0 +1,145 @@
+### help-ext
+$ $G --help
+geneva VERSION - genetic censorship evasion (C port of Geneva)
+
+Usage: geneva <command> [options]
+
+Commands:
+  agent      run the probes of a server-side evaluation (no root)
+  apply      run a strategy over a pcap file offline
+  censor     run one of Geneva's lab censors on a Linux router
+  check      parse, validate and print strategies
+  ctl        talk to a running engine over its control socket
+  db         list, rank, export and prune the strategy database
+  eval       evaluate strategies against a target with a probe
+  evolve     search for strategies with the genetic algorithm
+  fw         print, apply or remove the firewall rules of run
+  library    list the built-in strategies of Geneva's library
+  run        apply a strategy to live traffic (NFQUEUE or WinDivert)
+  version    print version and build features
+
+Run "geneva <command> --help" for command options.
+
+Extensions (with --ext):
+  --ext after a command turns on the extensions beyond Geneva:
+  censor models 12-20 (geneva censor --ext --list). See docs/EXT.md.
+[exit 0]
+### help-ext-censor
+$ $G censor --help
+Usage: geneva censor -c NAME [options]
+Runs a lab censor of Geneva on a Linux router: packets forwarded to and from
+PORTS pass through it. Needs root. SIGHUP resets the censor's state (Geneva
+starts a fresh censor for every strategy); SIGINT/SIGTERM stop it and
+remove the firewall rules. See docs/CENSOR.md.
+
+Options:
+  -c, --censor NAME              censor model: 1-11, 8b or dns (see --list)
+      --list                     list the censor models
+  -p, --port PORTS               ports of the censored service (default 80; dns: 53)
+  -w, --forbidden WORD           forbidden content (repeatable; default ultrasurf)
+      --censor-ip ADDR           source of RSTs to the server: client (default), router (as Geneva) or an address
+      --dns-answer ADDR          dns: forged A or AAAA answer (default 10.10.34.34, 2001:db8::34)
+  -q, --queue N                  NFQUEUE number (default 400)
+      --mark MASK                fwmark of the packets the censor sends (default 0x20000000)
+      --firewall TYPE            auto, nft, iptables, or none (rules set up by hand)
+  -i, --iface IF                 only packets that arrive on this interface
+      --duration SEC             stop after SEC seconds
+  -e, --events SINK              JSON Lines events: - (stdout), stderr, FILE or none
+  -l, --log-level LEVEL          error, warn, info (default), debug or trace
+      --log-format FMT           text (default) or json
+      --log-file FILE            also write the log to FILE
+  -v, --verbose                  same as --log-level trace
+      --quiet                    no log on stderr
+  -h, --help                     show help
+
+Extensions (with --ext):
+      --ext                      turn on the extensions: models 12-20 (--ext --list)
+      --freeze-bytes N           censor 12: bytes to the client before the freeze (16384)
+      --rate BPS                 censor 13: bytes per second to the client (16384)
+      --burst BYTES              censor 13: bucket depth in bytes (32768)
+      --rst-ttl N                censor 14: TTL of the injected RSTs (64)
+      --min-ttl N                censor 19: packets below this TTL are not inspected (2)
+      --redirect URL             censor 18: Location of the 302 (http://block.example/)
+      --block-ip ADDR            censor 17: blocked address, repeatable (up to 16)
+[exit 0]
+### help-ext-run
+$ $G run --help
+Usage: geneva run -s STRATEGY -p PORTS [options]
+Applies a strategy to live traffic: NFQUEUE on Linux (root), WinDivert on
+Windows (Administrator, WinDivert.dll and WinDivert64.sys next to geneva.exe).
+Signals: SIGHUP re-reads --strategy-file, SIGUSR1 emits stats,
+SIGINT/SIGTERM stop and remove the firewall rules.
+
+Options:
+  -s, --strategy STRATEGY        strategy to run
+  -f, --strategy-file FILE       read the strategy from FILE (re-read on SIGHUP)
+  -p, --server-port PORTS        ports of the service: 443 or 80,443 or 8000-8100 (required)
+      --server-side              run on the server: outbound packets come from PORTS
+      --proto LIST               tcp, udp or tcp,udp (default tcp)
+  -q, --queue N                  NFQUEUE number (default 310)
+      --mark MASK                fwmark bit of packets the engine sends itself (default 0x20000000)
+      --firewall TYPE            auto, nft, iptables, or none (rules set up by hand)
+  -i, --iface IF                 only traffic through this interface (the WAN on a router)
+      --dir both|out|in          directions to intercept (default both)
+  -4, --ipv4-only                handle IPv4 only
+  -6, --ipv6-only                handle IPv6 only
+      --first N                  apply the strategy to the first N packets of each connection per direction
+      --prenat                   nft: intercept outgoing packets before SNAT (default after)
+      --no-notrack               leave packets the engine sends in conntrack
+      --no-bypass                drop instead of pass traffic while no engine listens
+      --forward-to ADDR          Geneva forwarder: DNAT the ports to ADDR and masquerade
+      --filter EXPR              Windows: WinDivert filter to capture, replaces the one from -p/--proto/--dir
+      --filter-file FILE         Windows: read the --filter expression from FILE (up to 64 KB)
+      --priority N               Windows: WinDivert handle priority, -30000..30000 (default 0)
+      --pcap FILE                write the packets the engine releases to a pcap file
+  -c, --control ADDR             control socket: unix:/path, tcp:PORT or tcp:HOST:PORT
+      --control-token TOKEN      clients must send this token (or set GENEVA_CONTROL_TOKEN)
+  -e, --events SINK              JSON Lines events: - (stdout), stderr, FILE or none
+      --stats-interval SEC       emit a stats event every SEC seconds (default 10 with --events)
+      --duration SEC             stop after SEC seconds
+      --queue-maxlen N           packets the kernel may hold for us (default 4096)
+      --max-delayed N            delayed packets (sleep) kept at once (default 1024)
+      --rng-seed N               seed for random values (reproducible runs)
+  -l, --log-level LEVEL          error, warn, info (default), debug or trace
+      --log-format FMT           text (default) or json
+      --log-file FILE            also write the log to FILE
+  -v, --verbose                  log every packet (same as --log-level trace)
+      --quiet                    no log on stderr
+  -h, --help                     show help
+
+Extensions (with --ext):
+      --ext                      turn on the extensions beyond Geneva (docs/EXT.md)
+[exit 0]
+### censor-ext-list
+$ $G censor --ext --list
+1    syncs on SYN, drops the packet and everything after from the client
+2    syncs on SYN, sends 5 RSTs to the client
+3    syncs on SYN, sends 5 RSTs to the client and 5 to the server
+4    syncs on SYN and on ACK, drops everything from the client
+5    syncs on SYN, sends 5 RSTs to the server
+6    checks every packet until any RST or FIN, drops everything from the client
+7    TCB on addresses and ports, torn down by RST or FIN; drops
+8    TCB on addresses, ports and sequence number, torn down by RST or FIN; drops
+8b   many TCBs, torn down by RST; RSTs both ways, blocks both hosts
+9    one TCB, re-synchronizes after RST or FIN; drops
+10   many TCBs, re-synchronize after RST or FIN, checksums checked; RSTs
+11   like 10, also syncs on ACK, ignores data offsets below 5
+dns  answers DNS queries for forbidden names with a forged address first
+12   freeze: the server's data stops after N bytes for flows with the word in the first request
+13   policer: a token bucket on the server's data for flows with the word in the first request
+14   SNI in the first segment, no reassembly: RSTs to the client with TTL 64
+15   SNI reassembled from up to 2 in-order segments: drops the client
+16   SNI of the first QUIC Initial (decrypted): drops the client's datagrams
+17   IP block: drops everything to and from --block-ip
+18   HTTP Host with the word: a 302 to a block page, RST to the server
+19   sequence-synchronized, ignores low TTL, bad checksums and old timestamps: drops
+20   reads only first IP fragments: drops on the word
+[exit 0]
+### censor-ext-17-needs-block-ip
+$ $G censor --ext -c 17
+geneva censor: censor 17 needs --block-ip
+[exit 2]
+### censor-ext-bad-block-ip
+$ $G censor --ext -c 17 --block-ip 1.2.3
+geneva censor: bad --block-ip 1.2.3 (up to 16 addresses)
+[exit 2]

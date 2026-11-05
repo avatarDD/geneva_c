@@ -1,0 +1,131 @@
+# Geneva corpus (tests/geneva_strategies.h), valid strategies
+\/
+[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:chksum:replace:25776},),)-
+[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{IP:ttl:replace:10},),)-
+[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:flags:replace:FRAPUN},),)-
+[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:ack:corrupt},),)-
+[TCP:flags:PA]-duplicate(tamper{TCP:options-wscale:corrupt}(tamper{TCP:dataofs:replace:8},),)-
+[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{TCP:chksum:corrupt},),)-
+[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{IP:ttl:replace:8}(duplicate(fragment{tcp:-1:False},),),),)-
+[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{TCP:ack:corrupt}(duplicate(fragment{tcp:-1:False},),),),)-
+[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},))-
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},),)-
+[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:R}(tamper{IP:ttl:replace:10},))-
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{IP:ttl:replace:9},),)-
+[TCP:flags:A]-duplicate(,tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},))-
+[TCP:flags:A]-duplicate(tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:RA},),)-
+[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{TCP:chksum:replace:27925},))-
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{TCP:chksum:replace:27925},),)-
+[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{IP:ttl:replace:10},))-
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{IP:ttl:replace:10},),)-
+[TCP:flags:A]-duplicate(tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},),)-
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{TCP:ack:corrupt},),)-
+[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{TCP:ack:corrupt},))-
+[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:chksum:corrupt},))-
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:chksum:corrupt},),)-
+[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FREACN}(tamper{IP:ttl:replace:10},))-
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{IP:ttl:replace:10},),)-
+[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FRAPUN}(tamper{TCP:options-md5header:corrupt},))-
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:options-md5header:corrupt},),)-
+[TCP:flags:A]-tamper{TCP:load:replace:a5z2}(tamper{TCP:flags:replace:CN},)-
+[TCP:flags:PA]-fragment{tcp:8:False}-|[TCP:flags:A]-tamper{TCP:seq:replace:2258679050}-
+[TCP:flags:PA]-fragment{tcp:8:False}-| [TCP:flags:A]-tamper{TCP:seq:replace:2258679050}(tamper{TCP:flags:replace:PA},)-
+[TCP:flags:PA]-fragment{tcp:8:True}(,fragment{tcp:4:True})-
+[TCP:flags:PA]-fragment{tcp:4:True}(,fragment{tcp:19:True})-
+[TCP:flags:PA]-duplicate(tamper{TCP:flags:replace:F}(tamper{IP:len:replace:68},),)-| \/
+[TCP:flags:SA]-duplicate(tamper{TCP:flags:replace:FREC}(duplicate,),tamper{TCP:flags:replace:FSEC})-| \/
+\/ [UDP:sport:53:2]-drop-
+[TCP:options-altchksum:]-tamper{TCP:options-uto:corrupt}(duplicate,)-| \/
+[TCP:options-mss:]-tamper{TCP:options-md5header:corrupt}-| \/
+[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:9},)-| \/
+[TCP:flags:PA]-duplicate(tamper{IP:len:replace:64},)-|
+[TCP:flags:PA]-fragment{tcp:-1:True}-|
+[TCP:flags:SA]-tamper{TCP:window:replace:98}-|
+[TCP:flags:PA]-duplicate(tamper{IP:len:replace:78},)-|
+[TCP:flags:S]-duplicate(,tamper{TCP:load:corrupt})-|
+[TCP:flags:S]-duplicate(tamper{TCP:flags:replace:SA},)-|
+[TCP:flags:A]-tamper{TCP:flags:replace:F}-| \/
+[TCP:flags:A]-duplicate(tamper{TCP:seq:corrupt}(tamper{TCP:flags:replace:R},),)-| \/
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},),)-| \/
+\/ [TCP:dataofs:5]-drop-|
+\/ [TCP:flags:R]-drop-|
+\/ [TCP:window:8192]-drop-|
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:replace:14239},),duplicate(tamper{TCP:flags:replace:S}(tamper{TCP:chksum:replace:14239},),))-| \/
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:replace:15239},),duplicate(tamper{TCP:flags:replace:S}(tamper{TCP:seq:corrupt}(tamper{TCP:chksum:corrupt},),),))-| \/
+[TCP:flags:A]-tamper{TCP:dataofs:replace:0}-| \/
+[TCP:flags:A]-duplicate(tamper{TCP:dataofs:replace:0},)-| \/
+[UDP:dport:53]-tamper{DNS:qd:compress}-|
+[TCP:flags:S]-sleep{1}-|
+[TCP:flags:PA]-trace{2:10}-|
+\/ [TCP:flags:SA]-drop-|
+\/ [UDP:dport:100]-drop-|
+[TCP:flags:PA]-sleep{1}-|
+[TCP:flags:PA]-drop-|
+[UDP:dport:53]-sleep{1}-|
+[UDP:dport:53]-drop-|
+[TCP:flags:PA]-tamper{DNS:qd:compress}-|
+[TCP:flags:PA]-drop-| [TCP:flags:FPA]-drop-|
+[TCP:flags:SA]-drop-|
+\/ [UDP:dport:53]-drop-|
+[TCP:flags:PA]-| \/
+[TCP:flags:PA]-drop-| \/
+[TCP:flags:PA]-duplicate-|
+[IP:proto:6:0]-tamper{IP:proto:replace:6}(fragment{ip:-1:True}(tamper{TCP:dataofs:replace:8}(duplicate,),tamper{IP:frag:replace:0}),)-| [IP:tos:0:0]-duplicate-| \/
+[TCP:urgptr:0]-tamper{TCP:options-altchksumopt:corrupt}(fragment{tcp:-1:True}(tamper{IP:proto:corrupt},tamper{TCP:seq:replace:654077552}),)-| \/
+[TCP:options-mss:]-tamper{TCP:load:replace:}(fragment{tcp:-1:True},)-| \/
+[TCP:options-mss:]-tamper{IP:frag:replace:1353}(tamper{TCP:load:replace:}(fragment{tcp:-1:True},),)-| \/
+[IP:ihl:5]-duplicate-| [TCP:options-mss:]-tamper{IP:frag:replace:1353}(fragment{tcp:-1:True}(tamper{TCP:load:replace:}(fragment{tcp:-1:False},),tamper{DNSQR:qtype:replace:45416}),)-| \/
+[DNSQR:qclass:25989]-duplicate(duplicate(tamper{DNSQR:qtype:replace:30882},),tamper{UDP:sport:replace:42042})-| [TCP:options-nop:]-tamper{TCP:options-nop:corrupt}(tamper{TCP:load:replace:mjkuskjzgy}(tamper{IP:frag:replace:410}(fragment{tcp:-1:True},),),)-| \/
+[TCP:load:TYPE%20A%0D%0A]-drop-| \/
+[TCP:flags:A]-| \/
+\/ [TCP:flags:A]-|
+[TCP:flags:A]-duplicate(duplicate(duplicate(duplicate,),),)-| \/
+[IP:version:4]-| \/
+[TCP:flags:A]-duplicate(tamper{TCP:flags:corrupt}(duplicate(duplicate,),),)-| \/
+[TCP:flags:A]-tamper{TCP:flags:replace:S}(duplicate,)-| \/
+[IP:frag:0]-fragment{tcp:-1:False}(drop,tamper{TCP:options-altchksum:replace:})-| \/
+[IP:ihl:0]-fragment{tcp:-1:True}(duplicate,tamper{IP:load:replace:074})-| \/
+\/ [TCP:flags:A]-drop-|
+[TCP:flags:A]-sleep{0.5}-|
+[TCP:flags:R]-duplicate-| \/
+[TCP:flags:S]-drop-| \/
+[TCP:flags:R]-drop-| \/
+[TCP:flags:S]-duplicate-| \/
+[TCP:flags:R]-duplicate(drop,drop)-| \/
+[TCP:flags:S]-duplicate(drop,drop)-| \/
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:replace:15239},),duplicate(tamper{TCP:flags:replace:S}(tamper{TCP:chksum:replace:14539}(tamper{TCP:seq:corrupt},),),))-| \/
+[TCP:load:]-tamper{TCP:load:replace:mhe76jm0bd}(fragment{ip:-1:True}(tamper{IP:load:corrupt},drop),)-| \/
+[TCP:options-eol:]-tamper{TCP:load:replace:o}(tamper{TCP:dataofs:replace:11},)-| \/
+[IP:proto:6]-tamper{IP:proto:replace:125}(fragment{tcp:48:True:26}(tamper{TCP:options-md5header:replace:37f0e737da65224ea03d46c713ed6fd2},),)-| \/
+[TCP:flags:PA]-trace{1:3}-| \/
+[TCP:reserved:0]-tamper{TCP:flags:replace:S}-|
+[TCP:flags:RA]-tamper{TCP:flags:replace:S}-|
+[IP:ttl:64]-tamper{TCP:flags:replace:S}-|
+[TCP:reserved:0]-tamper{TCP:chksum:corrupt}-|
+[TCP:flags:0]-tamper{TCP:flags:replace:S}-|
+[TCP:flags:0]-tamper{TCP:flags:replace:S}(tamper{TCP:flags:replace:R},)-|
+[TCP:flags:0]-tamper{TCP:flags:replace:S}(tamper{TCP:flags:replace:R}(duplicate,),)-|
+[TCP:flags:0]-tamper{TCP:flags:replace:S}(tamper{TCP:flags:replace:R}(duplicate(drop,),),)-|
+[TCP:flags:0]-tamper{TCP:flags:replace:S}(tamper{TCP:flags:replace:R}(duplicate(,drop),),)-|
+[TCP:urgptr:15963]-duplicate(,drop)-|
+[TCP:urgptr:15963]-drop-|
+[TCP:urgptr:15963]-duplicate-|
+[TCP:flags:0]-|
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:replace:14239},),duplicate(tamper{TCP:flags:replace:S}(tamper{TCP:chksum:replace:14239},),))-|
+[TCP:flags:0]-tamper{TCP:flags:replace:S}(tamper{TCP:flags:replace:R}(tamper{TCP:flags:replace:S}(tamper{TCP:flags:replace:R},),),)-|
+[TCP:flags:0]-duplicate-|
+[TCP:flags:0]-duplicate(tamper{TCP:flags:replace:S},)-|
+[TCP:flags:0]-duplicate(tamper{TCP:flags:replace:S},tamper{TCP:flags:replace:R})-|
+[TCP:flags:0]-duplicate(tamper{TCP:flags:replace:S},tamper{TCP:flags:replace:R}(tamper{TCP:flags:replace:A},))-|
+[TCP:flags:0]-duplicate(tamper{TCP:flags:replace:S},tamper{TCP:flags:replace:R})-| \/
+[TCP:flags:0]--|
+[TCP:flags:A]-duplicate(tamper{TCP:seq:corrupt},)-|
+[TCP:flags:A]-|
+[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:replace:14239},),duplicate(tamper{TCP:flags:replace:S},))-|
+[TCP:flags:0]-tamper{TCP:flags:replace:S}(duplicate(,drop),)-|
+[TCP:flags:0]-tamper{TCP:flags:replace:R}(duplicate,)-|
+[TCP:flags:0]-tamper{TCP:flags:replace:S}(duplicate,)-|
+[TCP:flags:0]-tamper{TCP:flags:replace:R}(duplicate(,drop),)-|
+[TCP:flags:0]-drop-|
+[TCP:flags:0]-tamper{TCP:flags:replace:S}(drop,)-|
+[TCP:flags:0]-duplicate(drop,drop)-|

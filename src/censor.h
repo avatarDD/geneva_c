@@ -35,6 +35,20 @@ typedef struct {
     uint8_t dns_a[4], dns_aaaa[16];
     uint32_t dns_ttl;
     int max_tcbs; /* tracked connections of the multi-TCB models (default 4096) */
+
+    /* censors 12-20 (src/ext/censor_x.c, only with --ext) */
+    uint64_t freeze_bytes;  /* 12: bytes to the client before the freeze (default 16384) */
+    uint64_t rate;          /* 13: bytes per second to the client (default 16384) */
+    uint64_t burst;         /* 13: bucket depth in bytes (default 32768) */
+    int rst_ttl;            /* 14: TTL of the injected RSTs (default 64) */
+    int min_ttl;            /* 19: packets below this TTL are not inspected (default 2) */
+    const char *redirect;   /* 18: Location of the 302 (default http://block.example/) */
+    struct {
+        int ver;
+        uint8_t a[16];
+    } block_ip[16];         /* 17: blocked addresses */
+    int nblock_ip;
+    uint64_t (*now_ms)(void); /* 13: the clock (NULL: plat_now_ms) */
 } censor_cfg;
 
 void censor_cfg_default(censor_cfg *c);
@@ -77,7 +91,8 @@ typedef struct {
     int accept;  /* verdict for the packet */
     int what;    /* CENSOR_* */
     int sent;    /* packets passed to send() */
-    const char *action; /* "drop", "rst" or "dns" when what != PASS */
+    const char *action; /* "drop", "rst" or "dns" when what != PASS; censors
+                         * 12-20 also "freeze", "police" and "redirect" */
 } censor_result;
 
 /* Runs one IP packet through the censor. Injected packets (RSTs, forged DNS

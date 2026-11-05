@@ -102,125 +102,129 @@ static int dl_less(const delayed *a, const delayed *b)
     return a->due < b->due || (a->due == b->due && a->order < b->order);
 }
 
-static void dl_push(engine *e, const delayed *d)
+static void dl_push(eng_worker *w, const delayed *d)
 {
     size_t i;
-    if (e->ndl == e->capdl) {
-        e->capdl = e->capdl ? e->capdl * 2 : 64;
-        e->dl = xrealloc(e->dl, e->capdl * sizeof(*e->dl));
+    if (w->ndl == w->capdl) {
+        w->capdl = w->capdl ? w->capdl * 2 : 64;
+        w->dl = xrealloc(w->dl, w->capdl * sizeof(*w->dl));
     }
-    i = e->ndl++;
-    while (i && dl_less(d, &e->dl[(i - 1) / 2])) {
-        e->dl[i] = e->dl[(i - 1) / 2];
+    i = w->ndl++;
+    while (i && dl_less(d, &w->dl[(i - 1) / 2])) {
+        w->dl[i] = w->dl[(i - 1) / 2];
         i = (i - 1) / 2;
     }
-    e->dl[i] = *d;
-    e->dl[i].order = e->dl_order++;
+    w->dl[i] = *d;
+    w->dl[i].order = w->dl_order++;
 }
 
-static void dl_pop(engine *e, delayed *top)
+static void dl_pop(eng_worker *w, delayed *top)
 {
     delayed last;
     size_t i = 0;
-    *top = e->dl[0];
-    last = e->dl[--e->ndl];
+    *top = w->dl[0];
+    last = w->dl[--w->ndl];
     for (;;) {
         size_t l = 2 * i + 1, r = l + 1, m = i;
         const delayed *best = &last;
-        if (l < e->ndl && dl_less(&e->dl[l], best))
-            m = l, best = &e->dl[l];
-        if (r < e->ndl && dl_less(&e->dl[r], best))
+        if (l < w->ndl && dl_less(&w->dl[l], best))
+            m = l, best = &w->dl[l];
+        if (r < w->ndl && dl_less(&w->dl[r], best))
             m = r;
         if (m == i)
             break;
-        e->dl[i] = e->dl[m];
+        w->dl[i] = w->dl[m];
         i = m;
     }
-    if (e->ndl)
-        e->dl[i] = last;
+    if (w->ndl)
+        w->dl[i] = last;
 }
 
 /* ---- output -------------------------------------------------------------- */
 
-static void record(engine *e, const uint8_t *data, size_t len)
+static void record(eng_worker *w, const uint8_t *data, size_t len)
 {
+    engine *e = w->e;
     if (e->pw)
         pcap_write(e->pw, plat_wall_ms() * 1000000ull, data, len);
 }
 
-static void give_verdict(engine *e, const void *pctx, int accept, const uint8_t *data, size_t len)
+static void give_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len)
 {
-    if (e->be->verdict(e, pctx, accept, data, len) < 0)
-        e->c.verdict_errors++;
+    engine *e = w->e;
+    if (e->be->verdict(w, pctx, accept, data, len) < 0)
+        w->c.verdict_errors++;
 }
 
-static void inject(engine *e, const void *pctx, const uint8_t *data, size_t len)
+static void inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t len)
 {
-    if (e->be->inject(e, pctx, data, len) < 0) {
-        e->c.send_errors++;
-        if (e->c.send_errors <= 10 || log_enabled(LOG_DEBUG))
+    engine *e = w->e;
+    if (e->be->inject(w, pctx, data, len) < 0) {
+        w->c.send_errors++;
+        if (w->c.send_errors <= 10 || log_enabled(LOG_DEBUG))
             LOGW("engine", "sending %zu bytes failed", len);
         return;
     }
-    e->c.injected++;
-    record(e, data, len);
+    w->c.injected++;
+    record(w, data, len);
 }
 
-static void release(engine *e, delayed *d)
+static void release(eng_worker *w, delayed *d)
 {
     if (d->verdict) {
-        give_verdict(e, d->pctx, 1, d->data, d->len);
-        record(e, d->data, d->len);
+        give_verdict(w, d->pctx, 1, d->data, d->len);
+        record(w, d->data, d->len);
     } else {
-        inject(e, d->pctx, d->data, d->len);
+        inject(w, d->pctx, d->data, d->len);
     }
     free(d->data);
 }
 
-static void run_timers(engine *e, int all)
+static void run_timers(eng_worker *w, int all)
 {
     uint64_t now = plat_now_ms();
-    while (e->ndl && (all || e->dl[0].due <= now)) {
+    while (w->ndl && (all || w->dl[0].due <= now)) {
         delayed d;
-        dl_pop(e, &d);
-        release(e, &d);
+        dl_pop(w, &d);
+        release(w, &d);
     }
 }
 
 /* Queues a packet for later, or releases it now when too many wait. */
-static void delay(engine *e, uint8_t *data, size_t len, double secs, int verdict, const void *pctx)
+static void delay(eng_worker *w, uint8_t *data, size_t len, double secs, int verdict, const void *pctx)
 {
+    engine *e = w->e;
     delayed d;
     memset(&d, 0, sizeof(d));
     d.data = data;
     d.len = len;
     d.verdict = verdict;
     memcpy(d.pctx, pctx, e->be->pctx_len);
-    if (e->ndl >= (size_t)e->o->max_delayed) {
-        LOGW("engine", "too many delayed packets (%zu), sending one now", e->ndl);
-        release(e, &d);
+    if (w->ndl >= (size_t)e->o->max_delayed) {
+        LOGW("engine", "too many delayed packets (%zu), sending one now", w->ndl);
+        release(w, &d);
         return;
     }
     d.due = plat_now_ms() + (uint64_t)(secs * 1000.0 + 0.5);
-    e->c.delayed++;
-    dl_push(e, &d);
+    w->c.delayed++;
+    dl_push(w, &d);
 }
 
 /* ---- packets ------------------------------------------------------------- */
 
-static void trace_pkt(engine *e, strat_dir dir, const gpkt *p, const pktlist *out, int fired)
+static void trace_pkt(eng_worker *w, strat_dir dir, const gpkt *p, const pktlist *out, int fired)
 {
-    sb_reset(&e->line);
-    pkt_describe(p, &e->line);
-    LOGT("pkt", "%s %s -> %zu packet(s)%s", dir == DIR_OUT ? "out" : "in", e->line.data, out->n,
+    sb_reset(&w->line);
+    pkt_describe(p, &w->line);
+    LOGT("pkt", "%s %s -> %zu packet(s)%s", dir == DIR_OUT ? "out" : "in", w->line.data, out->n,
          fired ? "" : " (no tree fired)");
     for (size_t i = 0; fired && i < out->n; i++) {
-        sb_reset(&e->line);
-        pkt_describe(out->v[i], &e->line);
+        sb_reset(&w->line);
+        pkt_describe(out->v[i], &w->line);
         if (out->v[i]->sleep > 0)
-            LOGT("pkt", "    -> %s (after %g s)", e->line.data, out->v[i]->sleep);
+            LOGT("pkt", "    -> %s (after %g s)", w->line.data, out->v[i]->sleep);
         else
-            LOGT("pkt", "    -> %s", e->line.data);
+            LOGT("pkt", "    -> %s", w->line.data);
     }
 }
 
@@ -256,18 +260,19 @@ static void slot_capture(eng_slot *sl, const gpkt *p)
         sl->cap[sl->ncap++] = c;
 }
 
-static void packet(engine *e, strategy *st, eng_slot *sl, gpkt *p, strat_dir dir, const uint8_t *data,
+static void packet(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir dir, const uint8_t *data,
                    size_t len, const void *pctx);
 
-void engine_packet(engine *e, const uint8_t *data, size_t len, int d, const void *pctx)
+void engine_packet(eng_worker *w, const uint8_t *data, size_t len, int d, const void *pctx)
 {
+    engine *e = w->e;
     gpkt *p = pkt_parse(data, len);
     eng_slots *ss = e->o->slots;
     strat_dir dir;
 
     if (!p) {
-        e->c.parse_errors++;
-        give_verdict(e, pctx, 1, NULL, 0);
+        w->c.parse_errors++;
+        give_verdict(w, pctx, 1, NULL, 0);
         return;
     }
     if (d < 0) {
@@ -277,24 +282,24 @@ void engine_packet(engine *e, const uint8_t *data, size_t len, int d, const void
     } else {
         dir = (strat_dir)d;
     }
-    if (e->flows) {
+    if (w->flows) {
         /* --first N without conntrack: later packets of a flow go on as
          * they are, outside the strategy and the counters */
         int evicted;
-        int in_first = flowtab_packet(e->flows, p, dir, (uint32_t)e->o->fw.first, plat_now_ms(), &evicted);
+        int in_first = flowtab_packet(w->flows, p, dir, (uint32_t)e->o->fw.first, plat_now_ms(), &evicted);
         if (evicted)
-            e->c.flow_evictions++;
+            w->c.flow_evictions++;
         if (!in_first) {
-            e->c.passed_first++;
+            w->c.passed_first++;
             pkt_free(p);
-            give_verdict(e, pctx, 1, NULL, 0);
+            give_verdict(w, pctx, 1, NULL, 0);
             return;
         }
     }
     if (dir == DIR_OUT)
-        e->c.pkts_out++;
+        w->c.pkts_out++;
     else
-        e->c.pkts_in++;
+        w->c.pkts_in++;
     if (ss) {
         eng_slot *sl;
         plat_mutex_lock(&ss->lock);
@@ -304,40 +309,133 @@ void engine_packet(engine *e, const uint8_t *data, size_t len, int d, const void
             if (sl->capture)
                 slot_capture(sl, p);
         }
-        packet(e, sl ? sl->st : NULL, sl, p, dir, data, len, pctx);
+        packet(w, sl ? sl->st : NULL, sl, p, dir, data, len, pctx);
         plat_mutex_unlock(&ss->lock);
         return;
     }
-    packet(e, e->st, NULL, p, dir, data, len, pctx);
+    packet(w, e->st, NULL, p, dir, data, len, pctx);
+}
+
+void engine_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len, int modified)
+{
+    if (!accept) {
+        w->c.dropped++;
+        give_verdict(w, pctx, 0, NULL, 0);
+        return;
+    }
+    w->c.accepted++;
+    if (modified)
+        w->c.modified++;
+    give_verdict(w, pctx, 1, modified ? data : NULL, len);
+    record(w, data, len);
+}
+
+void engine_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t len)
+{
+    inject(w, pctx, data, len);
+}
+
+int engine_workers_init(engine *e, unsigned nw, sbuf *err)
+{
+    if (e->w)
+        engine_workers_free(e);
+    e->w = xcalloc(nw, sizeof(*e->w));
+    e->nw = nw;
+    /* all workers complete before any extension sees one */
+    for (unsigned i = 0; i < nw; i++) {
+        eng_worker *w = &e->w[i];
+        w->e = e;
+        w->id = i;
+        sb_init(&w->line);
+        if (e->o->fw.first > 0 && e->be->engine_first)
+            w->flows = flowtab_new(FLOW_MAX);
+    }
+    for (unsigned i = 0; e->o->ext && e->o->ext->worker_open && i < nw; i++) {
+        if (e->o->ext->worker_open(&e->w[i], err) < 0)
+            return -1;
+        e->w[i].x_open = 1;
+    }
+    return 0;
+}
+
+void engine_workers_free(engine *e)
+{
+    for (unsigned i = 0; i < e->nw; i++) {
+        eng_worker *w = &e->w[i];
+        if (w->x_open && e->o->ext->worker_close)
+            e->o->ext->worker_close(w);
+        for (size_t k = 0; k < w->ndl; k++)
+            free(w->dl[k].data);
+        free(w->dl);
+        flowtab_free(w->flows);
+        sb_free(&w->line);
+    }
+    free(e->w);
+    e->w = NULL;
+    e->nw = 0;
+}
+
+void engine_run_timers(engine *e, int all)
+{
+    for (unsigned i = 0; i < e->nw; i++)
+        run_timers(&e->w[i], all);
+}
+
+void engine_counters(const engine *e, counters *sum, size_t *pending)
+{
+    memset(sum, 0, sizeof(*sum));
+    *pending = 0;
+    for (unsigned i = 0; i < e->nw; i++) {
+        const counters *c = &e->w[i].c;
+#define ENG_COUNTER_ADD(n) sum->n += c->n;
+        ENG_COUNTERS(ENG_COUNTER_ADD)
+#undef ENG_COUNTER_ADD
+        *pending += e->w[i].ndl;
+    }
+}
+
+/* The earliest due time of a delayed packet, 0 when none waits. */
+static uint64_t next_due(const engine *e)
+{
+    uint64_t due = 0;
+    for (unsigned i = 0; i < e->nw; i++)
+        if (e->w[i].ndl && (!due || e->w[i].dl[0].due < due))
+            due = e->w[i].dl[0].due;
+    return due;
 }
 
 /* Runs a parsed packet through st (NULL: it passes) and frees it. */
-static void packet(engine *e, strategy *st, eng_slot *sl, gpkt *p, strat_dir dir, const uint8_t *data,
+static void packet(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir dir, const uint8_t *data,
                    size_t len, const void *pctx)
 {
+    engine *e = w->e;
     gpkt *orig = NULL;
     pktlist out = {0};
     int fired;
     size_t first = 0;
 
+    if (e->o->ext && e->o->ext->packet && e->o->ext->packet(w, p, dir, data, len, pctx)) {
+        pkt_free(p); /* the extensions gave the verdict */
+        return;
+    }
     if (e->paused || !st) {
         pkt_free(p);
-        e->c.accepted++;
-        give_verdict(e, pctx, 1, NULL, 0);
+        w->c.accepted++;
+        give_verdict(w, pctx, 1, NULL, 0);
         return;
     }
     if (log_enabled(LOG_TRACE))
         orig = pkt_copy(p);
     fired = strategy_apply(st, p, dir, &out);
     if (orig) {
-        trace_pkt(e, dir, orig, &out, fired);
+        trace_pkt(w, dir, orig, &out, fired);
         pkt_free(orig);
     }
     if (fired)
-        e->c.triggered++;
+        w->c.triggered++;
     if (!out.n) {
-        e->c.dropped++;
-        give_verdict(e, pctx, 0, NULL, 0);
+        w->c.dropped++;
+        give_verdict(w, pctx, 0, NULL, 0);
         return;
     }
     if (sl && dir == DIR_OUT)
@@ -362,29 +460,29 @@ static void packet(engine *e, strategy *st, eng_slot *sl, gpkt *p, strat_dir dir
         size_t blen;
         uint8_t *b = pkt_bytes(r, &blen);
         if (!blen) {
-            e->c.send_errors++;
+            w->c.send_errors++;
             LOGW("engine", "cannot build a result packet");
             free(b);
             if (i == first)
-                give_verdict(e, pctx, 0, NULL, 0);
+                give_verdict(w, pctx, 0, NULL, 0);
             continue;
         }
         if (i == first) {
             int same = blen == len && !memcmp(b, data, blen);
             if (!same)
-                e->c.modified++;
+                w->c.modified++;
             if (r->sleep > 0) {
-                delay(e, b, blen, r->sleep, 1, pctx);
+                delay(w, b, blen, r->sleep, 1, pctx);
                 continue;
             }
-            e->c.accepted++;
-            give_verdict(e, pctx, 1, same ? NULL : b, blen);
-            record(e, b, blen);
+            w->c.accepted++;
+            give_verdict(w, pctx, 1, same ? NULL : b, blen);
+            record(w, b, blen);
         } else if (r->sleep > 0) {
-            delay(e, b, blen, r->sleep, 0, pctx);
+            delay(w, b, blen, r->sleep, 0, pctx);
             continue;
         } else {
-            inject(e, pctx, b, blen);
+            inject(w, pctx, b, blen);
         }
         free(b);
     }
@@ -413,7 +511,9 @@ static void forest_json(jw *w, atree **f, size_t n)
 /* Counters shared by the "stats" event and the "stats" control command. */
 static void stats_fields(engine *e, jw *w)
 {
-    counters *c = &e->c;
+    counters sum, *c = &sum;
+    size_t pending;
+    engine_counters(e, &sum, &pending);
     jw_kuint(w, "uptime_ms", plat_now_ms() - e->start_ms);
     jw_kbool(w, "paused", e->paused);
     jw_kuint(w, "pkts_out", c->pkts_out);
@@ -424,7 +524,7 @@ static void stats_fields(engine *e, jw *w)
     jw_kuint(w, "dropped", c->dropped);
     jw_kuint(w, "injected", c->injected);
     jw_kuint(w, "delayed", c->delayed);
-    jw_kuint(w, "pending", e->ndl);
+    jw_kuint(w, "pending", pending);
     jw_kuint(w, "send_errors", c->send_errors);
     jw_kuint(w, "verdict_errors", c->verdict_errors);
     jw_kuint(w, "parse_errors", c->parse_errors);
@@ -633,7 +733,8 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
         return 0;
     }
     if (!strcmp(cmd, "reset_stats")) {
-        memset(&e->c, 0, sizeof(e->c));
+        for (unsigned i = 0; i < e->nw; i++)
+            memset(&e->w[i].c, 0, sizeof(e->w[i].c));
         strategy_reset(e->st);
         return 0;
     }
@@ -763,7 +864,6 @@ int engine_run(engine_opts *o)
     e.be = BACKEND;
     plat_mutex_init(&e.lock);
     sb_init(&err);
-    sb_init(&e.line);
     e.start_ms = plat_now_ms();
     sig_stop = sig_hup = sig_usr1 = 0;
     ev_quiet = o->embedded;
@@ -801,8 +901,13 @@ int engine_run(engine_opts *o)
         ev_set_tap(ctl_broadcast, e.ctl);
         LOGI("engine", "control socket %s", o->control);
     }
-    if (o->fw.first > 0 && e.be->engine_first)
-        e.flows = flowtab_new(FLOW_MAX);
+    sb_reset(&err);
+    if (engine_workers_init(&e, 1, &err) < 0) {
+        LOGE("engine", "%s", err.data);
+        emit_error("ext", err.data);
+        rc = EXIT_FAIL;
+        goto out;
+    }
     sb_reset(&err);
     opened = 1;
     e.err_pos = -1;
@@ -837,7 +942,7 @@ int engine_run(engine_opts *o)
     while (!sig_stop && !e.stop_request && !(o->stop && atomic_load_int(o->stop))) {
         plat_pollfd pfd[MAX_POLL];
         size_t nbe, nctl;
-        uint64_t now;
+        uint64_t now, due;
         int timeout = 1000, r;
 
         plat_mutex_lock(&e.lock);
@@ -846,8 +951,8 @@ int engine_run(engine_opts *o)
         now = plat_now_ms();
         if (o->stop)
             timeout = 100; /* the stop flag is polled */
-        if (e.ndl)
-            timeout = e.dl[0].due <= now ? 0 : (int)MIN(e.dl[0].due - now, (uint64_t)timeout);
+        if ((due = next_due(&e)) != 0)
+            timeout = due <= now ? 0 : (int)MIN(due - now, (uint64_t)timeout);
         plat_mutex_unlock(&e.lock);
         if (next_stats && next_stats > now && next_stats - now < (uint64_t)timeout)
             timeout = (int)(next_stats - now);
@@ -883,10 +988,13 @@ int engine_run(engine_opts *o)
         }
         if (r > 0 && nctl)
             ctl_dispatch(e.ctl, pfd + nbe, nctl, on_control, &e);
-        run_timers(&e, 0);
-        if (e.flows && plat_now_ms() >= e.next_expire) {
-            flowtab_expire(e.flows, plat_now_ms());
-            e.next_expire = plat_now_ms() + 5000;
+        engine_run_timers(&e, 0);
+        for (unsigned i = 0; i < e.nw; i++) {
+            eng_worker *w = &e.w[i];
+            if (w->flows && plat_now_ms() >= w->next_expire) {
+                flowtab_expire(w->flows, plat_now_ms());
+                w->next_expire = plat_now_ms() + 5000;
+            }
         }
         if (sig_hup) {
             sbuf herr;
@@ -917,7 +1025,7 @@ out:
     if (opened) {
         e.be->stop(&e);
         plat_mutex_lock(&e.lock);
-        run_timers(&e, 1); /* let held packets go before the capture closes */
+        engine_run_timers(&e, 1); /* let held packets go before the capture closes */
         if (running)
             emit_stats(&e);
         plat_mutex_unlock(&e.lock);
@@ -938,15 +1046,11 @@ out:
     }
     if (!o->embedded)
         remove_signals();
-    for (size_t i = 0; i < e.ndl; i++)
-        free(e.dl[i].data);
-    free(e.dl);
+    engine_workers_free(&e);
     if (e.pw && pcap_close_write(e.pw) < 0 && rc == EXIT_OK)
         rc = EXIT_IO;
     strategy_free(e.st);
-    flowtab_free(e.flows);
     sb_free(&err);
-    sb_free(&e.line);
     plat_mutex_destroy(&e.lock);
     return rc;
 }

@@ -27,6 +27,10 @@ void suite_evolve(void);
 void suite_probe(void);
 void suite_censor(void);
 void suite_flow(void);
+void suite_ext(void);
+void suite_engine(void);
+void suite_crypto(void);
+void suite_censor_x(void);
 
 int main(void)
 {
@@ -41,6 +45,10 @@ int main(void)
     suite_probe();
     suite_censor();
     suite_flow();
+    suite_ext();
+    suite_engine();
+    suite_crypto();
+    suite_censor_x();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }

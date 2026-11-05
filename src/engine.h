@@ -38,6 +38,8 @@ typedef struct {
     plat_mutex_t lock;
 } eng_slots;
 
+struct ext_hooks; /* engine_int.h */
+
 typedef struct {
     fw_config fw;              /* queue, mark, ports, directions */
     int apply_fw;              /* install firewall rules (and remove them on exit) */
@@ -60,6 +62,10 @@ typedef struct {
      * exit code of a failed start. */
     void (*on_ready)(void *ctx, int rc);
     void *ready_ctx;
+
+    /* --ext: the extensions' hooks (docs/EXT_ROADMAP.md, 6.4); NULL keeps
+     * the engine exactly as without the extensions. */
+    const struct ext_hooks *ext;
 } engine_opts;
 
 void engine_opts_default(engine_opts *o);

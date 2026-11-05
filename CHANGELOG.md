@@ -3,6 +3,33 @@
 Протокол событий и управления — `proto 1` во всех версиях 1.x: новые поля,
 события и команды только добавляются.
 
+## Не выпущено
+
+Расширения `--ext` по `docs/EXT_ROADMAP.md` (паритет с zapret2). Без
+`--ext` поведение всех команд прежнее.
+
+- X0: ключ `--ext` у `run`, `check`, `apply`, `eval`, `evolve`, `fw`;
+  опции `--ext-*` без `--ext` — ошибка 2. `--help` описывает расширения
+  в отдельном разделе «Extensions (with --ext):» в конце; прежняя часть
+  справки не изменилась (сборка `EXT=0` раздел не выводит). Сборка `make EXT=0` без
+  `src/ext/` (тогда `--ext` — ошибка 2). Фича `ext` в `geneva version
+  --json`. Golden-снимки вывода команд (`tests/golden/run.sh`) в CI для
+  обеих сборок, бюджет размера `tools/ext_size.sh`.
+- X1: контекст воркера в движке (`eng_worker`: счётчики, отложенные
+  пакеты, таблица `--first`, состояние расширений) и единственная точка
+  расширения `engine_opts.ext` (`NULL` без `--ext`). Поведение прежнее:
+  один воркер, те же события и счётчики. Юнит-тесты ядра движка без
+  захвата, ThreadSanitizer в CI.
+- X2: лабораторные цензоры 12–20 (`geneva censor --ext`, `docs/CENSOR.md`):
+  заморозка, полисер, RST по SNI, сборка ClientHello из двух сегментов,
+  SNI в QUIC Initial, блокировка по IP, HTTP-редирект, «строгий» цензор
+  (TTL, сумма, PAWS), только первые фрагменты. Свои AES-128/256-GCM,
+  SHA-256, HMAC, HKDF; расшифровка QUIC Initial (v1, v2, драфты 29–32),
+  SNI из ClientHello; проверены на векторах NIST/RFC и пакетах zapret2
+  (`tests/data/zapret2/`, MIT). Сборка `make EXT_CRYPTO=0`. e2e
+  `tests/e2e/censors_x.sh` и CI-стенд с официальным nfqws2 v1.0.6.
+  `--help` описывает расширения в разделе «Extensions (with --ext):».
+
 ## v1.2.0
 
 - `eval`/`evolve --probe external --workers N`: запросы `eval_request`

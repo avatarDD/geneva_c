@@ -207,8 +207,9 @@ typedef struct {
     size_t len;
 } wd_pctx;
 
-static int wd_be_verdict(engine *e, const void *pctx, int accept, const uint8_t *data, size_t len)
+static int wd_be_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len)
 {
+    engine *e = w->e;
     const wd_pctx *p = pctx;
     if (!accept)
         return 0; /* not sending is dropping */
@@ -222,16 +223,17 @@ static int wd_be_verdict(engine *e, const void *pctx, int accept, const uint8_t 
     return wd_send_pkt(e, &p->addr, data, len, 1);
 }
 
-static int wd_be_inject(engine *e, const void *pctx, const uint8_t *data, size_t len)
+static int wd_be_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t len)
 {
     const wd_pctx *p = pctx;
-    return wd_send_pkt(e, &p->addr, data, len, 1);
+    return wd_send_pkt(w->e, &p->addr, data, len, 1);
 }
 
 static void receiver(void *arg)
 {
     engine *e = arg;
     wd_state *s = e->bs;
+    eng_worker *w = &e->w[0]; /* one handle, one worker */
     uint8_t *buf = xmalloc(WD_MAX_PACKET);
     for (;;) {
         wd_pctx p;
@@ -275,14 +277,14 @@ static void receiver(void *arg)
         p.data = buf;
         p.len = n;
         plat_mutex_lock(&e->lock);
-        before = e->dl_order;
-        engine_packet(e, buf, n, (p.addr.bits & WD_OUTBOUND) ? DIR_OUT : DIR_IN, &p);
-        if (e->dl_order != before) {
+        before = w->dl_order;
+        engine_packet(w, buf, n, (p.addr.bits & WD_OUTBOUND) ? DIR_OUT : DIR_IN, &p);
+        if (w->dl_order != before) {
             /* delayed packets keep a copy of pctx: its pointer to this
              * buffer must not outlive the packet (they carry their own
              * bytes anyway); then wake the main loop for the new timer */
-            for (size_t i = 0; i < e->ndl; i++) {
-                wd_pctx *q = (wd_pctx *)e->dl[i].pctx;
+            for (size_t i = 0; i < w->ndl; i++) {
+                wd_pctx *q = (wd_pctx *)w->dl[i].pctx;
                 if (q->data == buf)
                     q->data = NULL;
             }

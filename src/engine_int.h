@@ -10,6 +10,16 @@
  * possibly later), inject() sends an extra packet the same way the captured
  * one was going. Everything that touches the engine state runs under
  * e->lock, so a backend may capture on its own thread.
+ *
+ * A packet belongs to a worker (eng_worker): the worker holds what one
+ * packet path changes (counters, delayed packets, the --first flow table,
+ * the state of the extensions), the engine what all workers share (the
+ * strategy, the pcap writer, the control socket). There is one worker for
+ * now, and every packet runs under e->lock. Two shared things still change
+ * on the packet path: the strategy's trigger counters (gas, fired) and the
+ * pcap writer; the multi-queue engine (docs/EXT_ROADMAP.md, X10) has to give
+ * each worker its own copy of the former and lock the latter before workers
+ * run without e->lock.
  */
 #ifndef GENEVA_ENGINE_INT_H
 #define GENEVA_ENGINE_INT_H
@@ -27,6 +37,8 @@
 #define PCTX_MAX 112 /* bytes of per-packet backend context */
 
 typedef struct engine engine;
+typedef struct eng_worker eng_worker;
+typedef struct ext_hooks ext_hooks;
 
 typedef struct {
     const char *name;
@@ -45,9 +57,9 @@ typedef struct {
     int (*ready)(engine *e, const plat_pollfd *fds, size_t n);
     /* Releases (accept) or drops the captured packet. data == NULL keeps the
      * original bytes. Returns 0 or -1. */
-    int (*verdict)(engine *e, const void *pctx, int accept, const uint8_t *data, size_t len);
+    int (*verdict)(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len);
     /* Sends an extra packet in the captured packet's direction. */
-    int (*inject)(engine *e, const void *pctx, const uint8_t *data, size_t len);
+    int (*inject)(eng_worker *w, const void *pctx, const uint8_t *data, size_t len);
     /* --first N: 1 when the engine counts packets per flow itself (no
      * conntrack rules do it). */
     int engine_first;
@@ -70,12 +82,49 @@ typedef struct {
     uint8_t pctx[PCTX_MAX];
 } delayed;
 
+/* The counters of a worker; engine_counters() sums them over the list, so a
+ * new counter goes here and nowhere else (plus its line in "stats").
+ * passed_first: --first, packets past the first N of their flow;
+ * flow_evictions: --first, live flows pushed out of a full table. */
+#define ENG_COUNTERS(X)                                                             \
+    X(pkts_out) X(pkts_in) X(triggered) X(accepted) X(modified) X(dropped)            \
+    X(injected) X(delayed) X(send_errors) X(verdict_errors) X(parse_errors) X(overruns) \
+    X(passed_first) X(flow_evictions)
+
 typedef struct {
-    uint64_t pkts_out, pkts_in, triggered, accepted, modified, dropped;
-    uint64_t injected, delayed, send_errors, verdict_errors, parse_errors, overruns;
-    uint64_t passed_first;  /* --first: packets past the first N of their flow */
-    uint64_t flow_evictions; /* --first: live flows pushed out of a full table */
+#define ENG_COUNTER_FIELD(n) uint64_t n;
+    ENG_COUNTERS(ENG_COUNTER_FIELD)
+#undef ENG_COUNTER_FIELD
 } counters;
+
+/* The extensions of --ext reach the engine only through this table
+ * (engine_opts.ext, NULL without --ext; docs/EXT_ROADMAP.md, 6.4). */
+struct ext_hooks {
+    /* Per worker: set up and free w->x. open returns 0 or -1 with err. */
+    int (*worker_open)(eng_worker *w, sbuf *err);
+    void (*worker_close)(eng_worker *w);
+    /* Every packet the engine counts, with the parsed packet, before the
+     * strategy; also while paused (e->paused: the hook must then let the
+     * packet go on) and when no strategy applies. Returns 0 to go on with
+     * the strategy, 1 when the hook gave the verdict itself through
+     * engine_verdict()/engine_inject(), which count and record like the
+     * strategy path does. p stays the engine's and is freed by it. */
+    int (*packet)(eng_worker *w, gpkt *p, strat_dir dir, const uint8_t *data, size_t len, const void *pctx);
+};
+
+struct eng_worker {
+    engine *e;
+    unsigned id;
+    counters c;
+    delayed *dl; /* min-heap by (due, order) */
+    size_t ndl, capdl;
+    uint64_t dl_order;
+    sbuf line;          /* trace text */
+    flowtab *flows;     /* --first counted by the engine (engine_first) */
+    uint64_t next_expire;
+    void *x;            /* state of the extensions, NULL without --ext */
+    int x_open;         /* worker_open succeeded: worker_close is due */
+};
 
 struct engine {
     engine_opts *o;
@@ -83,26 +132,39 @@ struct engine {
     void *bs; /* backend state */
     strategy *st;
     pcap_writer *pw;
-    counters c;
-    delayed *dl; /* min-heap by (due, order) */
-    size_t ndl, capdl;
-    uint64_t dl_order;
+    eng_worker *w; /* nw workers */
+    unsigned nw;
     uint64_t start_ms;
-    sbuf line;
     ctl *ctl;
     int paused;       /* packets pass unchanged */
     int stop_request; /* "stop" over the control socket */
     const char *fw_name; /* what installed the rules, for events and status */
     const char *err_where; /* set by a failing open(): "firewall", "nfqueue"... */
     int err_pos;      /* set by a failing open(): where the filter does not compile */
-    flowtab *flows;     /* --first counted by the engine (engine_first) */
-    uint64_t next_expire;
     plat_mutex_t lock;
 };
 
+/* Sets up nw workers for e (e->o and e->be set): their flow tables for
+ * --first and the extensions' state. Returns 0, or -1 with err (then
+ * engine_workers_free still frees what was made). */
+int engine_workers_init(engine *e, unsigned nw, sbuf *err);
+/* Frees the workers; delayed packets still held are dropped, not sent. */
+void engine_workers_free(engine *e);
+/* Releases the delayed packets that are due (all = every one of them). */
+void engine_run_timers(engine *e, int all);
+/* Sums the counters of all workers. */
+void engine_counters(const engine *e, counters *sum, size_t *pending);
+
+/* For the extensions' packet hook: give the captured packet its verdict or
+ * send an extra packet, counted in the worker's counters and written to
+ * --pcap like the strategy's. data is the packet as it leaves (the captured
+ * bytes when modified is 0; ignored for a drop). */
+void engine_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len, int modified);
+void engine_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t len);
+
 /* Runs one captured packet through the strategy (call with e->lock held).
  * dir is DIR_OUT, DIR_IN, or -1 to decide by the ports. */
-void engine_packet(engine *e, const uint8_t *data, size_t len, int dir, const void *pctx);
+void engine_packet(eng_worker *w, const uint8_t *data, size_t len, int dir, const void *pctx);
 
 /* Packet backends. */
 extern const backend nfq_backend;       /* Linux */

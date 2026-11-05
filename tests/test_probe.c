@@ -81,7 +81,7 @@ static void serve_one(sock_t c)
 {
     uint8_t req[2048];
     size_t n = read_request(c, req, sizeof(req));
-    switch (srv.mode) {
+    switch (atomic_load_int(&srv.mode)) {
     case M_HTTP_CL: {
         static const char r[] = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
         send_bytes(c, r, sizeof(r) - 1);
@@ -191,17 +191,17 @@ static void serve_one(sock_t c)
 static void server_main(void *arg)
 {
     (void)arg;
-    while (!srv.stop) {
+    while (!atomic_load_int(&srv.stop)) {
         struct sockaddr_storage peer;
         socklen_t pl = sizeof(peer);
         sock_t c = accept(srv.ls, (struct sockaddr *)&peer, &pl);
         if (c == SOCK_INVALID)
             continue;
-        if (srv.stop) {
+        if (atomic_load_int(&srv.stop)) {
             plat_sock_close(c);
             break;
         }
-        srv.peer_port = ntohs(((struct sockaddr_in *)&peer)->sin_port);
+        atomic_store_int(&srv.peer_port, ntohs(((struct sockaddr_in *)&peer)->sin_port));
         serve_one(c);
         plat_sock_close(c);
     }
@@ -221,7 +221,7 @@ static int server_start(void)
         return -1;
     getsockname(srv.ls, (struct sockaddr *)&a, &al);
     srv.port = ntohs(a.sin_port);
-    srv.stop = 0;
+    atomic_store_int(&srv.stop, 0);
     return plat_thread_start(&srv.th, server_main, NULL);
 }
 
@@ -229,7 +229,7 @@ static void server_stop(void)
 {
     sock_t s = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a;
-    srv.stop = 1;
+    atomic_store_int(&srv.stop, 1);
     memset(&a, 0, sizeof(a));
     a.sin_family = AF_INET;
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -258,7 +258,7 @@ static void cfg_init(probe_cfg *c, probe_kind k, uint16_t port)
 static probe_outcome run_mode(int mode, probe_cfg *c, probe_res *r)
 {
     probe_ports lp = {0, 0, 0};
-    srv.mode = mode;
+    atomic_store_int(&srv.mode, mode);
     probe_run(c, &lp, r);
     return r->outcome;
 }
@@ -351,13 +351,13 @@ static void test_tcp_ports(void)
     CHECK_INT(c.payload_len, 7);
     CHECK(!memcmp(c.payload, "ping\r\nA", 7));
     c.valid_contains = "ping";
-    srv.mode = M_ECHO;
+    atomic_store_int(&srv.mode, M_ECHO);
     probe_run(&c, &lp, &r);
     CHECK_INT(r.outcome, PO_OK);
-    p1 = srv.peer_port;
+    p1 = atomic_load_int(&srv.peer_port);
     probe_run(&c, &lp, &r);
     CHECK_INT(r.outcome, PO_OK);
-    p2 = srv.peer_port;
+    p2 = atomic_load_int(&srv.peer_port);
     CHECK(p1 >= 40100 && p1 <= 40103);
     CHECK(p2 >= 40100 && p2 <= 40103);
     CHECK(p1 != p2); /* rotated: no TIME_WAIT reuse */
@@ -389,7 +389,7 @@ static struct {
 static void dns_main(void *arg)
 {
     (void)arg;
-    while (!dns.stop) {
+    while (!atomic_load_int(&dns.stop)) {
         uint8_t q[512], r[600];
         struct sockaddr_storage from;
         socklen_t fl = sizeof(from);
@@ -403,17 +403,17 @@ static void dns_main(void *arg)
         n = (int)recvfrom(dns.s, (char *)q, sizeof(q), 0, (struct sockaddr *)&from, &fl);
         if (n < 12)
             continue;
-        if (dns.mode == 3) /* an answer with another id first */
+        if (atomic_load_int(&dns.mode) == 3) /* an answer with another id first */
             sendto(dns.s, "\xde\xad\x81\x80\x00\x00\x00\x00\x00\x00\x00\x00", 12, 0, (struct sockaddr *)&from, fl);
         memcpy(r, q, (size_t)n);
         r[2] = 0x81;
-        r[3] = dns.mode == 2 ? 0x83 : 0x80;
-        r[7] = dns.mode == 2 ? 0 : 1;
+        r[3] = atomic_load_int(&dns.mode) == 2 ? 0x83 : 0x80;
+        r[7] = atomic_load_int(&dns.mode) == 2 ? 0 : 1;
         k = (size_t)n;
-        if (dns.mode != 2) {
+        if (atomic_load_int(&dns.mode) != 2) {
             memcpy(r + k, "\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04", 12);
             k += 12;
-            memcpy(r + k, dns.mode == 1 ? "\x0a\x0a\x0a\x0a" : "\x01\x02\x03\x04", 4);
+            memcpy(r + k, atomic_load_int(&dns.mode) == 1 ? "\x0a\x0a\x0a\x0a" : "\x01\x02\x03\x04", 4);
             k += 4;
         }
         sendto(dns.s, (const char *)r, (int)k, 0, (struct sockaddr *)&from, fl);
@@ -464,14 +464,14 @@ static void test_dns(void)
 
     cfg_init(&c, PROBE_DNS, dns.port);
     c.host = "blocked.example";
-    dns.mode = 0;
+    atomic_store_int(&dns.mode, 0);
     probe_run(&c, &lp, &r);
     CHECK_INT(r.outcome, PO_OK);
     CHECK_STR(r.detail, "1.2.3.4");
-    dns.mode = 3;
+    atomic_store_int(&dns.mode, 3);
     probe_run(&c, &lp, &r);
     CHECK_INT(r.outcome, PO_OK); /* answers with another id are not ours */
-    dns.mode = 1;
+    atomic_store_int(&dns.mode, 1);
     probe_run(&c, &lp, &r);
     CHECK_INT(r.outcome, PO_OK); /* nothing says it is forged */
     c.dns_bad = "192.0.2.1,10.0.0.0/8";
@@ -481,10 +481,10 @@ static void test_dns(void)
     c.dns_expect = "1.2.3.0/24";
     probe_run(&c, &lp, &r);
     CHECK_INT(r.outcome, PO_INJECTED);
-    dns.mode = 0;
+    atomic_store_int(&dns.mode, 0);
     probe_run(&c, &lp, &r);
     CHECK_INT(r.outcome, PO_OK);
-    dns.mode = 2;
+    atomic_store_int(&dns.mode, 2);
     probe_run(&c, &lp, &r);
     CHECK_INT(r.outcome, PO_INJECTED); /* NXDOMAIN for a name that exists */
 
@@ -492,16 +492,16 @@ static void test_dns(void)
     cfg_init(&c, PROBE_DNS, srv.port);
     c.host = "blocked.example";
     c.dns_tcp = 1;
-    srv.mode = M_DNS_TCP;
+    atomic_store_int(&srv.mode, M_DNS_TCP);
     probe_run(&c, &lp, &r);
     CHECK_INT(r.outcome, PO_OK);
     CHECK_STR(r.detail, "1.2.3.4");
     c.timeout = 0.3;
-    srv.mode = M_SILENT;
+    atomic_store_int(&srv.mode, M_SILENT);
     probe_run(&c, &lp, &r);
     CHECK_INT(r.outcome, PO_TIMEOUT);
 
-    dns.stop = 1;
+    atomic_store_int(&dns.stop, 1);
     plat_thread_join(dns.th);
     plat_sock_close(dns.s);
 }
@@ -600,12 +600,12 @@ static void test_evaluator(void)
     o.runs = 3;
     sb_init(&err);
     CHECK_INT(evaluator_open(&o, &ev, &err), 0);
-    srv.mode = M_HTTP_CL;
+    atomic_store_int(&srv.mode, M_HTTP_CL);
     CHECK_INT(evaluator_baseline(ev, &r, &reachable, NULL, NULL), 0);
     CHECK(reachable);
     CHECK_INT(r.runs, 3);
     CHECK(r.fitness == 400);
-    srv.mode = M_RESET;
+    atomic_store_int(&srv.mode, M_RESET);
     CHECK_INT(evaluator_eval(ev, "", &r), 0);
     CHECK(r.fitness == -360);
     CHECK_INT(r.last.outcome, PO_RESET);
@@ -621,7 +621,7 @@ static void test_evaluator(void)
         inds[1].s = strategy_parse(" \\/ ", &err);
         inds[1].str = " \\/ ";
         o.runs = 1;
-        srv.mode = M_HTTP_CL;
+        atomic_store_int(&srv.mode, M_HTTP_CL);
         CHECK_INT(evaluator_ga(ev, inds, 2), 0);
         CHECK(inds[0].fit == -1000 && inds[1].fit == -1000);
         o.skip_empty = 0;
@@ -737,7 +737,7 @@ static struct {
 static void agent_main(void *arg)
 {
     (void)arg;
-    while (!ag.stop) {
+    while (!atomic_load_int(&ag.stop)) {
         plat_pollfd fds[CTL_MAX_CLIENTS + 1];
         size_t n;
         if (ag.dial && !ctl_clients(ag.c)) {
@@ -789,11 +789,11 @@ static void test_agent(void)
     if (a) {
         CHECK(strstr(agent_name(a), GENEVA_VERSION) != NULL);
         cfg_init(&c, PROBE_HTTP, srv.port);
-        srv.mode = M_HTTP_CL;
+        atomic_store_int(&srv.mode, M_HTTP_CL);
         CHECK_INT(agent_probe(a, &c, &r), 0);
         CHECK_INT(r.outcome, PO_OK);
         CHECK(r.fitness == 400 && r.bytes > 0);
-        srv.mode = M_RESET;
+        atomic_store_int(&srv.mode, M_RESET);
         CHECK_INT(agent_probe(a, &c, &r), 0);
         CHECK_INT(r.outcome, PO_RESET);
         c.kind = PROBE_EXEC; /* the agent refuses: no retry */
@@ -815,7 +815,7 @@ static void test_agent(void)
         o.agent = spec;
         o.agent_token = "tok";
         CHECK_INT(evaluator_open(&o, &ev, &err), 0);
-        srv.mode = M_HTTP_CL;
+        atomic_store_int(&srv.mode, M_HTTP_CL);
         CHECK_INT(evaluator_baseline(ev, &er, &reachable, NULL, NULL), 0);
         CHECK(reachable && er.fitness == 400 && er.runs == 2);
         CHECK_INT(ag.st.probes, 4); /* two above, two here */
@@ -825,7 +825,7 @@ static void test_agent(void)
         CHECK_INT(evaluator_open(&o, &ev, &err), 6);
         evaluator_close(ev);
     }
-    ag.stop = 1;
+    atomic_store_int(&ag.stop, 1);
     plat_thread_join(ag.th);
     ctl_close(ag.c);
 
@@ -848,12 +848,12 @@ static void test_agent(void)
         CHECK(a != NULL);
         if (a) {
             cfg_init(&c, PROBE_HTTP, srv.port);
-            srv.mode = M_HTTP_CL;
+            atomic_store_int(&srv.mode, M_HTTP_CL);
             CHECK_INT(agent_probe(a, &c, &r), 0);
             CHECK_INT(r.outcome, PO_OK);
             agent_close(a);
         }
-        ag.stop = 1;
+        atomic_store_int(&ag.stop, 1);
         plat_thread_join(ag.th);
         ctl_close(ag.c);
         sb_reset(&err);

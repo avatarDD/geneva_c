@@ -5,4 +5,5 @@
 *.exe
 *.pcap
 !tests/data/*.pcap
+!tests/golden/*.pcap
 __pycache__/

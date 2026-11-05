@@ -15,6 +15,7 @@
 #endif
 
 #include "args.h"
+#include "ext_opt.h"
 #include "cmd_eval.h"
 #include "evolve.h"
 #include "geneva.h"
@@ -139,6 +140,7 @@ int cmd_evolve(int argc, char **argv)
         {"print-hall", 0, 0, NULL, "log the whole hall of fame at the end"},
         {"rng-seed", 0, 1, "N", "seed for reproducible runs"},
         LOG_OPTS,
+        EXT_OPT,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
@@ -178,6 +180,8 @@ int cmd_evolve(int argc, char **argv)
         rc = EXIT_OK;
         goto done;
     }
+    if (ext_parse_args(&a, "evolve") < 0)
+        goto done;
     if (a.npos) {
         fprintf(stderr, "geneva evolve: unexpected argument \"%s\"\n", a.pos[0]);
         goto done;

@@ -9,7 +9,7 @@ typedef struct {
     char shortopt;    /* 0 if none */
     int has_arg;      /* 0 = flag, 1 = takes a value */
     const char *meta; /* value placeholder for help, e.g. "PORT" */
-    const char *help;
+    const char *help; /* NULL: the option works but --help does not list it */
 } optdef;
 
 typedef struct {

@@ -173,20 +173,39 @@ int arg_dbl(const args_t *a, const char *name, double def, double lo, double hi,
     return 0;
 }
 
+static void help_row(const optdef *d, const char *help)
+{
+    char left[64];
+    if (d->shortopt)
+        snprintf(left, sizeof(left), "-%c, --%s%s%s", d->shortopt, d->name, d->has_arg ? " " : "",
+                 d->has_arg ? (d->meta ? d->meta : "VAL") : "");
+    else
+        snprintf(left, sizeof(left), "    --%s%s%s", d->name, d->has_arg ? " " : "",
+                 d->has_arg ? (d->meta ? d->meta : "VAL") : "");
+    if (strlen(left) > 30)
+        printf("  %s\n  %-30s %s\n", left, "", help);
+    else
+        printf("  %-30s %s\n", left, help);
+}
+
+/* Options whose help starts with \001 (EXT_HELP in ext_opt.h) work only with
+ * --ext: they come last, in a section of their own. */
 void args_help(const char *usage, const optdef *defs)
 {
+    int next = 0;
     printf("%s\n\nOptions:\n", usage);
     for (const optdef *d = defs; d->name; d++) {
-        char left[64];
-        if (d->shortopt)
-            snprintf(left, sizeof(left), "-%c, --%s%s%s", d->shortopt, d->name,
-                     d->has_arg ? " " : "", d->has_arg ? (d->meta ? d->meta : "VAL") : "");
+        if (!d->help)
+            continue; /* hidden */
+        if (d->help[0] == '\001')
+            next++;
         else
-            snprintf(left, sizeof(left), "    --%s%s%s", d->name, d->has_arg ? " " : "",
-                     d->has_arg ? (d->meta ? d->meta : "VAL") : "");
-        if (strlen(left) > 30)
-            printf("  %s\n  %-30s %s\n", left, "", d->help ? d->help : "");
-        else
-            printf("  %-30s %s\n", left, d->help ? d->help : "");
+            help_row(d, d->help);
     }
+    if (!next)
+        return;
+    printf("\nExtensions (with --ext):\n");
+    for (const optdef *d = defs; d->name; d++)
+        if (d->help && d->help[0] == '\001')
+            help_row(d, d->help + 1);
 }

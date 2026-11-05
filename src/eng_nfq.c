@@ -23,9 +23,9 @@ typedef struct {
 
 typedef uint32_t nfq_pctx; /* the NFQUEUE packet id */
 
-static int nfq_be_verdict(engine *e, const void *pctx, int accept, const uint8_t *data, size_t len)
+static int nfq_be_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len)
 {
-    nfq_state *s = e->bs;
+    nfq_state *s = w->e->bs;
     uint32_t id;
     memcpy(&id, pctx, sizeof(id));
     if (nfq_verdict(s->q, id, accept ? NFQ_ACCEPT : NFQ_DROP, data, len, 0, 0) < 0) {
@@ -35,9 +35,9 @@ static int nfq_be_verdict(engine *e, const void *pctx, int accept, const uint8_t
     return 0;
 }
 
-static int nfq_be_inject(engine *e, const void *pctx, const uint8_t *data, size_t len)
+static int nfq_be_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t len)
 {
-    nfq_state *s = e->bs;
+    nfq_state *s = w->e->bs;
     if (rawsend_send(s->rs, data, len) < 0) {
         LOGD("engine", "raw send: %s", strerror(errno));
         return -1;
@@ -47,7 +47,7 @@ static int nfq_be_inject(engine *e, const void *pctx, const uint8_t *data, size_
 
 static void on_msg(const nfq_msg *m, void *ctx)
 {
-    engine *e = ctx;
+    eng_worker *w = ctx;
     nfq_pctx id = m->id;
     int dir;
     switch (m->hook) {
@@ -62,7 +62,7 @@ static void on_msg(const nfq_msg *m, void *ctx)
     default:
         dir = -1; /* FORWARD: by the ports */
     }
-    engine_packet(e, m->data, m->len, dir, &id);
+    engine_packet(w, m->data, m->len, dir, &id);
 }
 
 static void pass_msg(const nfq_msg *m, void *ctx)
@@ -123,7 +123,7 @@ static void nfq_be_stop(engine *e)
     if (s->q) {
         /* packets queued while the rules came down pass unchanged */
         plat_mutex_lock(&e->lock);
-        while (nfq_read(s->q, pass_msg, e, NULL) > 0)
+        while (nfq_read(s->q, pass_msg, &e->w[0], NULL) > 0)
             ;
         plat_mutex_unlock(&e->lock);
     }
@@ -158,7 +158,8 @@ static int nfq_be_ready(engine *e, const plat_pollfd *fds, size_t n)
         return 0;
     /* drain a batch, but keep timers responsive */
     for (int i = 0; i < 64; i++) {
-        int r = nfq_read(s->q, on_msg, e, &e->c.overruns);
+        /* one queue, one worker (several with X10 of docs/EXT_ROADMAP.md) */
+        int r = nfq_read(s->q, on_msg, &e->w[0], &e->w[0].c.overruns);
         if (r < 0) {
             LOGE("engine", "NFQUEUE read: %s", strerror(errno));
             return -1;
