@@ -189,3 +189,8 @@ GitHub Actions: тесты + e2e, кросс-сборка zig (linux: x86_64, x8
 armv7, armv6/5, mips, mipsel (soft-float), mips64, riscv64, ppc; windows:
 x86_64, x86, arm64), архив Windows с WinDivert из официального релиза,
 `SHA256SUMS`, публикация релиза по тегу.
+
+### Дальше: расширенный режим `--ext`
+
+Сравнение с zapret2, архитектура автономной детекции и адаптации и план
+этапов X0–X10 — `docs/EXT_ROADMAP.md`.
