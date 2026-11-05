@@ -21,6 +21,12 @@ jobs:
       # without x-actions. Same snapshots for the build without src/ext/.
       - name: Golden snapshots
         run: tests/golden/run.sh build/geneva
+      # the engine's worker contexts and the probes' threads (EXT_ROADMAP 7.1)
+      - name: ThreadSanitizer
+        if: matrix.cc == 'gcc'
+        run: |
+          make -j"$(nproc)" CC=gcc O=build-tsan \
+            CFLAGS="-O1 -g -Werror -fsanitize=thread" LDFLAGS="-fsanitize=thread" test
       - name: Build without the extensions (EXT=0)
         run: |
           make -j"$(nproc)" CC=${{ matrix.cc }} O=build-noext EXT=0 CFLAGS="-O1 -g -Werror" test
