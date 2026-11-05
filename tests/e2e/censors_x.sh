@@ -130,8 +130,13 @@ start_censor() {
     return 1
 }
 
+# stop_censor [none]: "none" when the censor must not have fired (a bypass)
 stop_censor() {
-    grep -q '"ev":"censorship"' "$WORK/cen.jsonl" && ok "censorship event" || bad "no censorship event"
+    if [ "${1:-}" = none ]; then
+        grep -q '"ev":"censorship"' "$WORK/cen.jsonl" && bad "the censor fired" "$WORK/cen.jsonl" || ok "the censor did not fire"
+    else
+        grep -q '"ev":"censorship"' "$WORK/cen.jsonl" && ok "censorship event" || bad "no censorship event"
+    fi
     kill "$CPID" 2>/dev/null
     wait "$CPID" 2>/dev/null
     CPID=
@@ -306,7 +311,7 @@ nfqws2_case() {
         wait $NPID 2>/dev/null
     fi
     ip netns exec "$NC" sh -c 'iptables -t mangle -D OUTPUT -j ZT; iptables -t mangle -F ZT; iptables -t mangle -X ZT'
-    stop_censor
+    stop_censor none
 }
 if [ -n "${NFQWS2_DIR:-}" ] && on nfqws2; then
     NFQ=$NFQWS2_DIR/binaries/linux-x86_64/nfqws2
