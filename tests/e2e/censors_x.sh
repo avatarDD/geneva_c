@@ -349,7 +349,8 @@ fi
 # compared too, but the reverse side may differ where a reply crossed a
 # packet held in the queue, so that only warns.
 pd_lines() { # log direction: "posdebug: DIR ..." lines without the time
-    grep -o "posdebug: $2 .*" "$1" | sed 's/ time +[^ ]*s direct/ direct/'
+    # (and without nfqws2's "reasm N", its reassembly buffer)
+    grep -o "posdebug: $2 .*" "$1" | sed -e 's/ time +[^ ]*s direct/ direct/' -e 's/ reasm [0-9]*$//'
 }
 if [ -n "${NFQWS2_DIR:-}" ] && { on nfqws2 || on posdebug; }; then
     NFQ=$NFQWS2_DIR/binaries/linux-x86_64/nfqws2
@@ -363,9 +364,11 @@ if [ -n "${NFQWS2_DIR:-}" ] && { on nfqws2 || on posdebug; }; then
         iptables -t mangle -A ZTI -p udp --sport 443 -j NFQUEUE --queue-num 301
         iptables -t mangle -I OUTPUT -j ZT
         iptables -t mangle -I INPUT -j ZTI'
-    ip netns exec "$NC" tcpdump -i vx_c -U -w "$WORK/pd.pcap" 'tcp port 80 or tcp port 443 or udp port 443' \
-        > "$WORK/tcpdump.log" 2>&1 &
+    # --immediate-mode: without it tcpdump loses its backlog when stopped
+    ip netns exec "$NC" tcpdump -i vx_c --immediate-mode -U -w "$WORK/pd.pcap" \
+        'tcp port 80 or tcp port 443 or udp port 443' > "$WORK/tcpdump.log" 2>&1 &
     TPID=$!
+    for _ in $(seq 50); do grep -q "listening on" "$WORK/tcpdump.log" && break; sleep 0.1; done
     ip netns exec "$NC" "$NFQ" --qnum=301 --debug=1 --lua-init=@"$NFQWS2_DIR/lua/zapret-lib.lua" \
         --in-range=a --out-range=a --lua-desync=posdebug > "$WORK/nfq.log" 2>&1 &
     NPID=$!
@@ -397,7 +400,9 @@ if [ -n "${NFQWS2_DIR:-}" ] && { on nfqws2 || on posdebug; }; then
         elif diff "$WORK/pd.zd.$d" "$WORK/pd.gd.$d" > "$WORK/pd.diff"; then
             ok "$d: $n packets, the same direct counters as nfqws2"
         else
-            bad "$d: direct counters differ from nfqws2 (< nfqws2, > geneva)" "$WORK/pd.diff"
+            { echo "nfqws2 $n lines, geneva $(wc -l < "$WORK/pd.g.$d")"; cat "$WORK/tcpdump.log"
+              grep -v '^posdebug' "$WORK/pd.geneva"; head -24 "$WORK/pd.diff"; } > "$WORK/pd.why"
+            bad "$d: direct counters differ from nfqws2 (< nfqws2, > geneva)" "$WORK/pd.why"
         fi
         if ! diff "$WORK/pd.z.$d" "$WORK/pd.g.$d" > "$WORK/pd.diff"; then
             echo "  warn $d: reverse counters differ in $(grep -c '^<' "$WORK/pd.diff") line(s) (packets crossed in the queue)"
