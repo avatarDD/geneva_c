@@ -12,6 +12,7 @@
 
 #include "args.h"
 #include "censor.h"
+#include "ext_opt.h"
 #include "fw.h"
 #include "geneva.h"
 #include "log.h"
@@ -343,6 +344,16 @@ static int parse_addr(const char *s, censor_cfg *c, int dns)
     return 0;
 }
 
+/* dns: 53; the TLS and QUIC censors of --ext: 443; the others: 80 */
+static const char *default_port(const char *name)
+{
+    if (!strcmp(name, "dns"))
+        return "53";
+    if (!strcmp(name, "14") || !strcmp(name, "15") || !strcmp(name, "16"))
+        return "443";
+    return "80";
+}
+
 int cmd_censor(int argc, char **argv)
 {
     static const optdef defs[] = {
@@ -363,9 +374,20 @@ int cmd_censor(int argc, char **argv)
         {"log-file", 0, 1, "FILE", "also write the log to FILE"},
         {"verbose", 'v', 0, NULL, "same as --log-level trace"},
         {"quiet", 0, 0, NULL, "no log on stderr"},
+        /* censors 12-20, only with --ext (docs/CENSOR.md) */
+        {"ext", 0, 0, NULL, EXT_HELP("turn on the extensions: models 12-20 (--ext --list)")},
+        {"freeze-bytes", 0, 1, "N", EXT_HELP("censor 12: bytes to the client before the freeze (16384)")},
+        {"rate", 0, 1, "BPS", EXT_HELP("censor 13: bytes per second to the client (16384)")},
+        {"burst", 0, 1, "BYTES", EXT_HELP("censor 13: bucket depth in bytes (32768)")},
+        {"rst-ttl", 0, 1, "N", EXT_HELP("censor 14: TTL of the injected RSTs (64)")},
+        {"min-ttl", 0, 1, "N", EXT_HELP("censor 19: packets below this TTL are not inspected (2)")},
+        {"redirect", 0, 1, "URL", EXT_HELP("censor 18: Location of the 302 (http://block.example/)")},
+        {"block-ip", 0, 1, "ADDR", EXT_HELP("censor 17: blocked address, repeatable (up to 16)")},
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
+    static const char *const ext_only[] = {"freeze-bytes", "rate", "burst", "rst-ttl", "min-ttl", "redirect",
+                                           "block-ip"};
     args_t a;
     char err[128];
     censor_cfg cfg;
@@ -392,6 +414,13 @@ int cmd_censor(int argc, char **argv)
         rc = EXIT_OK;
         goto done;
     }
+    if (ext_parse_args(&a, "censor") < 0)
+        goto done;
+    for (size_t i = 0; i < ARRAY_LEN(ext_only) && !ext_enabled(); i++)
+        if (arg_has(&a, ext_only[i])) {
+            fprintf(stderr, "geneva censor: --%s needs --ext (censors 12-20)\n", ext_only[i]);
+            goto done;
+        }
     if (arg_has(&a, "list")) {
         list_models();
         rc = EXIT_OK;
@@ -433,6 +462,39 @@ int cmd_censor(int argc, char **argv)
             fprintf(stderr, "geneva censor: bad --dns-answer %s\n", s);
             goto done;
         }
+    if (ext_enabled()) {
+        if (arg_int(&a, "freeze-bytes", (int64_t)cfg.freeze_bytes, 1, INT64_MAX, &v) < 0)
+            goto done;
+        cfg.freeze_bytes = (uint64_t)v;
+        if (arg_int(&a, "rate", (int64_t)cfg.rate, 1, INT64_MAX, &v) < 0)
+            goto done;
+        cfg.rate = (uint64_t)v;
+        if (arg_int(&a, "burst", (int64_t)cfg.burst, 1, INT64_MAX, &v) < 0)
+            goto done;
+        cfg.burst = (uint64_t)v;
+        if (arg_int(&a, "rst-ttl", cfg.rst_ttl, 1, 255, &v) < 0)
+            goto done;
+        cfg.rst_ttl = (int)v;
+        if (arg_int(&a, "min-ttl", cfg.min_ttl, 0, 255, &v) < 0)
+            goto done;
+        cfg.min_ttl = (int)v;
+        cfg.redirect = arg_str(&a, "redirect", cfg.redirect);
+        if (strpbrk(cfg.redirect, "\r\n") || strlen(cfg.redirect) > 256) {
+            fprintf(stderr, "geneva censor: bad --redirect\n");
+            goto done;
+        }
+        idx = 0;
+        while ((s = arg_next(&a, "block-ip", &idx)) != NULL) {
+            int ver = strchr(s, ':') ? 6 : 4;
+            if (cfg.nblock_ip == (int)ARRAY_LEN(cfg.block_ip) ||
+                inet_pton(ver == 6 ? AF_INET6 : AF_INET, s, cfg.block_ip[cfg.nblock_ip].a) != 1) {
+                fprintf(stderr, "geneva censor: bad --block-ip %s (up to %d addresses)\n", s,
+                        (int)ARRAY_LEN(cfg.block_ip));
+                goto done;
+            }
+            cfg.block_ip[cfg.nblock_ip++].ver = ver;
+        }
+    }
 #ifdef __linux__
     cfg.local_addr = route_src;
 #endif
@@ -440,13 +502,17 @@ int cmd_censor(int argc, char **argv)
         fprintf(stderr, "geneva censor: %s\n", e.data);
         goto done;
     }
+    if (!strcmp(censor_name(cen), "17") && !cfg.nblock_ip) {
+        fprintf(stderr, "geneva censor: censor 17 needs --block-ip\n");
+        goto done;
+    }
 
     fw_config_default(&fw);
     fw.forward = 1;
     fw.queue = 400;
-    if (!strcmp(censor_name(cen), "dns"))
+    if (!strcmp(censor_name(cen), "dns") || !strcmp(censor_name(cen), "16"))
         fw.tcp = 0, fw.udp = 1;
-    if (ports_parse(arg_str(&a, "port", fw.udp ? "53" : "80"), &fw.ports) < 0) {
+    if (ports_parse(arg_str(&a, "port", default_port(censor_name(cen))), &fw.ports) < 0) {
         fprintf(stderr, "geneva censor: bad --port (like 80 or 80,443 or 8000-8100)\n");
         goto done;
     }

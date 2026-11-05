@@ -3,7 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ext_opt.h"
 #include "log.h"
+#if GENEVA_EXT
+#  include "ext/censor_x.h"
+#endif
 
 /* ---- packets ------------------------------------------------------------- */
 
@@ -280,6 +284,9 @@ struct censor {
     /* censor_new_run(): connections of this run and of the ones before */
     int runs;
     flowset seen, old;
+#if GENEVA_EXT
+    cx *x; /* censors 12-20 (--ext) */
+#endif
 };
 
 static const struct {
@@ -304,10 +311,17 @@ static const struct {
 
 const censor_info *censor_models(size_t *n)
 {
-    static censor_info list[ARRAY_LEN(models) + 1];
+    static censor_info list[ARRAY_LEN(models) + 16];
+    size_t k = 0;
     for (size_t i = 0; i < ARRAY_LEN(models); i++)
-        list[i] = models[i].info;
-    *n = ARRAY_LEN(models);
+        list[k++] = models[i].info;
+#if GENEVA_EXT
+    /* the models of the extensions only once --ext is given */
+    for (size_t i = 0; ext_enabled() && cx_models[i].name && k + 1 < ARRAY_LEN(list); i++)
+        list[k++] = cx_models[i];
+#endif
+    list[k].name = NULL;
+    *n = k;
     return list;
 }
 
@@ -322,6 +336,12 @@ void censor_cfg_default(censor_cfg *c)
     c->dns_ttl = 60;
     c->max_tcbs = 4096;
     c->spoof_client = 1;
+    c->freeze_bytes = 16384;
+    c->rate = 16384;
+    c->burst = 32768;
+    c->rst_ttl = 64;
+    c->min_ttl = 2;
+    c->redirect = "http://block.example/";
 }
 
 censor *censor_new(const char *name, const censor_cfg *cfg, sbuf *err)
@@ -339,6 +359,27 @@ censor *censor_new(const char *name, const censor_cfg *cfg, sbuf *err)
                 c->cfg.max_tcbs = 4096;
             return c;
         }
+#if GENEVA_EXT
+    if (ext_enabled()) {
+        for (size_t i = 0; cx_models[i].name; i++)
+            if (!strcmp(name, cx_models[i].name)) {
+                c = xcalloc(1, sizeof(*c));
+                c->name = cx_models[i].name;
+                c->cfg = *cfg;
+                if (c->cfg.max_tcbs <= 0)
+                    c->cfg.max_tcbs = 4096;
+                c->x = cx_new(name, &c->cfg); /* c->cfg lives as long as c */
+                if (!c->x) {
+                    free(c);
+                    sb_printf(err, "censor %s needs QUIC decryption: this build has EXT_CRYPTO=0", name);
+                    return NULL;
+                }
+                return c;
+            }
+        sb_printf(err, "unknown censor \"%s\" (1-20, 8b or dns)", name);
+        return NULL;
+    }
+#endif
     sb_printf(err, "unknown censor \"%s\" (1-11, 8b or dns)", name);
     return NULL;
 }
@@ -354,6 +395,10 @@ void censor_reset(censor *c)
     memset(&c->drop_all, 0, sizeof(c->drop_all));
     c->ntcbs = 0;
     c->nflagged = 0;
+#if GENEVA_EXT
+    if (c->x)
+        cx_reset(c->x);
+#endif
 }
 
 static void flow_key(const view *v, flowkey *k)
@@ -428,6 +473,9 @@ void censor_free(censor *c)
     free(c->old.v);
     free(c->tcbs);
     free(c->flagged);
+#if GENEVA_EXT
+    cx_free(c->x);
+#endif
     free(c);
 }
 
@@ -847,6 +895,13 @@ void censor_packet(censor *c, const uint8_t *pkt, size_t len, censor_send_fn sen
         r->what = CENSOR_CONTROL;
         return;
     }
+#if GENEVA_EXT
+    if (c->x) {
+        /* their own connection table; censor_new_run() forgets it */
+        cx_packet(c->x, pkt, len, send, ctx, r);
+        return;
+    }
+#endif
     if (old_flow(c, &v)) {
         r->what = CENSOR_OLD;
         return;

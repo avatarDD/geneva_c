@@ -193,6 +193,7 @@ make CC=x86_64-w64-mingw32-gcc            # Windows
 | лабораторные цензоры и стенд | `docs/CENSOR.md` |
 | встраивание в zapret-gui и Zapret2_AutoTuner | `docs/INTEGRATION.md` |
 | план работ | `docs/PLAN.md` |
+| расширения `--ext`: что уже сделано | `docs/EXT.md` |
 | проект `--ext`: паритет с zapret2, автономная адаптация | `docs/EXT_ROADMAP.md` |
 | история версий | `CHANGELOG.md` |
 

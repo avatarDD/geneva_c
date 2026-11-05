@@ -3065,3 +3065,27 @@ $ $G db --db $D/sdb.jsonl export
 $ $G ctl --nosuch
 geneva ctl: unknown option --nosuch
 [exit 2]
+### censor-list
+$ $G censor --list
+1    syncs on SYN, drops the packet and everything after from the client
+2    syncs on SYN, sends 5 RSTs to the client
+3    syncs on SYN, sends 5 RSTs to the client and 5 to the server
+4    syncs on SYN and on ACK, drops everything from the client
+5    syncs on SYN, sends 5 RSTs to the server
+6    checks every packet until any RST or FIN, drops everything from the client
+7    TCB on addresses and ports, torn down by RST or FIN; drops
+8    TCB on addresses, ports and sequence number, torn down by RST or FIN; drops
+8b   many TCBs, torn down by RST; RSTs both ways, blocks both hosts
+9    one TCB, re-synchronizes after RST or FIN; drops
+10   many TCBs, re-synchronize after RST or FIN, checksums checked; RSTs
+11   like 10, also syncs on ACK, ignores data offsets below 5
+dns  answers DNS queries for forbidden names with a forged address first
+[exit 0]
+### censor-12-without-ext
+$ $G censor -c 12
+geneva censor: unknown censor "12" (1-11, 8b or dns)
+[exit 2]
+### censor-rate-without-ext
+$ $G censor -c 1 --rate 5
+geneva censor: --rate needs --ext (censors 12-20)
+[exit 2]

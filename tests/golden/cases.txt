@@ -2,6 +2,9 @@
 # directory, $T a scratch directory).
 # TAG "ext": the command is run a second time with --ext right after the
 # subcommand and must print exactly the same (only in builds with "ext").
+# TAG "extonly": run only in builds with "ext", compared with expected-ext.txt
+# (with the "Extensions (with --ext):" section of the help texts, which
+# expected.txt does not hold).
 # Regenerate after a deliberate change: tests/golden/run.sh --update BIN
 usage||$G
 help||$G --help
@@ -58,3 +61,12 @@ db-top||$G db --db $D/sdb.jsonl top
 db-show||$G db --db $D/sdb.jsonl show '[TCP:flags:S]-drop-| \/'
 db-export||$G db --db $D/sdb.jsonl export
 ctl-bad-option||$G ctl --nosuch
+censor-list||$G censor --list
+censor-12-without-ext||$G censor -c 12
+censor-rate-without-ext||$G censor -c 1 --rate 5
+help-ext|extonly|$G --help
+help-ext-censor|extonly|$G censor --help
+help-ext-run|extonly|$G run --help
+censor-ext-list|extonly|$G censor --ext --list
+censor-ext-17-needs-block-ip|extonly|$G censor --ext -c 17
+censor-ext-bad-block-ip|extonly|$G censor --ext -c 17 --block-ip 1.2.3

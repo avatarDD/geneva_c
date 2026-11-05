@@ -27,6 +27,9 @@ jobs:
         run: |
           make -j"$(nproc)" CC=gcc O=build-tsan \
             CFLAGS="-O1 -g -Werror -fsanitize=thread" LDFLAGS="-fsanitize=thread" test
+      - name: Build without cryptography (EXT_CRYPTO=0)
+        run: |
+          make -j"$(nproc)" CC=${{ matrix.cc }} O=build-nocrypto EXT_CRYPTO=0 CFLAGS="-O1 -g -Werror" test
       - name: Build without the extensions (EXT=0)
         run: |
           make -j"$(nproc)" CC=${{ matrix.cc }} O=build-noext EXT=0 CFLAGS="-O1 -g -Werror" test
@@ -55,6 +58,30 @@ jobs:
       - name: service scripts e2e (Entware, OpenWrt procd)
         run: sudo tests/e2e/initscripts.sh build/geneva
 
+  # Lab censors 12-20 (--ext), and the official nfqws2 with reference
+  # strategies getting past them (docs/CENSOR.md). zapret2 comes from its
+  # official release, checked against the hash Zapret2_AutoTuner pins.
+  censors-ext:
+    runs-on: ubuntu-24.04
+    env:
+      ZAPRET2_TAG: v1.0.6
+      ZAPRET2_SHA256: e141b51b60c895fe9548f4d644365461dcad8155e068d284a9aae1724504237d
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ethtool nftables iptables curl openssl unzip
+      - run: make -j"$(nproc)" CFLAGS="-O1 -g -Werror"
+      - name: zapret2 release
+        run: |
+          curl -fsSL -o zapret2.zip \
+            "https://github.com/bol-van/zapret2/releases/download/$ZAPRET2_TAG/zapret2-$ZAPRET2_TAG.zip"
+          echo "$ZAPRET2_SHA256  zapret2.zip" | sha256sum -c -
+          sudo mkdir -p /opt/zapret2 && sudo unzip -q zapret2.zip -d /opt/zapret2
+          dir=$(dirname "$(dirname "$(dirname "$(find /opt/zapret2 -path '*/binaries/linux-x86_64/nfqws2' | head -1)")")")
+          sudo chmod -R a+rX /opt/zapret2 && sudo chmod +x "$dir/binaries/linux-x86_64/nfqws2"
+          echo "NFQWS2_DIR=$dir" >> "$GITHUB_ENV"
+      - name: censors 12-20 and nfqws2 against them
+        run: sudo env NFQWS2_DIR="$NFQWS2_DIR" tests/e2e/censors_x.sh build/geneva
+
   musl-static:
     runs-on: ubuntu-24.04
     steps:
@@ -62,7 +89,9 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: make -j"$(nproc)" CC=musl-gcc STATIC=1 SMALL=1 CFLAGS="-Werror" test
       # size of src/ext/ in the router build; the budget grows by stage (6.1)
-      - run: tools/ext_size.sh 2048 CC=musl-gcc CFLAGS="-Werror"
+      # X2 (lab censors 12-20, TLS/QUIC reading, AES-GCM/HKDF): about 16 KB
+      - run: tools/ext_size.sh 24576 CC=musl-gcc CFLAGS="-Werror"
+      - run: tools/ext_size.sh 20480 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
       - run: ls -la build/geneva && file build/geneva
 
   windows-cross:

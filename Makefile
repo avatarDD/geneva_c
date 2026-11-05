@@ -6,12 +6,14 @@
 #   make CC=x86_64-w64-mingw32-gcc        (Windows; detected from the target)
 #   make test                    unit tests
 #   make EXT=0                   without the --ext extensions (src/ext/)
+#   make EXT_CRYPTO=0            extensions without cryptography (no QUIC decryption)
 
 CC      ?= cc
 AR      ?= ar
 STRIP   ?= strip
 O       ?= build
 EXT     ?= 1
+EXT_CRYPTO ?= 1
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 1.2.0)
 
 TARGET_TRIPLE := $(shell $(CC) -dumpmachine 2>/dev/null)
@@ -25,7 +27,7 @@ CFLAGS  ?= -O2 -g
 LDFLAGS ?=
 # Internal flags live in separate variables so that CFLAGS/LDFLAGS given on
 # the command line add to them instead of replacing them.
-XCFLAGS := -std=c11 $(WARN) -D_GNU_SOURCE -DGENEVA_VERSION=\"$(VERSION)\"
+XCFLAGS := -std=c11 $(WARN) -Isrc -D_GNU_SOURCE -DGENEVA_VERSION=\"$(VERSION)\"
 XLDFLAGS :=
 LDLIBS  :=
 
@@ -53,6 +55,12 @@ HDRS    := $(wildcard src/*.h)
 ifeq ($(EXT),1)
   XCFLAGS += -DGENEVA_EXT=1
   SRCS    += $(wildcard src/ext/*.c)
+  ifeq ($(EXT_CRYPTO),0)
+    XCFLAGS += -DGENEVA_EXT_CRYPTO=0
+    SRCS    := $(filter-out src/ext/crypto_%.c,$(SRCS))
+  else
+    XCFLAGS += -DGENEVA_EXT_CRYPTO=1
+  endif
   HDRS    += $(wildcard src/ext/*.h)
 else
   XCFLAGS += -DGENEVA_EXT=0
@@ -68,7 +76,7 @@ TBIN    := $(O)/geneva-tests$(EXE)
 # compiler, or flags) in the same O= rebuilds everything instead of mixing
 # objects of both builds.
 CONFIG      := $(O)/config.mk
-CONFIG_TEXT := CC=$(CC) EXT=$(EXT) OS=$(OS_TARGET) SMALL=$(SMALL) CFLAGS=$(CFLAGS)
+CONFIG_TEXT := CC=$(CC) EXT=$(EXT) EXT_CRYPTO=$(EXT_CRYPTO) OS=$(OS_TARGET) SMALL=$(SMALL) CFLAGS=$(CFLAGS)
 
 .PHONY: all test clean strip FORCE
 

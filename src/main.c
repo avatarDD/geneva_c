@@ -48,6 +48,11 @@ static void usage(FILE *f)
     for (size_t i = 0; i < ARRAY_LEN(commands); i++)
         fprintf(f, "  %-10s %s\n", commands[i].name, commands[i].summary);
     fprintf(f, "\nRun \"geneva <command> --help\" for command options.\n");
+#if GENEVA_EXT
+    fprintf(f, "\nExtensions (with --ext):\n"
+               "  --ext after a command turns on the extensions beyond Geneva:\n"
+               "  censor models 12-20 (geneva censor --ext --list). See docs/EXT.md.\n");
+#endif
 }
 
 int cmd_version(int argc, char **argv)
