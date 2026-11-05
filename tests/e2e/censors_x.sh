@@ -349,8 +349,9 @@ fi
 # compared too, but the reverse side may differ where a reply crossed a
 # packet held in the queue, so that only warns.
 pd_lines() { # log direction: "posdebug: DIR ..." lines without the time
-    # (and without nfqws2's "reasm N", its reassembly buffer)
-    grep -o "posdebug: $2 .*" "$1" | sed -e 's/ time +[^ ]*s direct/ direct/' -e 's/ reasm [0-9]*$//'
+    # and without what nfqws2 adds after the payload ("reasm N", "decrypt N":
+    # its reassembly and QUIC decryption buffers, not counters)
+    grep -o "posdebug: $2 .*" "$1" | sed -e 's/ time +[^ ]*s direct/ direct/' -e 's/\( payload [0-9]*\) .*$/\1/'
 }
 if [ -n "${NFQWS2_DIR:-}" ] && { on nfqws2 || on posdebug; }; then
     NFQ=$NFQWS2_DIR/binaries/linux-x86_64/nfqws2
