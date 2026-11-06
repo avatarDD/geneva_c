@@ -190,7 +190,7 @@ static int hk_packet(eng_worker *w, strategy *st, gpkt *p, strat_dir dir, const 
     return 0;
 }
 
-static const ext_hooks hooks = {hk_open, hk_close, hk_packet};
+static const ext_hooks hooks = {hk_open, hk_close, hk_packet, NULL};
 
 static void test_hooks(void)
 {

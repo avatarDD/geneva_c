@@ -76,6 +76,25 @@ while True:
     got += d
 sys.exit(0 if got == b"echo:" + msg else 1)
 PY
+# a TLS ClientHello (Chromium, SNI example.com at its end) in two segments,
+# then the newline the echo server waits for
+CH_FILE=$(readlink -f "$(dirname "$0")/../data/ext/tls_clienthello_chromium_mlkem.bin")
+cat > "$WORK/cli_ch.py" <<'PY'
+import socket, sys, time
+ch = open(sys.argv[3], "rb").read()
+s = socket.socket(); s.settimeout(8)
+s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+s.connect((sys.argv[1], int(sys.argv[2])))
+for part in (ch[:1000], ch[1000:], b"\n"):
+    s.sendall(part)
+    time.sleep(0.2)
+got = b""
+while True:
+    d = s.recv(65536)
+    if not d: break
+    got += d
+sys.exit(0 if got == b"echo:" + ch + b"\n" else 1)
+PY
 HAVE6=0
 ip netns exec "$NC" python3 -c 'import socket; socket.socket(socket.AF_INET6)' 2>/dev/null && HAVE6=1
 ip netns exec "$NS" python3 "$WORK/srv.py" $PORT &
@@ -129,6 +148,7 @@ bad() {
 check() { if eval "$2"; then ok "$1"; else bad "$1" "$WORK/cap.txt"; fi; }
 
 exchange() { ip netns exec "$NC" timeout 15 python3 "$WORK/cli.py" "${DST}" $PORT; }
+exchange_ch() { ip netns exec "$NC" timeout 15 python3 "$WORK/cli_ch.py" "${DST}" $PORT "$CH_FILE"; }
 
 rules_gone() {
     ! ip netns exec "$NC" iptables-save 2>/dev/null | grep -q GENEVA &&
@@ -215,6 +235,22 @@ for FW in $FIREWALLS; do
     exchange && ok "exchange works" || bad "exchange failed"
     stop_case
     check "every client packet has win 7" '[ $(grep "10.77.0.1.* > 10.77.0.2.$PORT:" "$WORK/cap.txt" | grep -vc "win 7,") -eq 0 ] && [ $(cnt "win 7,") -ge 3 ]'
+    fi
+
+    # L7 of --ext (stage X4): the hello in two segments is reassembled, the
+    # held segments go on through the strategy with its host name
+    if "$GENEVA" version --json | grep -q '"ext_l7"'; then
+    start_case "L7:host over a split ClientHello" "$FW" '[L7:host:example.com]-tamper{TCP:window:replace:7}-| \/' 10.77.0.2 --ext
+    exchange_ch && ok "exchange works" || bad "exchange failed"
+    stop_case
+    check "the first piece has win 7 (the SNI is in the second)" 'grep "10.77.0.1.* > 10.77.0.2.$PORT: Flags \[P.\]" "$WORK/cap.txt" | grep -E "length 1000(:|$)" | grep -q "win 7,"'
+    check "the second piece too, not the SYN" 'grep "10.77.0.1.* > 10.77.0.2.$PORT: Flags \[P.\]" "$WORK/cap.txt" | grep -E "length 825(:|$)" | grep -q "win 7," && ! grep "Flags \[S\]" "$WORK/cap.txt" | grep -q "win 7,"'
+    check "two packets held" 'grep "\"ev\":\"stats\"" "$WORK/ev.jsonl" | tail -1 | grep -q "\"held\":2"'
+
+    start_case "L7:host without reassembly" "$FW" '[L7:host:example.com]-tamper{TCP:window:replace:7}-| \/' 10.77.0.2 "--ext --ext-reasm-disable all"
+    exchange_ch && ok "exchange works" || bad "exchange failed"
+    stop_case
+    check "no piece knows the host (the SNI is in the second)" '[ $(cnt "win 7,") -eq 0 ]'
     fi
 
     start_case "SIGHUP reload" "$FW" '\/'

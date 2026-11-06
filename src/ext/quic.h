@@ -1,7 +1,7 @@
 /*
  * QUIC Initial packets of a client (RFC 9000 17.2.2, RFC 9001 5, RFC 9369):
  * header parsing, removal of the Initial protection and the CRYPTO stream.
- * Versions: 1, 2 and the drafts 29-32. Pure functions over caller buffers,
+ * Versions: those zapret2 knows (l7_quic_draft): 1, 2, drafts 11-34, mvfst, Q050, T05x. Pure functions over caller buffers,
  * no allocation; every length from the network is checked.
  */
 #ifndef GENEVA_EXT_QUIC_H

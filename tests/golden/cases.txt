@@ -77,3 +77,10 @@ apply-ext-posdebug|extonly|$G apply --ext --ext-posdebug -s '\/' -i $D/in.pcap -
 apply-ext-flow|extonly|$G apply --ext --rng-seed 7 -s '[FLOW:d:1-1]-tamper{TCP:window:replace:7}-| [FLOW:n:<2]-tamper{TCP:urgptr:replace:9}-| \/' -i $D/in.pcap -p 53,80,443 -v --json -o $T/out.pcap && od -An -tx1 -v $T/out.pcap
 apply-ext-ctrack-disable|extonly|$G apply --ext --ext-ctrack-disable --ext-posdebug -s '[FLOW:n:a]-tamper{TCP:window:replace:7}-| [FLOW:n:1-]-drop-| \/' -i $D/in.pcap -p 80 -v
 apply-ext-bad-timeouts|extonly|$G apply --ext --ext-ctrack-timeouts 1:2 -s '\/' -i $D/in.pcap
+check-ext-l7|extonly|$G check --ext '[L7:payload:tls_client_hello,quic_initial]-drop-| [L7:proto:~known]-drop-| [L7:host:Example.com,*cdn.net]-drop-| \/'
+check-ext-l7-bad|extonly|$G check --ext '[L7:payload:tls]-drop-| \/'
+apply-ext-l7|extonly|$G apply --ext -s '[L7:payload:tls_client_hello]-tamper{TCP:window:replace:7}-| [L7:host:example.org]-tamper{TCP:urgptr:replace:9}-| [L7:proto:quic]-duplicate-| \/' -i $D/l7.pcap -p 80,443 -v --json
+apply-ext-l7-posdebug|extonly|$G apply --ext --ext-posdebug -s '\/' -i $D/l7.pcap -p 80,443
+apply-ext-reasm-disable|extonly|$G apply --ext --ext-reasm-disable all -s '[L7:host:example.com]-drop-| [L7:host:rutracker.org]-drop-| \/' -i $D/l7.pcap -p 443 -v
+apply-ext-payload-disable|extonly|$G apply --ext --ext-payload-disable quic_initial,http_req -s '[L7:payload:unknown]-drop-| \/' -i $D/l7.pcap -p 80,443 --json
+apply-ext-reasm-bad|extonly|$G apply --ext --ext-reasm-max 100 -s '\/' -i $D/l7.pcap

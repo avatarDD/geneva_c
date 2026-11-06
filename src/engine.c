@@ -335,6 +335,8 @@ void engine_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t 
     inject(w, pctx, data, len);
 }
 
+void engine_hold(eng_worker *w) { w->c.held++; }
+
 int engine_workers_init(engine *e, unsigned nw, sbuf *err)
 {
     if (e->w)
@@ -377,8 +379,11 @@ void engine_workers_free(engine *e)
 
 void engine_run_timers(engine *e, int all)
 {
-    for (unsigned i = 0; i < e->nw; i++)
+    for (unsigned i = 0; i < e->nw; i++) {
+        if (all && e->w[i].x_open && e->o->ext->flush)
+            e->o->ext->flush(&e->w[i]);
         run_timers(&e->w[i], all);
+    }
 }
 
 void engine_counters(const engine *e, counters *sum, size_t *pending)
@@ -404,17 +409,20 @@ static uint64_t next_due(const engine *e)
     return due;
 }
 
+static void run(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir dir, const uint8_t *data,
+                size_t len, const void *pctx);
+
 /* Runs a parsed packet through st (NULL: it passes) and frees it. */
 static void packet(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir dir, const uint8_t *data,
                    size_t len, const void *pctx)
 {
     engine *e = w->e;
-    gpkt *orig = NULL;
-    pktlist out = {0};
-    int fired;
-    size_t first = 0;
+    int took;
 
-    if (e->o->ext && e->o->ext->packet && e->o->ext->packet(w, st, p, dir, data, len, pctx)) {
+    w->slot = sl;
+    took = e->o->ext && e->o->ext->packet && e->o->ext->packet(w, st, p, dir, data, len, pctx);
+    w->slot = NULL;
+    if (took) {
         w->xctx = NULL;
         pkt_free(p); /* the extensions gave the verdict */
         return;
@@ -426,6 +434,35 @@ static void packet(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir
         give_verdict(w, pctx, 1, NULL, 0);
         return;
     }
+    run(w, st, sl, p, dir, data, len, pctx);
+}
+
+void engine_replay(eng_worker *w, strategy *st, const uint8_t *data, size_t len, strat_dir dir, const void *pctx,
+                   void *xctx)
+{
+    gpkt *p = pkt_parse(data, len);
+    if (!p || w->e->paused || !st) {
+        if (!p)
+            w->c.parse_errors++;
+        pkt_free(p);
+        w->c.accepted++;
+        give_verdict(w, pctx, 1, NULL, 0);
+        return;
+    }
+    w->xctx = xctx;
+    run(w, st, w->slot, p, dir, data, len, pctx);
+}
+
+/* Runs p through st and sends what comes out: the first result rides on
+ * the captured packet's verdict, the others are injected. */
+static void run(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir dir, const uint8_t *data,
+                size_t len, const void *pctx)
+{
+    gpkt *orig = NULL;
+    pktlist out = {0};
+    int fired;
+    size_t first = 0;
+
     if (log_enabled(LOG_TRACE))
         orig = pkt_copy(p);
     fired = strategy_apply_x(st, p, dir, &out, w->xctx);
@@ -534,6 +571,7 @@ static void stats_fields(engine *e, jw *w)
     jw_kuint(w, "overruns", c->overruns);
     jw_kuint(w, "passed_first", c->passed_first);
     jw_kuint(w, "flow_evictions", c->flow_evictions);
+    jw_kuint(w, "held", c->held);
     if (e->st) {
         jw_key(w, "out_trees");
         forest_json(w, e->st->out, e->st->nout);
