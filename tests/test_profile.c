@@ -267,7 +267,7 @@ static const char *write_tmp(const char *text)
 {
     static char path[64];
     FILE *f;
-    snprintf(path, sizeof(path), "/tmp/geneva-test-prof-%d.ini", (int)plat_getpid());
+    snprintf(path, sizeof(path), "geneva-test-prof-%d.ini", (int)plat_getpid());
     f = fopen(path, "wb");
     if (!f)
         return NULL;
