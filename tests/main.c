@@ -31,6 +31,7 @@ void suite_ext(void);
 void suite_engine(void);
 void suite_crypto(void);
 void suite_censor_x(void);
+void suite_ctrack(void);
 
 int main(void)
 {
@@ -49,6 +50,7 @@ int main(void)
     suite_engine();
     suite_crypto();
     suite_censor_x();
+    suite_ctrack();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }

@@ -141,6 +141,7 @@ int cmd_evolve(int argc, char **argv)
         {"rng-seed", 0, 1, "N", "seed for reproducible runs"},
         LOG_OPTS,
         EXT_OPT,
+        EXT_CTRACK_OPTS,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };

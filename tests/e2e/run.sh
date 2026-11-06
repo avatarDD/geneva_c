@@ -202,6 +202,21 @@ for FW in $FIREWALLS; do
     check "IPv6 fragments on the wire" '[ $(cnt "frag (") -ge 1 ]'
     fi
 
+    # the conntrack of --ext (stage X3): a FLOW range picks one packet of the
+    # flow, META:ifout the interface; the window marks what the trees hit
+    if "$GENEVA" version --json | grep -q '"ext_ctrack"'; then
+    start_case "FLOW:n second packet" "$FW" '[FLOW:n:2-2]-tamper{TCP:window:replace:7}-| \/' 10.77.0.2 --ext
+    exchange && ok "exchange works" || bad "exchange failed"
+    stop_case
+    check "only the handshake ACK has win 7" '[ $(grep "10.77.0.1.* > 10.77.0.2.$PORT:" "$WORK/cap.txt" | grep -c "win 7,") -eq 1 ] && grep "10.77.0.1.* > 10.77.0.2.$PORT:" "$WORK/cap.txt" | grep "win 7," | grep "Flags \[\.\]" | grep -q "ack 1,"'
+    check "the tree was cut off after it" 'grep "\"ev\":\"stats\"" "$WORK/ev.jsonl" | tail -1 | grep -q "\"fired\":1}"'
+
+    start_case "META:ifout" "$FW" '[META:ifout:veth_c]-tamper{TCP:window:replace:7}-| [META:ifout:nosuch]-drop-| \/' 10.77.0.2 --ext
+    exchange && ok "exchange works" || bad "exchange failed"
+    stop_case
+    check "every client packet has win 7" '[ $(grep "10.77.0.1.* > 10.77.0.2.$PORT:" "$WORK/cap.txt" | grep -vc "win 7,") -eq 0 ] && [ $(cnt "win 7,") -ge 3 ]'
+    fi
+
     start_case "SIGHUP reload" "$FW" '\/'
     printf '%s\n' '[TCP:flags:S]-tamper{TCP:window:replace:7}-| \/' > "$WORK/strategy"
     kill -HUP $ENG; sleep 0.3

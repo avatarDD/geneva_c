@@ -79,6 +79,7 @@ typedef struct {
     int64_t gas;  /* remaining; negative = bomb trigger countdown */
     int bomb;
     uint64_t seen;
+    void *x; /* a trigger of the extensions (FLOW:, META:), see strat_xtrig */
 } trigger;
 
 typedef struct {
@@ -93,6 +94,9 @@ typedef struct {
     size_t nout;
     atree **in;
     size_t nin;
+    /* Different for every strategy made or changed (parse, mutate, mate):
+     * what the per-flow state of the extensions is about */
+    int serial;
 } strategy;
 
 /* A list of packets produced by a strategy. */
@@ -104,6 +108,27 @@ typedef struct {
 void pktlist_push(pktlist *l, gpkt *p);
 /* Frees the packets and the array. */
 void pktlist_free(pktlist *l);
+
+/* Triggers of the extensions (docs/EXT_ROADMAP.md, 5.1): pseudo-layers that
+ * look at the packet's flow (FLOW:n:1-5) or at where it came from
+ * (META:ifin:eth0). They exist only once --ext registers them; without, the
+ * layer is unknown as before. The value is kept as written, so a strategy
+ * prints back unchanged. */
+typedef struct {
+    /* Returns 1 with *x set (or -1 with err) when layer is one of the
+     * extensions', 0 when it is not. */
+    int (*parse)(const char *layer, const char *field, const char *value, void **x, sbuf *err);
+    /* Does packet p (tree number tree of the forest of direction dir) match?
+     * ctx is what the caller passed to strategy_apply_x(), NULL without. */
+    int (*match)(const void *x, void *ctx, strat_dir dir, size_t tree, const gpkt *p);
+    void *(*dup)(const void *x);
+    void (*free)(void *x);
+} strat_xtrig;
+
+/* NULL unregisters. */
+void strategy_set_xtrig(const strat_xtrig *ops);
+/* Gives s a new serial (after a change of its trees). */
+void strategy_new_serial(strategy *s);
 
 /* Parses a strategy. Returns NULL and a message in err on failure.
  * Random parts that Geneva fills in (a fragment without parameters picks
@@ -125,6 +150,8 @@ void tree_print(const atree *t, sbuf *out);
 /* Building blocks for the genetic operators (mutate.c). */
 int trigger_parse(trigger *t, const char *text, sbuf *err);
 void trigger_clear(trigger *t);
+/* A copy with fresh gas. */
+void trigger_copy(trigger *dst, const trigger *src);
 void action_free(action *a); /* with its subtrees */
 void tree_free(atree *t);
 void trigger_print(const trigger *t, sbuf *out);
@@ -135,5 +162,7 @@ void action_print(const action *a, sbuf *out);
  * (each possibly carrying a sleep delay) are appended to out. Returns the
  * number of trees that fired. */
 int strategy_apply(strategy *s, gpkt *pkt, strat_dir dir, pktlist *out);
+/* The same with a context for the triggers of the extensions. */
+int strategy_apply_x(strategy *s, gpkt *pkt, strat_dir dir, pktlist *out, void *xctx);
 
 #endif

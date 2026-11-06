@@ -29,6 +29,16 @@
   (`tests/data/zapret2/`, MIT). Сборка `make EXT_CRYPTO=0`. e2e
   `tests/e2e/censors_x.sh` и CI-стенд с официальным nfqws2 v1.0.6.
   `--help` описывает расширения в разделе «Extensions (with --ext):».
+- X3: conntrack по образцу zapret2 (`src/ext/ctrack.c`): роли клиент и
+  сервер, счётчики `n d b s p` обеих сторон, ретрансмиссии, MSS и окно,
+  TTL ответа, связанные ICMP, таймауты `--ext-ctrack-timeouts`, предел
+  `--ext-ctrack-max` с вытеснением, `--ext-ctrack-disable`. Диапазоны
+  zapret2 и триггеры `FLOW:` (`n d b s p`, `rn…rp`, `state`, `retrans`) и
+  `META:` (`ifin`, `ifout`, `mark`, из NFQUEUE). Дерево, чей диапазон
+  позади, отсекается на потоке; когда отсечены все, поток идёт мимо
+  стратегии. `apply --ext --ext-posdebug` печатает строки `posdebug`
+  zapret2; CI сверяет их с официальным nfqws2 на одном захвате. Фича
+  `ext_ctrack`. Подробно — `docs/EXT.md`.
 
 ## v1.2.0
 

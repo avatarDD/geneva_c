@@ -15,7 +15,9 @@
 # readable by everyone, as nfqws2 drops root) the section "nfqws2" runs
 # nfqws2 in the client namespace with a reference strategy (nfqws2 syntax,
 # --lua-desync) against each censor it can beat (docs/CENSOR.md). Usage:
-#   tests/e2e/censors_x.sh [path/to/geneva] [censor ... | nfqws2]
+# The section "posdebug" (also with NFQWS2_DIR) checks the conntrack of
+# --ext against nfqws2's posdebug on the same packets (stage X3).
+#   tests/e2e/censors_x.sh [path/to/geneva] [censor ... | nfqws2 | posdebug]
 set -u
 GENEVA=$(readlink -f "${1:-build/geneva}")
 [ $# -gt 0 ] && shift
@@ -337,6 +339,77 @@ if [ -n "${NFQWS2_DIR:-}" ] && on nfqws2; then
     nfqws2_case 20 "" '[ "$(http "/?q=ultrasurf" | cut -d" " -f1)" = 200 ] && echo ok' \
         --filter-tcp=80 --filter-l7=http --payload=http_req \
         --lua-desync=send:ipfrag:ipfrag_pos_tcp=24 --lua-desync=drop
+fi
+
+# Position parity (stage X3): nfqws2 runs zapret2's posdebug on every packet
+# of a few flows in the client namespace while tcpdump captures them on its
+# interface; "geneva apply --ext --ext-posdebug" over the capture has to see
+# the same counters. The direct side of each line is compared strictly per
+# direction (it depends only on the side's own packets); the whole lines are
+# compared too, but the reverse side may differ where a reply crossed a
+# packet held in the queue, so that only warns.
+pd_lines() { # log direction: "posdebug: DIR ..." lines without the time
+    # and without what nfqws2 adds after the payload ("reasm N", "decrypt N":
+    # its reassembly and QUIC decryption buffers, not counters)
+    grep -o "posdebug: $2 .*" "$1" | sed -e 's/ time +[^ ]*s direct/ direct/' -e 's/\( payload [0-9]*\) .*$/\1/'
+}
+if [ -n "${NFQWS2_DIR:-}" ] && { on nfqws2 || on posdebug; }; then
+    NFQ=$NFQWS2_DIR/binaries/linux-x86_64/nfqws2
+    echo "== posdebug parity with nfqws2"
+    ip netns exec "$NC" sh -c 'iptables -t mangle -N ZT 2>/dev/null
+        iptables -t mangle -A ZT -m mark --mark 0x40000000/0x40000000 -j RETURN
+        iptables -t mangle -A ZT -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 301
+        iptables -t mangle -A ZT -p udp --dport 443 -j NFQUEUE --queue-num 301
+        iptables -t mangle -N ZTI 2>/dev/null
+        iptables -t mangle -A ZTI -p tcp -m multiport --sports 80,443 -j NFQUEUE --queue-num 301
+        iptables -t mangle -A ZTI -p udp --sport 443 -j NFQUEUE --queue-num 301
+        iptables -t mangle -I OUTPUT -j ZT
+        iptables -t mangle -I INPUT -j ZTI'
+    # --immediate-mode: without it tcpdump loses its backlog when stopped
+    ip netns exec "$NC" tcpdump -i vx_c --immediate-mode -U -w "$WORK/pd.pcap" \
+        'tcp port 80 or tcp port 443 or udp port 443' > "$WORK/tcpdump.log" 2>&1 &
+    TPID=$!
+    for _ in $(seq 50); do grep -q "listening on" "$WORK/tcpdump.log" && break; sleep 0.1; done
+    ip netns exec "$NC" "$NFQ" --qnum=301 --debug=1 --lua-init=@"$NFQWS2_DIR/lua/zapret-lib.lua" \
+        --in-range=a --out-range=a --lua-desync=posdebug > "$WORK/nfq.log" 2>&1 &
+    NPID=$!
+    sleep 1.5
+    if ! kill -0 $NPID 2>/dev/null; then
+        bad "nfqws2 did not start" "$WORK/nfq.log"
+    else
+        http /secret.html > /dev/null
+        http /big.bin > /dev/null
+        https lab.example > /dev/null
+        ip netns exec "$NC" python3 "$WORK/udp.py" 10.81.2.2 "$DATA/quic_initial_vk_com.bin" 40030 > /dev/null
+        sleep 0.5
+        kill $NPID 2>/dev/null
+        wait $NPID 2>/dev/null
+    fi
+    kill -INT $TPID 2>/dev/null
+    wait $TPID 2>/dev/null
+    ip netns exec "$NC" sh -c 'iptables -t mangle -D OUTPUT -j ZT; iptables -t mangle -F ZT; iptables -t mangle -X ZT
+        iptables -t mangle -D INPUT -j ZTI; iptables -t mangle -F ZTI; iptables -t mangle -X ZTI'
+    "$GENEVA" apply --ext --ext-posdebug -s '\/' -i "$WORK/pd.pcap" -p 80,443 > /dev/null 2> "$WORK/pd.geneva"
+    for d in out in; do
+        pd_lines "$WORK/nfq.log" $d > "$WORK/pd.z.$d"
+        pd_lines "$WORK/pd.geneva" $d > "$WORK/pd.g.$d"
+        n=$(wc -l < "$WORK/pd.z.$d")
+        sed 's/ reverse.* payload / payload /' "$WORK/pd.z.$d" > "$WORK/pd.zd.$d"
+        sed 's/ reverse.* payload / payload /' "$WORK/pd.g.$d" > "$WORK/pd.gd.$d"
+        if [ "$n" -lt 10 ]; then
+            bad "$d: nfqws2 logged only $n posdebug lines" "$WORK/nfq.log"
+        elif diff "$WORK/pd.zd.$d" "$WORK/pd.gd.$d" > "$WORK/pd.diff"; then
+            ok "$d: $n packets, the same direct counters as nfqws2"
+        else
+            { echo "nfqws2 $n lines, geneva $(wc -l < "$WORK/pd.g.$d")"; cat "$WORK/tcpdump.log"
+              grep -v '^posdebug' "$WORK/pd.geneva"; head -24 "$WORK/pd.diff"; } > "$WORK/pd.why"
+            bad "$d: direct counters differ from nfqws2 (< nfqws2, > geneva)" "$WORK/pd.why"
+        fi
+        if ! diff "$WORK/pd.z.$d" "$WORK/pd.g.$d" > "$WORK/pd.diff"; then
+            echo "  warn $d: reverse counters differ in $(grep -c '^<' "$WORK/pd.diff") line(s) (packets crossed in the queue)"
+            head -6 "$WORK/pd.diff" | sed 's/^/       /'
+        fi
+    done
 fi
 
 if [ $fails -eq 0 ]; then echo "all passed"; else echo "$fails failure(s)"; fi

@@ -168,16 +168,6 @@ static int pick_value(const gen_ctx *g, double real_pb, layer_id *layer, const c
 
 /* ---- triggers ------------------------------------------------------------ */
 
-static void trigger_copy(trigger *dst, const trigger *src)
-{
-    *dst = *src;
-    dst->proto_str = xstrdup(src->proto_str);
-    dst->field = xstrdup(src->field);
-    gval_copy(&dst->value, &src->value);
-    dst->gas = dst->gas_init;
-    dst->seen = 0;
-}
-
 /* Trigger.get_rand_trigger(). Returns -1 if no field is available. */
 static int trigger_random(const gen_ctx *g, trigger *t, double real_pb)
 {
@@ -494,6 +484,7 @@ void strategy_mutate(const gen_ctx *g, strategy *s, int in_enabled, int out_enab
         forest_mutate(g, (forest){&s->in, &s->nin}, DIR_IN);
     if (out_enabled)
         forest_mutate(g, (forest){&s->out, &s->nout}, DIR_OUT);
+    strategy_new_serial(s);
 }
 
 /* swap_one(): moves a random tree of each forest to a random place in the
@@ -536,12 +527,17 @@ int strategy_mate(strategy *a, strategy *b, double indpb, int in_enabled, int ou
         any |= forest_mate((forest){&a->out, &a->nout}, (forest){&b->out, &b->nout});
     if (in_enabled && rng_real() < indpb)
         any |= forest_mate((forest){&a->in, &a->nin}, (forest){&b->in, &b->nin});
+    if (any) {
+        strategy_new_serial(a);
+        strategy_new_serial(b);
+    }
     return any;
 }
 
 strategy *strategy_random(const gen_ctx *g, int in_trees, int out_trees, int in_actions, int out_actions)
 {
     strategy *s = xcalloc(1, sizeof(*s));
+    strategy_new_serial(s);
     for (int i = 0; i < in_trees; i++) {
         atree *t = tree_random(g, DIR_IN, in_actions);
         if (t)

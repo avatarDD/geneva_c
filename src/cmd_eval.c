@@ -321,6 +321,7 @@ int cmd_eval(int argc, char **argv)
         {"quiet", 0, 0, NULL, "no log on stderr"},
         {"events", 'e', 1, "SINK", "JSON Lines events: - (stdout), stderr, FILE or none"},
         EXT_OPT,
+        EXT_CTRACK_OPTS,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };

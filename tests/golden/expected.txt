@@ -3089,3 +3089,8 @@ geneva censor: unknown censor "12" (1-11, 8b or dns)
 $ $G censor -c 1 --rate 5
 geneva censor: --rate needs --ext (censors 12-20)
 [exit 2]
+### flow-without-ext
+$ $G check '[FLOW:n:1-3]-drop-| \/'
+geneva check: unknown protocol "FLOW" in trigger
+  in: [FLOW:n:1-3]-drop-| \/
+[exit 3]

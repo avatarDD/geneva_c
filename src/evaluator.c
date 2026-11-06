@@ -9,6 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ext_opt.h"
+#if GENEVA_EXT
+#  include "ext/ext.h"
+#endif
 #include "geneva.h"
 #include "json.h"
 #include "log.h"
@@ -121,6 +125,9 @@ int evaluator_open(eval_opts *o, evaluator **out, sbuf *err)
     ev->eng.fw.filter_narrow = 1; /* --filter narrows the slots' capture */
     ev->eng.slots = &ev->slots;
     ev->eng.embedded = 1;
+#if GENEVA_EXT
+    ev->eng.ext = ext_engine_hooks();
+#endif
     ev->eng.stop = &ev->eng_stop;
     ev->eng.on_ready = on_ready;
     ev->eng.ready_ctx = ev;

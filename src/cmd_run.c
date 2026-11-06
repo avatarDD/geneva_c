@@ -8,6 +8,9 @@
 
 #include "args.h"
 #include "ext_opt.h"
+#if GENEVA_EXT
+#  include "ext/ext.h"
+#endif
 #include "engine.h"
 #include "evaluator.h"
 #include "fw.h"
@@ -204,6 +207,7 @@ int cmd_run(int argc, char **argv)
         {"verbose", 'v', 0, NULL, "log every packet (same as --log-level trace)"},
         {"quiet", 0, 0, NULL, "no log on stderr"},
         EXT_OPT,
+        EXT_CTRACK_OPTS,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
@@ -232,6 +236,9 @@ int cmd_run(int argc, char **argv)
     rc = EXIT_USAGE;
     if (ext_parse_args(&a, "run") < 0)
         goto done;
+#if GENEVA_EXT
+    o.ext = ext_engine_hooks();
+#endif
     if (a.npos) {
         fprintf(stderr, "geneva run: unexpected argument \"%s\"\n", a.pos[0]);
         goto done;

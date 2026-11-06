@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "plat.h"
 #include "rng.h"
 
 #define MAX_DEPTH 200 /* nesting limit for action trees */
@@ -127,8 +128,18 @@ static void free_parts(char **parts, size_t n)
 
 /* ---- triggers ------------------------------------------------------------ */
 
+static const strat_xtrig *g_xtrig;
+
+void strategy_set_xtrig(const strat_xtrig *ops) { g_xtrig = ops; }
+
+static volatile int g_serial;
+
+void strategy_new_serial(strategy *s) { s->serial = atomic_fetch_add_int(&g_serial, 1) + 1; }
+
 void trigger_clear(trigger *t)
 {
+    if (t->x && g_xtrig)
+        g_xtrig->free(t->x);
     free(t->proto_str);
     free(t->field);
     gval_free(&t->value);
@@ -150,6 +161,18 @@ int trigger_parse(trigger *t, const char *text, sbuf *err)
         sb_printf(err, "malformed trigger \"%s\" (expected proto:field:value[:gas])", text);
         goto out;
     }
+    if (g_xtrig) {
+        int r = g_xtrig->parse(parts[0], parts[1], parts[2], &t->x, err);
+        if (r < 0)
+            goto out;
+        if (r > 0) {
+            t->layer = LAYER_NONE;
+            t->proto_str = xstrdup(parts[0]);
+            t->field = xstrdup(parts[1]);
+            gval_str(&t->value, parts[2]);
+            goto gas;
+        }
+    }
     t->layer = layer_by_name(parts[0]);
     if (t->layer == LAYER_NONE) {
         sb_printf(err, "unknown protocol \"%s\" in trigger", parts[0]);
@@ -169,6 +192,7 @@ int trigger_parse(trigger *t, const char *text, sbuf *err)
             t->value.s[vl - 1] = 0;
         }
     }
+gas:
     if (n == 4) {
         if (py_int(parts[3], &t->gas_init) < 0) {
             sb_printf(err, "bad trigger gas \"%s\"", parts[3]);
@@ -198,12 +222,28 @@ void trigger_print(const trigger *t, sbuf *out)
         sb_printf(out, ":%lld", (long long)t->gas_init);
 }
 
+void trigger_copy(trigger *dst, const trigger *src)
+{
+    *dst = *src;
+    dst->proto_str = xstrdup(src->proto_str);
+    dst->field = xstrdup(src->field);
+    gval_copy(&dst->value, &src->value);
+    dst->x = src->x && g_xtrig ? g_xtrig->dup(src->x) : NULL;
+    dst->gas = dst->gas_init;
+    dst->seen = 0;
+}
+
 /* Trigger.is_applicable(), including gas and "bomb" (negative gas). */
-static int trigger_applies(trigger *t, const gpkt *p)
+static int trigger_applies(trigger *t, const gpkt *p, void *xctx, strat_dir dir, size_t tree)
 {
     gval v;
     int match;
     t->seen++;
+    if (t->x) {
+        if (!g_xtrig || !g_xtrig->match(t->x, xctx, dir, tree, p))
+            return 0;
+        goto gas;
+    }
     if (!pkt_has_layer(p, t->layer) || pkt_get(p, t->layer, t->field, &v) < 0)
         return 0;
     if (t->wildcard) {
@@ -220,6 +260,7 @@ static int trigger_applies(trigger *t, const gpkt *p)
     gval_free(&v);
     if (!match)
         return 0;
+gas:
     if (!t->has_gas)
         return 1;
     if (t->gas == 0)
@@ -693,6 +734,7 @@ strategy *strategy_parse(const char *text, sbuf *err)
     strat_dir dir = DIR_OUT;
     strategy *st = xcalloc(1, sizeof(*st));
     char *body = s;
+    strategy_new_serial(st);
     /* hanging quotes, as Geneva strips them */
     if (len && body[0] == '"') {
         body++;
@@ -1285,13 +1327,15 @@ static void do_run(action *a, gpkt *p, pktlist *out)
     }
 }
 
-int strategy_apply(strategy *s, gpkt *pkt, strat_dir dir, pktlist *out)
+int strategy_apply(strategy *s, gpkt *pkt, strat_dir dir, pktlist *out) { return strategy_apply_x(s, pkt, dir, out, NULL); }
+
+int strategy_apply_x(strategy *s, gpkt *pkt, strat_dir dir, pktlist *out, void *xctx)
 {
     atree **f = dir == DIR_IN ? s->in : s->out;
     size_t n = dir == DIR_IN ? s->nin : s->nout;
     int fired = 0;
     for (size_t i = 0; i < n; i++) {
-        if (!trigger_applies(&f[i]->trig, pkt))
+        if (!trigger_applies(&f[i]->trig, pkt, xctx, dir, i))
             continue;
         fired++;
         f[i]->fired++;

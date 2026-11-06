@@ -43,7 +43,7 @@ static int fake_inject(eng_worker *w, const void *pctx, const uint8_t *data, siz
 }
 
 static const backend fake_backend = {
-    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, fake_verdict, fake_inject, 0, NULL, NULL,
+    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, fake_verdict, fake_inject, 0, NULL, NULL, NULL,
 };
 
 static void load_base(void)
@@ -173,8 +173,9 @@ static void hk_close(eng_worker *w)
     w->x = NULL;
 }
 
-static int hk_packet(eng_worker *w, gpkt *p, strat_dir dir, const uint8_t *data, size_t len, const void *pctx)
+static int hk_packet(eng_worker *w, strategy *st, gpkt *p, strat_dir dir, const uint8_t *data, size_t len, const void *pctx)
 {
+    (void)st;
     CHECK(w->x != NULL);
     hk_packets++;
     if (hk_verdict == 1) {

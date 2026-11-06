@@ -109,6 +109,10 @@ Options:
 
 Extensions (with --ext):
       --ext                      turn on the extensions beyond Geneva (docs/EXT.md)
+      --ext-ctrack-timeouts S:E:F[:U]
+                                 conntrack timeouts, s: TCP SYN, ESTABLISHED, FIN, UDP (60:300:60:60)
+      --ext-ctrack-max N         flows the conntrack keeps per worker (16384)
+      --ext-ctrack-disable       no conntrack: FLOW triggers match only the "a" range
 [exit 0]
 ### censor-ext-list
 $ $G censor --ext --list
@@ -142,4 +146,165 @@ geneva censor: censor 17 needs --block-ip
 ### censor-ext-bad-block-ip
 $ $G censor --ext -c 17 --block-ip 1.2.3
 geneva censor: bad --block-ip 1.2.3 (up to 16 addresses)
+[exit 2]
+### check-ext-flow
+$ $G check --ext '[FLOW:n:1-3]-drop-| [FLOW:rd:d2<d5]-drop-| [FLOW:state:est]-drop-| [META:mark:0x10/0xff]-drop-| \/'
+[FLOW:n:1-3]-drop-| [FLOW:rd:d2<d5]-drop-| [FLOW:state:est]-drop-| [META:mark:0x10/0xff]-drop-| \/
+[exit 0]
+### check-ext-flow-bad
+$ $G check --ext '[FLOW:n:1~2]-drop-| \/'
+geneva check: bad range "1~2" (like n2-n5, d1<d3, -s100, b10-, a or x)
+  in: [FLOW:n:1~2]-drop-| \/
+[exit 3]
+### apply-ext-posdebug
+$ $G apply --ext --ext-posdebug -s '\/' -i $D/in.pcap -p 53,80,443
+posdebug: out direct n1 d0 b0 s0 p0 reverse n0 d0 b0 s0 p0 payload 0
+posdebug: in direct n1 d0 b0 s0 p0 reverse n1 d0 b0 s1 p1 payload 0
+posdebug: out direct n2 d0 b0 s1 p1 reverse n1 d0 b0 s1 p1 payload 0
+posdebug: out direct n3 d1 b74 s1 p75 reverse n1 d0 b0 s1 p1 payload 74
+posdebug: in direct n2 d1 b43 s1 p44 reverse n3 d1 b74 s75 p75 payload 43
+posdebug: out direct n4 d1 b74 s75 p75 reverse n2 d1 b43 s44 p44 payload 0
+posdebug: out direct n1 d0 b0 s0 p0 reverse n0 d0 b0 s0 p0 payload 0
+posdebug: in direct n1 d0 b0 s0 p0 reverse n1 d0 b0 s1 p1 payload 0
+posdebug: out direct n2 d0 b0 s1 p1 reverse n1 d0 b0 s1 p1 payload 0
+posdebug: out direct n3 d1 b111 s1 p112 reverse n1 d0 b0 s1 p1 payload 111
+posdebug: in direct n2 d0 b0 s1 p1 reverse n3 d1 b111 s112 p112 payload 0
+posdebug: out direct n1 d1 b29 s0 p0 reverse n0 d0 b0 s0 p0 payload 29
+posdebug: in direct n1 d1 b45 s0 p0 reverse n1 d1 b29 s0 p0 payload 45
+posdebug: out direct n1 d0 b0 s0 p0 reverse n0 d0 b0 s0 p0 payload 0
+[exit 0]
+### apply-ext-flow
+$ $G apply --ext --rng-seed 7 -s '[FLOW:d:1-1]-tamper{TCP:window:replace:7}-| [FLOW:n:<2]-tamper{TCP:urgptr:replace:9}-| \/' -i $D/in.pcap -p 53,80,443 -v --json -o $T/out.pcap && od -An -tx1 -v $T/out.pcap
+#1 out TCP 192.168.1.10:40000 --> 93.184.216.34:80 [S] seq=1000 ack=0 len=0 ttl=64 -> 1 packet(s)
+    -> TCP 192.168.1.10:40000 --> 93.184.216.34:80 [S] seq=1000 ack=0 len=0 ttl=64
+#2 in TCP 93.184.216.34:80 --> 192.168.1.10:40000 [SA] seq=5000 ack=1001 len=0 ttl=52 -> 1 packet(s) (no tree fired)
+#3 out TCP 192.168.1.10:40000 --> 93.184.216.34:80 [A] seq=1001 ack=5001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#4 out TCP 192.168.1.10:40000 --> 93.184.216.34:80 [PA] seq=1001 ack=5001 len=74 ttl=64 GET / HTTP/1.1\x0d\x0aHost: example.com\x0d\x0aUser-Agent: c... -> 1 packet(s)
+    -> TCP 192.168.1.10:40000 --> 93.184.216.34:80 [PA] seq=1001 ack=5001 len=74 ttl=64 GET / HTTP/1.1\x0d\x0aHost: example.com\x0d\x0aUser-Agent: c...
+#5 in TCP 93.184.216.34:80 --> 192.168.1.10:40000 [PA] seq=5001 ack=1075 len=43 ttl=52 HTTP/1.1 200 OK\x0d\x0aContent-Length: 5\x0d\x0a\x0d\x0ahello -> 1 packet(s) (no tree fired)
+#6 out TCP 192.168.1.10:40000 --> 93.184.216.34:80 [FA] seq=1075 ack=5044 len=0 ttl=64 -> 1 packet(s)
+    -> TCP 192.168.1.10:40000 --> 93.184.216.34:80 [FA] seq=1075 ack=5044 len=0 ttl=64
+#7 out TCP 192.168.1.10:40001 --> 93.184.216.34:443 [S] seq=7000 ack=0 len=0 ttl=64 -> 1 packet(s)
+    -> TCP 192.168.1.10:40001 --> 93.184.216.34:443 [S] seq=7000 ack=0 len=0 ttl=64
+#8 in TCP 93.184.216.34:443 --> 192.168.1.10:40001 [SA] seq=9000 ack=7001 len=0 ttl=52 -> 1 packet(s) (no tree fired)
+#9 out TCP 192.168.1.10:40001 --> 93.184.216.34:443 [A] seq=7001 ack=9001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#10 out TCP 192.168.1.10:40001 --> 93.184.216.34:443 [PA] seq=7001 ack=9001 len=111 ttl=64 \x16\x03\x01\x00j\x01\x00\x00f\x03\x03\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f \x00\x00\x00\x00... -> 1 packet(s)
+    -> TCP 192.168.1.10:40001 --> 93.184.216.34:443 [PA] seq=7001 ack=9001 len=111 ttl=64 \x16\x03\x01\x00j\x01\x00\x00f\x03\x03\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f \x00\x00\x00\x00...
+#11 in TCP 93.184.216.34:443 --> 192.168.1.10:40001 [RA] seq=9001 ack=7112 len=0 ttl=52 -> 1 packet(s) (no tree fired)
+#12 out UDP 192.168.1.10:50000 --> 8.8.8.8:53 len=29 ttl=64 \x124\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01 -> 2 packet(s)
+    -> UDP 192.168.1.10:50000 --> 8.8.8.8:53 len=29 ttl=64 \x124\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01
+    -> UDP 192.168.1.10:50000 --> 8.8.8.8:53 len=29 ttl=64 \x124\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01
+#13 in UDP 8.8.8.8:53 --> 192.168.1.10:50000 len=45 ttl=118 \x124\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00\x01,\x00\x04]\xb8\xd8" -> 1 packet(s) (no tree fired)
+#14 out TCP 2001:db8::10:40002 --> 2001:db8::443:443 [S] seq=11000 ack=0 len=0 hlim=64 -> 1 packet(s)
+    -> TCP 2001:db8::10:40002 --> 2001:db8::443:443 [S] seq=11000 ack=0 len=0 hlim=64
+{"strategy":"[FLOW:d:1-1]-tamper{TCP:window:replace:7}-| [FLOW:n:<2]-tamper{TCP:urgptr:replace:9}-| \\/","packets_in":14,"packets_out":15,"skipped":0,"triggered":7,"out_trees":[{"tree":"[FLOW:d:1-1]-tamper{TCP:window:replace:7}-|","fired":4},{"tree":"[FLOW:n:<2]-tamper{TCP:urgptr:replace:9}-|","fired":4}],"in_trees":[]}
+ 4d 3c b2 a1 02 00 04 00 00 00 00 00 00 00 00 00
+ ff ff 00 00 65 00 00 00 00 f1 53 65 00 00 00 00
+ 34 00 00 00 34 00 00 00 45 00 00 34 00 01 40 00
+ 40 06 43 36 c0 a8 01 0a 5d b8 d8 22 9c 40 00 50
+ 00 00 03 e8 00 00 00 00 80 02 fa f0 dd 12 00 09
+ 02 04 05 b4 01 03 03 07 04 02 00 00 00 f1 53 65
+ 40 42 0f 00 34 00 00 00 34 00 00 00 45 00 00 34
+ 00 01 40 00 34 06 4f 36 5d b8 d8 22 c0 a8 01 0a
+ 00 50 9c 40 00 00 13 88 00 00 03 e9 80 12 fa f0
+ c9 82 00 00 02 04 05 b4 01 03 03 07 04 02 00 00
+ 00 f1 53 65 80 84 1e 00 28 00 00 00 28 00 00 00
+ 45 00 00 28 00 01 40 00 40 06 43 42 c0 a8 01 0a
+ 5d b8 d8 22 9c 40 00 50 00 00 03 e9 00 00 13 89
+ 50 10 fa f0 09 54 00 00 00 f1 53 65 c0 c6 2d 00
+ 72 00 00 00 72 00 00 00 45 00 00 72 00 01 40 00
+ 40 06 42 f8 c0 a8 01 0a 5d b8 d8 22 9c 40 00 50
+ 00 00 03 e9 00 00 13 89 50 18 00 07 74 35 00 00
+ 47 45 54 20 2f 20 48 54 54 50 2f 31 2e 31 0d 0a
+ 48 6f 73 74 3a 20 65 78 61 6d 70 6c 65 2e 63 6f
+ 6d 0d 0a 55 73 65 72 2d 41 67 65 6e 74 3a 20 63
+ 75 72 6c 2f 38 2e 35 2e 30 0d 0a 41 63 63 65 70
+ 74 3a 20 2a 2f 2a 0d 0a 0d 0a 00 f1 53 65 00 09
+ 3d 00 53 00 00 00 53 00 00 00 45 00 00 53 00 01
+ 40 00 34 06 4f 17 5d b8 d8 22 c0 a8 01 0a 00 50
+ 9c 40 00 00 13 89 00 00 04 33 50 18 fa f0 16 01
+ 00 00 48 54 54 50 2f 31 2e 31 20 32 30 30 20 4f
+ 4b 0d 0a 43 6f 6e 74 65 6e 74 2d 4c 65 6e 67 74
+ 68 3a 20 35 0d 0a 0d 0a 68 65 6c 6c 6f 00 f1 53
+ 65 40 4b 4c 00 28 00 00 00 28 00 00 00 45 00 00
+ 28 00 01 40 00 40 06 43 42 c0 a8 01 0a 5d b8 d8
+ 22 9c 40 00 50 00 00 04 33 00 00 13 b4 50 11 00
+ 07 03 c8 00 00 00 f1 53 65 80 8d 5b 00 34 00 00
+ 00 34 00 00 00 45 00 00 34 00 01 40 00 40 06 43
+ 36 c0 a8 01 0a 5d b8 d8 22 9c 41 01 bb 00 00 1b
+ 58 00 00 00 00 80 02 fa f0 c4 36 00 09 02 04 05
+ b4 01 03 03 07 04 02 00 00 00 f1 53 65 c0 cf 6a
+ 00 34 00 00 00 34 00 00 00 45 00 00 34 00 01 40
+ 00 34 06 4f 36 5d b8 d8 22 c0 a8 01 0a 01 bb 9c
+ 41 00 00 23 28 00 00 1b 59 80 12 fa f0 a1 06 00
+ 00 02 04 05 b4 01 03 03 07 04 02 00 00 00 f1 53
+ 65 00 12 7a 00 28 00 00 00 28 00 00 00 45 00 00
+ 28 00 01 40 00 40 06 43 42 c0 a8 01 0a 5d b8 d8
+ 22 9c 41 01 bb 00 00 1b 59 00 00 23 29 50 10 fa
+ f0 e0 d7 00 00 00 f1 53 65 40 54 89 00 97 00 00
+ 00 97 00 00 00 45 00 00 97 00 01 40 00 40 06 42
+ d3 c0 a8 01 0a 5d b8 d8 22 9c 41 01 bb 00 00 1b
+ 59 00 00 23 29 50 18 00 07 da 57 00 00 16 03 01
+ 00 6a 01 00 00 66 03 03 00 01 02 03 04 05 06 07
+ 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17
+ 18 19 1a 1b 1c 1d 1e 1f 20 00 00 00 00 00 00 00
+ 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ 00 00 00 00 00 00 00 00 00 00 02 13 01 01 00 00
+ 1b 00 00 00 10 00 0e 00 00 0b 65 78 61 6d 70 6c
+ 65 2e 63 6f 6d 00 2b 00 03 02 03 04 00 f1 53 65
+ 80 96 98 00 28 00 00 00 28 00 00 00 45 00 00 28
+ 00 01 40 00 34 06 4f 42 5d b8 d8 22 c0 a8 01 0a
+ 01 bb 9c 41 00 00 23 29 00 00 1b c8 50 14 fa f0
+ e0 64 00 00 00 f1 53 65 c0 d8 a7 00 39 00 00 00
+ 39 00 00 00 45 00 00 39 00 01 40 00 40 11 68 f1
+ c0 a8 01 0a 08 08 08 08 c3 50 00 35 00 25 88 ba
+ 12 34 01 00 00 01 00 00 00 00 00 00 07 65 78 61
+ 6d 70 6c 65 03 63 6f 6d 00 00 01 00 01 00 f1 53
+ 65 c0 d8 a7 00 39 00 00 00 39 00 00 00 45 00 00
+ 39 00 01 40 00 40 11 68 f1 c0 a8 01 0a 08 08 08
+ 08 c3 50 00 35 00 25 88 ba 12 34 01 00 00 01 00
+ 00 00 00 00 00 07 65 78 61 6d 70 6c 65 03 63 6f
+ 6d 00 00 01 00 01 00 f1 53 65 00 1b b7 00 49 00
+ 00 00 49 00 00 00 45 00 00 49 00 01 40 00 76 11
+ 32 e1 08 08 08 08 c0 a8 01 0a 00 35 c3 50 00 35
+ ee 21 12 34 81 80 00 01 00 01 00 00 00 00 07 65
+ 78 61 6d 70 6c 65 03 63 6f 6d 00 00 01 00 01 c0
+ 0c 00 01 00 01 00 00 01 2c 00 04 5d b8 d8 22 00
+ f1 53 65 40 5d c6 00 48 00 00 00 48 00 00 00 60
+ 00 00 00 00 20 06 40 20 01 0d b8 00 00 00 00 00
+ 00 00 00 00 00 00 10 20 01 0d b8 00 00 00 00 00
+ 00 00 00 00 00 04 43 9c 42 01 bb 00 00 2a f8 00
+ 00 00 00 80 02 fa f0 4c 5e 00 09 02 04 05 b4 01
+ 03 03 07 04 02 00 00
+[exit 0]
+### apply-ext-ctrack-disable
+$ $G apply --ext --ext-ctrack-disable --ext-posdebug -s '[FLOW:n:a]-tamper{TCP:window:replace:7}-| [FLOW:n:1-]-drop-| \/' -i $D/in.pcap -p 80 -v
+posdebug: no track
+#1 out TCP 192.168.1.10:40000 --> 93.184.216.34:80 [S] seq=1000 ack=0 len=0 ttl=64 -> 1 packet(s)
+    -> TCP 192.168.1.10:40000 --> 93.184.216.34:80 [S] seq=1000 ack=0 len=0 ttl=64
+posdebug: no track
+#2 in TCP 93.184.216.34:80 --> 192.168.1.10:40000 [SA] seq=5000 ack=1001 len=0 ttl=52 -> 1 packet(s) (no tree fired)
+posdebug: no track
+#3 out TCP 192.168.1.10:40000 --> 93.184.216.34:80 [A] seq=1001 ack=5001 len=0 ttl=64 -> 1 packet(s)
+    -> TCP 192.168.1.10:40000 --> 93.184.216.34:80 [A] seq=1001 ack=5001 len=0 ttl=64
+posdebug: no track
+#4 out TCP 192.168.1.10:40000 --> 93.184.216.34:80 [PA] seq=1001 ack=5001 len=74 ttl=64 GET / HTTP/1.1\x0d\x0aHost: example.com\x0d\x0aUser-Agent: c... -> 1 packet(s)
+    -> TCP 192.168.1.10:40000 --> 93.184.216.34:80 [PA] seq=1001 ack=5001 len=74 ttl=64 GET / HTTP/1.1\x0d\x0aHost: example.com\x0d\x0aUser-Agent: c...
+posdebug: no track
+#5 in TCP 93.184.216.34:80 --> 192.168.1.10:40000 [PA] seq=5001 ack=1075 len=43 ttl=52 HTTP/1.1 200 OK\x0d\x0aContent-Length: 5\x0d\x0a\x0d\x0ahello -> 1 packet(s) (no tree fired)
+posdebug: no track
+#6 out TCP 192.168.1.10:40000 --> 93.184.216.34:80 [FA] seq=1075 ack=5044 len=0 ttl=64 -> 1 packet(s)
+    -> TCP 192.168.1.10:40000 --> 93.184.216.34:80 [FA] seq=1075 ack=5044 len=0 ttl=64
+#7 pass TCP 192.168.1.10:40001 --> 93.184.216.34:443 [S] seq=7000 ack=0 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#8 pass TCP 93.184.216.34:443 --> 192.168.1.10:40001 [SA] seq=9000 ack=7001 len=0 ttl=52 -> 1 packet(s) (no tree fired)
+#9 pass TCP 192.168.1.10:40001 --> 93.184.216.34:443 [A] seq=7001 ack=9001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#10 pass TCP 192.168.1.10:40001 --> 93.184.216.34:443 [PA] seq=7001 ack=9001 len=111 ttl=64 \x16\x03\x01\x00j\x01\x00\x00f\x03\x03\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f \x00\x00\x00\x00... -> 1 packet(s) (no tree fired)
+#11 pass TCP 93.184.216.34:443 --> 192.168.1.10:40001 [RA] seq=9001 ack=7112 len=0 ttl=52 -> 1 packet(s) (no tree fired)
+#12 pass UDP 192.168.1.10:50000 --> 8.8.8.8:53 len=29 ttl=64 \x124\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01 -> 1 packet(s) (no tree fired)
+#13 pass UDP 8.8.8.8:53 --> 192.168.1.10:50000 len=45 ttl=118 \x124\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00\x01,\x00\x04]\xb8\xd8" -> 1 packet(s) (no tree fired)
+#14 pass TCP 2001:db8::10:40002 --> 2001:db8::443:443 [S] seq=11000 ack=0 len=0 hlim=64 -> 1 packet(s) (no tree fired)
+[exit 0]
+### apply-ext-bad-timeouts
+$ $G apply --ext --ext-ctrack-timeouts 1:2 -s '\/' -i $D/in.pcap
+geneva apply: bad --ext-ctrack-timeouts 1:2 (S:E:F[:U] in seconds)
 [exit 2]

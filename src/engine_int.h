@@ -70,6 +70,9 @@ typedef struct {
      * expression that does not compile, its position in *pos (else -1).
      * NULL: the backend has no filter. */
     int (*set_filter)(engine *e, const char *expr, sbuf *out, sbuf *err, int *pos);
+    /* The mark and the interface indexes (0: unknown) of a captured packet;
+     * NULL when the backend has none. */
+    void (*meta)(const void *pctx, uint32_t *mark, uint32_t *ifin, uint32_t *ifout);
 } backend;
 
 /* A packet waiting for its sleep to end. */
@@ -108,8 +111,11 @@ struct ext_hooks {
      * packet go on) and when no strategy applies. Returns 0 to go on with
      * the strategy, 1 when the hook gave the verdict itself through
      * engine_verdict()/engine_inject(), which count and record like the
-     * strategy path does. p stays the engine's and is freed by it. */
-    int (*packet)(eng_worker *w, gpkt *p, strat_dir dir, const uint8_t *data, size_t len, const void *pctx);
+     * strategy path does. p stays the engine's and is freed by it. st is
+     * the strategy that will run (NULL: none). The hook may set w->xctx for
+     * the triggers of the extensions; the engine clears it afterwards. */
+    int (*packet)(eng_worker *w, strategy *st, gpkt *p, strat_dir dir, const uint8_t *data, size_t len,
+                  const void *pctx);
 };
 
 struct eng_worker {
@@ -123,6 +129,7 @@ struct eng_worker {
     flowtab *flows;     /* --first counted by the engine (engine_first) */
     uint64_t next_expire;
     void *x;            /* state of the extensions, NULL without --ext */
+    void *xctx;         /* per packet: what the hook found for strat_xtrig */
     int x_open;         /* worker_open succeeded: worker_close is due */
 };
 

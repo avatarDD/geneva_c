@@ -532,6 +532,7 @@ const backend windivert_backend = {
     1, /* --first: no conntrack, the engine counts */
     wd_be_filter,
     wd_be_set_filter,
+    NULL, /* meta: not yet */
 };
 
 #endif

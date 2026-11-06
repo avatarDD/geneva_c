@@ -2,6 +2,9 @@
 #include <string.h>
 
 #include "ext_opt.h"
+#if GENEVA_EXT
+#  include "ext/ext.h"
+#endif
 
 /* Set once per process by the command before any thread starts; later
  * stages pass the switch on in their own option structs. */
@@ -22,6 +25,10 @@ int ext_parse_args(const args_t *a, const char *cmd)
         }
     }
     g_ext = on;
+#if GENEVA_EXT
+    if (on && ext_activate(a, cmd) < 0)
+        return -1;
+#endif
     return 0;
 }
 
@@ -33,4 +40,7 @@ int ext_enabled(void)
 void ext_reset(void)
 {
     g_ext = 0;
+#if GENEVA_EXT
+    ext_deactivate();
+#endif
 }
