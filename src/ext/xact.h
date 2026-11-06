@@ -59,6 +59,7 @@ typedef struct {
     xparam *p;
     int np;
     int started; /* xpcap: the file was started (zapret2's _G cache) */
+    void *priv;  /* kept by kind->prepare (the combinators' condition) */
 } xact;
 
 typedef struct xrun xrun;
@@ -73,6 +74,10 @@ struct xa_kind {
      * yet and are checked when they are used */
     int (*check)(const xact *a, sbuf *err);
     void (*run)(const xact *a, gpkt *p, xrun *r);
+    /* once checked: what the action keeps of its parameters in a->priv
+     * (NULL: nothing), freed by release */
+    int (*prepare)(xact *a, sbuf *err);
+    void (*release)(xact *a);
 };
 
 /* fooling, as zapret2's apply_fooling reads it */
@@ -219,5 +224,6 @@ extern const xa_kind xa_send, xa_mod, xa_fake, xa_split, xa_disorder, xa_tcpseg,
     xa_fakeddisorder;
 extern const xa_kind xa_synacksplit, xa_synack, xa_wsize, xa_wssize, xa_syndata, xa_rst;
 extern const xa_kind xa_http, xa_tlsclone, xa_udplen, xa_dhtdn, xa_xlog, xa_tag, xa_pcap;
+extern const xa_kind xa_when, xa_stop, xa_repeat, xa_cutoffk;
 
 #endif

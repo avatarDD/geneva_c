@@ -17,7 +17,11 @@
 # --lua-desync) against each censor it can beat (docs/CENSOR.md). Usage:
 # The section "posdebug" (also with NFQWS2_DIR) checks the conntrack of
 # --ext against nfqws2's posdebug on the same packets (stage X3).
-#   tests/e2e/censors_x.sh [path/to/geneva] [censor ... | nfqws2 | posdebug]
+# The section "diff" (also with NFQWS2_DIR) checks x-actions against
+# nfqws2 packet by packet.
+# The section "xact" (or x14 ... x20 for one censor) runs geneva --ext with x-action strategies (the
+# nfqws2 references as x-actions, and combinators) against 14, 15, 18-20.
+#   tests/e2e/censors_x.sh [path/to/geneva] [censor ... | xact | nfqws2 | diff | posdebug]
 set -u
 GENEVA=$(readlink -f "${1:-build/geneva}")
 [ $# -gt 0 ] && shift
@@ -28,6 +32,9 @@ fails=0
 
 cleanup() {
     [ -n "${CPID:-}" ] && kill "$CPID" 2>/dev/null && wait "$CPID" 2>/dev/null
+    # nfqws2, geneva run and tcpdump of the nfqws2 and diff sections: the
+    # rules they need live in the client namespace and go with it
+    for p in ${NPID:-} ${TPID:-}; do kill "$p" 2>/dev/null; done
     [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null
     for n in "$NC" "$NR" "$NS"; do ip netns del "$n" 2>/dev/null; done
     [ -n "${KEEP:-}" ] && cp -r "$WORK" "$KEEP"
@@ -66,6 +73,7 @@ import http.server, os, socket, ssl, sys, threading
 work = sys.argv[1]
 os.chdir(work + "/www")
 class H(http.server.SimpleHTTPRequestHandler):
+    timeout = 10
     def log_message(self, *a):
         pass
 def serve(port, tls):
@@ -73,7 +81,9 @@ def serve(port, tls):
     if tls:
         c = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         c.load_cert_chain(work + "/cert.pem", work + "/key.pem")
-        s.socket = c.wrap_socket(s.socket, server_side=True)
+        # the handshake in the request's thread: a ClientHello that a
+        # censor dropped must not hold up accept() for the next clients
+        s.socket = c.wrap_socket(s.socket, server_side=True, do_handshake_on_connect=False)
     s.serve_forever()
 def echo():
     u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -288,6 +298,47 @@ if on 20; then
     }
 fi
 
+# x-actions (stage X5): geneva itself with the reference strategies of the
+# nfqws2 section written as x-actions, and with combinators; "geneva eval
+# --ext" runs the engine in the client namespace. XNAME censor-options
+# probe-options strategy: blocked without, through with the strategy.
+TLSPROBE="--probe tls --host ultrasurf.example --ip 10.81.2.2 --timeout 2"
+HOSTPROBE="--probe http --host ultrasurf.example --ip 10.81.2.2 --path /secret.html --valid-contains behind --timeout 2"
+WORDPROBE="$PROBE --bad-word ultrasurf"
+xfit() { # probe-options [strategy]
+    if [ $# -gt 1 ]; then
+        ip netns exec "$NC" "$GENEVA" eval --ext $1 ${XLOG:---quiet} -s "$2" > "$WORK/eval.txt" 2> "$WORK/eval.log"
+    else
+        ip netns exec "$NC" "$GENEVA" eval --ext $1 --quiet > "$WORK/eval.txt" 2> "$WORK/eval.log"
+    fi
+    cut -f1 "$WORK/eval.txt" | head -1
+}
+xcase() {
+    name=$1 copts=$2 probe=$3
+    shift 3
+    on xact || on "x$name" || return
+    echo "== x-actions against censor $name"
+    start_censor $name $copts || return
+    f=$(xfit "$probe")
+    positive "${f:-0}" && bad "the probe gets through without a strategy ($f)" "$WORK/cen.log" || ok "blocked ($f)"
+    for s in "$@"; do
+        f=$(xfit "$probe" "$s")
+        positive "${f:-0}" && ok "gets through ($f): $s" || bad "blocked ($f): $s" "$WORK/eval.log"
+    done
+    kill "$CPID" 2>/dev/null
+    wait "$CPID" 2>/dev/null
+    CPID=
+}
+xcase 14 "" "$TLSPROBE" '[TCP:flags:PA]-xsplit{pos=1}-| \/' \
+    '[TCP:dport:443]-xwhen{iff=L7:payload:tls_client_hello}(xsplit{pos=1},)-| \/'
+xcase 15 "" "$TLSPROBE" '[TCP:flags:PA]-xdisorder{pos=1,midsld}-| \/' \
+    '[TCP:flags:PA]-xrepeat{repeats=1}(xcutoff,xdisorder{pos=1,midsld})-| \/'
+xcase 18 "" "$HOSTPROBE" '[TCP:flags:PA]-xsplit{pos=method+2}-| \/'
+xcase 19 "" "$WORDPROBE" '[TCP:flags:PA]-xsplit{pos=9}-| \/' \
+    '[TCP:flags:PA]-xstop{iff=cond_payload_str;pattern=ultrasurf;neg}(xsplit{pos=9},)-| \/'
+xcase 20 "" "$WORDPROBE" '[TCP:flags:PA]-xsend{ipfrag;ipfrag_pos_tcp=24}(drop,)-| \/' \
+    '[TCP:flags:PA]-xwhen{iff=L7:payload:http_req}(xsend{ipfrag;ipfrag_pos_tcp=24}(drop,),)-| \/'
+
 # nfqws2 NAME "censor options" "check" nfqws2-options...: the check (a shell
 # command printing "ok" when the request got through) with nfqws2 running
 nfqws2_case() {
@@ -339,6 +390,129 @@ if [ -n "${NFQWS2_DIR:-}" ] && on nfqws2; then
     nfqws2_case 20 "" '[ "$(http "/?q=ultrasurf" | cut -d" " -f1)" = 200 ] && echo ok' \
         --filter-tcp=80 --filter-l7=http --payload=http_req \
         --lua-desync=send:ipfrag:ipfrag_pos_tcp=24 --lua-desync=drop
+fi
+
+# Differential (stage X5): the same desync from nfqws2 (zapret2's Lua) and
+# from geneva's x-actions, on the same request without a censor; tcpdump on
+# the client's interface and shape.py reduce each capture to the client's
+# data packets and IP fragments (position from the SYN, length, flags,
+# TTL, and a hash of the payload, but not of TLS, which curl makes anew
+# every time, nor of fragments, which hold the TCP header). Both lists have
+# to be the same.
+cat > "$WORK/shape.py" <<'EOF'
+import hashlib, struct, sys
+d = open(sys.argv[1], "rb").read()
+E = "<" if d[:4] == b"\xd4\xc3\xb2\xa1" else ">"
+link = struct.unpack(E + "I", d[20:24])[0]
+o, isn = 24, {}
+while o + 16 <= len(d):
+    cap = struct.unpack(E + "I", d[o + 8:o + 12])[0]
+    p = d[o + 16:o + 16 + cap]
+    o += 16 + cap
+    if link == 1:
+        p = p[14:]
+    if len(p) < 20 or p[0] >> 4 != 4 or p[12:16] != bytes([10, 81, 1, 2]):
+        continue
+    ihl, tot, ttl = (p[0] & 15) * 4, struct.unpack(">H", p[2:4])[0], p[8]
+    fo = struct.unpack(">H", p[6:8])[0]
+    off, mf = (fo & 0x1fff) * 8, fo >> 13 & 1
+    if off or mf:
+        print("frag off=%d mf=%d len=%d ttl=%d" % (off, mf, tot - ihl, ttl))
+        continue
+    if p[9] != 6:
+        continue
+    t = p[ihl:tot]
+    sport, dport = struct.unpack(">HH", t[0:4])
+    seq, fl = struct.unpack(">I", t[4:8])[0], t[13]
+    pl = t[(t[12] >> 4) * 4:]
+    if fl & 2:
+        isn[sport] = seq
+    if not pl and not fl & 4:
+        continue
+    names = "".join(c for b, c in zip((1, 2, 4, 8, 16), "FSRPA") if fl & b)
+    h = "tls" if dport == 443 else hashlib.md5(pl).hexdigest()[:8]
+    print("seq=%d len=%d %s ttl=%d %s" % ((seq - isn.get(sport, seq)) & 0xffffffff, len(pl), names, ttl, h))
+EOF
+cap_start() {
+    ip netns exec "$NC" tcpdump -i vx_c --immediate-mode -U -w "$WORK/$1.pcap" \
+        'host 10.81.2.2 and (tcp port 80 or tcp port 443 or ip[6:2] & 0x1fff != 0)' > "$WORK/tcpdump.log" 2>&1 &
+    TPID=$!
+    for _ in $(seq 50); do grep -q "listening on" "$WORK/tcpdump.log" && break; sleep 0.1; done
+}
+cap_stop() {
+    sleep 0.3
+    kill -INT $TPID 2>/dev/null
+    wait $TPID 2>/dev/null
+}
+# xdiff NAME "request" "geneva strategy" nfqws2-options...
+xdiff() {
+    name=$1 req=$2 strat=$3
+    shift 3
+    ip netns exec "$NC" sh -c 'iptables -t mangle -N ZT 2>/dev/null
+        iptables -t mangle -A ZT -m mark --mark 0x40000000/0x40000000 -j RETURN
+        iptables -t mangle -A ZT -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 302 --queue-bypass
+        iptables -t mangle -I OUTPUT -j ZT'
+    ip netns exec "$NC" "$NFQ" --qnum=302 --lua-init=@"$NFQWS2_DIR/lua/zapret-lib.lua" \
+        --lua-init=@"$NFQWS2_DIR/lua/zapret-antidpi.lua" --lua-init=@"$NFQWS2_DIR/lua/zapret-auto.lua" \
+        "$@" > "$WORK/nfq.log" 2>&1 &
+    NPID=$!
+    sleep 1.5
+    cap_start z
+    eval "$req" > /dev/null
+    cap_stop
+    kill $NPID 2>/dev/null
+    wait $NPID 2>/dev/null
+    ip netns exec "$NC" sh -c 'iptables -t mangle -D OUTPUT -j ZT; iptables -t mangle -F ZT; iptables -t mangle -X ZT'
+    ip netns exec "$NC" "$GENEVA" run --ext -s "$strat" -p 80,443 --log-file "$WORK/run.log" --quiet &
+    NPID=$!
+    sleep 1.5
+    cap_start g
+    eval "$req" > /dev/null
+    cap_stop
+    kill $NPID 2>/dev/null
+    wait $NPID 2>/dev/null
+    python3 "$WORK/shape.py" "$WORK/z.pcap" > "$WORK/z.txt"
+    python3 "$WORK/shape.py" "$WORK/g.pcap" > "$WORK/g.txt"
+    if [ ! -s "$WORK/z.txt" ]; then
+        bad "$name: nothing captured" "$WORK/nfq.log"
+    elif diff "$WORK/z.txt" "$WORK/g.txt" > "$WORK/x.diff"; then
+        ok "$name: $(wc -l < "$WORK/z.txt") packets as nfqws2's"
+    else
+        bad "$name: differs from nfqws2 (< nfqws2, > geneva)" "$WORK/x.diff"
+    fi
+}
+if [ -n "${NFQWS2_DIR:-}" ] && { on nfqws2 || on diff; }; then
+    NFQ=$NFQWS2_DIR/binaries/linux-x86_64/nfqws2
+    echo "== x-actions against nfqws2: the same packets"
+    T='--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello'
+    H='--filter-tcp=80 --filter-l7=http --payload=http_req'
+    TR='https lab.example'
+    HR='http /secret.html'
+    xdiff multisplit "$TR" '[TCP:flags:PA]-xsplit{pos=1}-| \/' $T --lua-desync=multisplit:pos=1
+    xdiff multisplit-http "$HR" '[TCP:flags:PA]-xsplit{pos=method+2,host}-| \/' \
+        $H --lua-desync=multisplit:pos=method+2,host
+    xdiff multidisorder "$TR" '[TCP:flags:PA]-xdisorder{pos=1,midsld}-| \/' \
+        $T --lua-desync=multidisorder:pos=1,midsld
+    xdiff fake "$HR" '[TCP:flags:PA]-xfake{blob=0x474554202f;ttl=1;seq=-10000}-| \/' \
+        $H --lua-desync=fake:blob=0x474554202f:ip_ttl=1:tcp_seq=-10000
+    xdiff fakedsplit "$HR" '[TCP:flags:PA]-xfakedsplit{pos=method+2;ttl=1}-| \/' \
+        $H --lua-desync=fakedsplit:pos=method+2:ip_ttl=1
+    xdiff seqovl "$HR" '[TCP:flags:PA]-xsplit{pos=host;seqovl=5;seqovl_pattern=0x41}-| \/' \
+        $H --lua-desync=multisplit:pos=host:seqovl=5:seqovl_pattern=0x41
+    xdiff fakeddisorder "$HR" '[TCP:flags:PA]-xfakeddisorder{pos=method+2;ttl=1}-| \/' \
+        $H --lua-desync=fakeddisorder:pos=method+2:ip_ttl=1
+    xdiff tcpseg "$HR" '[TCP:flags:PA]-xtcpseg{pos=2,10}-| \/' $H --lua-desync=tcpseg:pos=2,10
+    xdiff ipfrag "$HR" '[TCP:flags:PA]-xsend{ipfrag;ipfrag_pos_tcp=24}(drop,)-| \/' \
+        $H --lua-desync=send:ipfrag:ipfrag_pos_tcp=24 --lua-desync=drop
+    xdiff repeater "$HR" '[TCP:flags:PA]-xrepeat{repeats=2}(xfake{blob=0x41;ttl=1},xsplit{pos=2})-| \/' \
+        $H --lua-desync=repeater:repeats=2 --lua-desync=fake:blob=0x41:ip_ttl=1 --lua-desync=multisplit:pos=2
+    xdiff condition "$HR" '[TCP:flags:PA]-xwhen{iff=cond_payload_str;pattern=secret}(xsplit{pos=5},)-| \/' \
+        $H --lua-desync=condition:iff=cond_payload_str:pattern=secret --lua-desync=multisplit:pos=5
+    xdiff condition-neg "$HR" '[TCP:flags:PA]-xwhen{iff=cond_payload_str;pattern=secret;neg}(xsplit{pos=5},)-| \/' \
+        $H --lua-desync=condition:iff=cond_payload_str:pattern=secret:neg --lua-desync=multisplit:pos=5
+    xdiff stopif "$HR" '[TCP:flags:PA]-xfake{blob=0x41;ttl=1}(xstop{iff=cond_payload_str;pattern=GET}(xsplit{pos=3},),)-| \/' \
+        $H --lua-desync=fake:blob=0x41:ip_ttl=1 --lua-desync=stopif:iff=cond_payload_str:pattern=GET \
+        --lua-desync=multisplit:pos=3
 fi
 
 # Position parity (stage X3): nfqws2 runs zapret2's posdebug on every packet

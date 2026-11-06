@@ -373,4 +373,4 @@ static void run_http(const xact *a, gpkt *p, xrun *r)
 
 static const char *const k_http[] = {"domcase", "hostcase", "methodeol", "unixeol", NULL};
 
-const xa_kind xa_http = {"xhttp", 1, 1, 0, k_http, check_http, run_http};
+const xa_kind xa_http = {"xhttp", 1, 1, 0, k_http, check_http, run_http, NULL, NULL};

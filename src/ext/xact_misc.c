@@ -373,9 +373,9 @@ static const char *const k_xlog[] = {"msg", "pkt", "pos", "hex", NULL};
 static const char *const k_tag[] = {"pattern", "payload", "undetected", NULL};
 static const char *const k_pcap[] = {"file", "keep", NULL};
 
-const xa_kind xa_udplen = {"xudplen", 1, 1, XS_PAYLOAD, k_udplen, check_udplen, run_udplen};
-const xa_kind xa_dhtdn = {"xdhtdn", 1, 1, 0, k_dhtdn, check_dhtdn, run_dhtdn};
-const xa_kind xa_tlsclone = {"xtlsclone", 1, 1, 0, k_tlsclone, check_tlsclone, run_tlsclone};
-const xa_kind xa_xlog = {"xlog", 1, 1, 0, k_xlog, check_xlog, run_xlog};
-const xa_kind xa_tag = {"xtag", 1, 1, 0, k_tag, check_tag, run_tag};
-const xa_kind xa_pcap = {"xpcap", 1, 1, 0, k_pcap, check_pcap, run_pcap};
+const xa_kind xa_udplen = {"xudplen", 1, 1, XS_PAYLOAD, k_udplen, check_udplen, run_udplen, NULL, NULL};
+const xa_kind xa_dhtdn = {"xdhtdn", 1, 1, 0, k_dhtdn, check_dhtdn, run_dhtdn, NULL, NULL};
+const xa_kind xa_tlsclone = {"xtlsclone", 1, 1, 0, k_tlsclone, check_tlsclone, run_tlsclone, NULL, NULL};
+const xa_kind xa_xlog = {"xlog", 1, 1, 0, k_xlog, check_xlog, run_xlog, NULL, NULL};
+const xa_kind xa_tag = {"xtag", 1, 1, 0, k_tag, check_tag, run_tag, NULL, NULL};
+const xa_kind xa_pcap = {"xpcap", 1, 1, 0, k_pcap, check_pcap, run_pcap, NULL, NULL};

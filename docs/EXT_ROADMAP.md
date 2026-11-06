@@ -724,14 +724,18 @@ mark; дальше поток здорового ключа идёт мимо о
 
 **Комбинаторы** (K6–K8):
 
-- `xwhen{УСЛОВИЕ}(тогда,иначе)` — условие: триггерное выражение
-  (`FLOW:n:<5`, `L7:payload:empty`), `rnd:P`, `has:строка`, `tcpts`;
-  `xwhen{… ;neg}` инвертирует. Это `condition`/`per_instance_condition` и
-  диапазоны на инстанс.
-- `xrepeat{n=N;until=УСЛОВИЕ}(тело,остаток)` — `repeater`.
-- `xstop{УСЛОВИЕ}` — `stopif`.
-- `xcutoff{dir=in|out|both}` — добровольная отсечка поддерева на поток
+- `xwhen{iff=УСЛОВИЕ;neg}(тогда,иначе)` — условие: триггерное выражение
+  (`FLOW:n:<5`, `L7:payload:empty`) или условие zapret2 (`cond_random` с
+  `percent`, `cond_payload_str` с `pattern`, `cond_tcp_has_ts`,
+  `cond_true`, `cond_false`); `neg` инвертирует. Это
+  `condition`/`per_instance_condition` и диапазоны на инстанс.
+- `xrepeat{repeats=N;iff=УСЛОВИЕ;neg;stop;clear}(тело,остаток)` — `repeater`.
+- `xstop{iff=УСЛОВИЕ;neg}(дальше)` — `stopif`.
+- `xcutoff{dir=in|out|both}` — добровольная отсечка дерева или леса на поток
   (`instance_cutoff`).
+
+  (Реализовано в X5c с именами параметров zapret2 вместо набросков
+  `rnd:P`, `has:строка`, `tcpts`, `n=`, `until=`; см. `docs/EXT.md`.)
 
 **Общие аргументы** любого x-действия (H): `dir`, `payload`, `ttl`
 (`N` или `auto:delta:min-max`), `ip6ext`, `seq`, `ack`, `ts`, `md5[=hex]`,

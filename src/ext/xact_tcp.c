@@ -1162,20 +1162,23 @@ static const char *const k_rst[] = {"rstack", NULL};
 
 #define STD_RAW (XS_RECON | XS_SEND | XS_FRAG)
 
-const xa_kind xa_synacksplit = {"xsynacksplit", 1, 0, STD_RAW, k_synacksplit, check_synacksplit, run_synacksplit};
-const xa_kind xa_synack = {"xsynack", 1, 0, STD_RAW, NULL, NULL, run_synack};
-const xa_kind xa_wsize = {"xwsize", 1, 1, 0, k_wsize, check_wsize, run_wsize};
-const xa_kind xa_wssize = {"xwssize", 1, 1, 0, k_wssize, check_wssize, run_wssize};
-const xa_kind xa_syndata = {"xsyndata", 1, 0, XS_FOOL | STD_RAW, k_syndata, check_syndata, run_syndata};
-const xa_kind xa_rst = {"xrst", 1, 0, STD_ALL, k_rst, check_rst, run_rst};
+const xa_kind xa_synacksplit = {"xsynacksplit", 1, 0, STD_RAW, k_synacksplit, check_synacksplit, run_synacksplit,
+                                NULL, NULL};
+const xa_kind xa_synack = {"xsynack", 1, 0, STD_RAW, NULL, NULL, run_synack, NULL, NULL};
+const xa_kind xa_wsize = {"xwsize", 1, 1, 0, k_wsize, check_wsize, run_wsize, NULL, NULL};
+const xa_kind xa_wssize = {"xwssize", 1, 1, 0, k_wssize, check_wssize, run_wssize, NULL, NULL};
+const xa_kind xa_syndata = {"xsyndata", 1, 0, XS_FOOL | STD_RAW, k_syndata, check_syndata, run_syndata, NULL,
+                             NULL};
+const xa_kind xa_rst = {"xrst", 1, 0, STD_ALL, k_rst, check_rst, run_rst, NULL, NULL};
 const xa_kind xa_send = {"xsend", 1, 0, XS_FOOL | XS_RECON | XS_SEND | XS_IPID | XS_FRAG, k_send, check_send,
-                         run_send};
-const xa_kind xa_mod = {"xmod", 1, 1, XS_FOOL | XS_IPID, NULL, NULL, run_mod};
-const xa_kind xa_fake = {"xfake", 1, 0, STD_ALL, k_fake, check_fake, run_fake};
-const xa_kind xa_split = {"xsplit", 1, 0, STD_ALL, k_split, check_split, run_split};
-const xa_kind xa_disorder = {"xdisorder", 1, 0, STD_ALL, k_disorder, check_disorder, run_disorder};
-const xa_kind xa_tcpseg = {"xtcpseg", 1, 0, STD_ALL, k_tcpseg, check_tcpseg, run_tcpseg};
-const xa_kind xa_hostfake = {"xhostfake", 1, 0, STD_NOFRAG, k_hostfake, check_hostfake, run_hostfake};
-const xa_kind xa_fakedsplit = {"xfakedsplit", 1, 0, STD_NOFRAG, k_faked, check_fakedsplit, run_fakedsplit};
+                         run_send, NULL, NULL};
+const xa_kind xa_mod = {"xmod", 1, 1, XS_FOOL | XS_IPID, NULL, NULL, run_mod, NULL, NULL};
+const xa_kind xa_fake = {"xfake", 1, 0, STD_ALL, k_fake, check_fake, run_fake, NULL, NULL};
+const xa_kind xa_split = {"xsplit", 1, 0, STD_ALL, k_split, check_split, run_split, NULL, NULL};
+const xa_kind xa_disorder = {"xdisorder", 1, 0, STD_ALL, k_disorder, check_disorder, run_disorder, NULL, NULL};
+const xa_kind xa_tcpseg = {"xtcpseg", 1, 0, STD_ALL, k_tcpseg, check_tcpseg, run_tcpseg, NULL, NULL};
+const xa_kind xa_hostfake = {"xhostfake", 1, 0, STD_NOFRAG, k_hostfake, check_hostfake, run_hostfake, NULL, NULL};
+const xa_kind xa_fakedsplit = {"xfakedsplit", 1, 0, STD_NOFRAG, k_faked, check_fakedsplit, run_fakedsplit, NULL,
+                                NULL};
 const xa_kind xa_fakeddisorder = {"xfakeddisorder", 1, 0, STD_NOFRAG, k_faked, check_fakeddisorder,
-                                  run_fakeddisorder};
+                                  run_fakeddisorder, NULL, NULL};

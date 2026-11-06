@@ -19,6 +19,7 @@ static const xa_kind *const kinds[] = {
     &xa_send,     &xa_mod,    &xa_fake,  &xa_split,  &xa_disorder, &xa_tcpseg,  &xa_hostfake,
     &xa_fakedsplit, &xa_fakeddisorder, &xa_synacksplit, &xa_synack, &xa_wsize, &xa_wssize, &xa_syndata,
     &xa_rst,      &xa_http,   &xa_tlsclone, &xa_udplen, &xa_dhtdn, &xa_xlog,  &xa_tag,     &xa_pcap,
+    &xa_when,     &xa_stop,   &xa_repeat, &xa_cutoffk,
 };
 
 /* ---- keys ------------------------------------------------------------------ */
@@ -705,6 +706,8 @@ static void xact_free(void *x)
     xact *a = x;
     if (!a)
         return;
+    if (a->kind->release)
+        a->kind->release(a);
     for (int i = 0; i < a->np; i++) {
         free(a->p[i].k);
         free(a->p[i].v);
@@ -776,6 +779,8 @@ static int op_parse(const char *name, const char *params, strat_dir dir, void **
         sb_free(&e2);
     }
     if (k->check && k->check(a, err) < 0)
+        goto fail;
+    if (k->prepare && k->prepare(a, err) < 0)
         goto fail;
     *x = a;
     *kids = k->kids;

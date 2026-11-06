@@ -129,10 +129,16 @@ typedef struct {
     int (*match)(const void *x, void *ctx, strat_dir dir, size_t tree, const gpkt *p);
     void *(*dup)(const void *x);
     void (*free)(void *x);
+    /* Is tree number tree of the forest of dir cut off for the packet's
+     * flow (xcutoff)? NULL: never. */
+    int (*cut)(void *ctx, strat_dir dir, size_t tree);
 } strat_xtrig;
 
 /* NULL unregisters. */
 void strategy_set_xtrig(const strat_xtrig *ops);
+/* Does p match trigger t, as a condition of an x-action (xwhen{iff=...})?
+ * Gas counts as for a tree's trigger; no tree is ever cut off by it. */
+int trigger_match(trigger *t, const gpkt *p, void *xctx, strat_dir dir);
 
 /* x-actions of the extensions (docs/EXT_ROADMAP.md, 5.1): "xfake{blob=...;
  * ttl=3}" and the like, with named parameters separated by ";". They exist

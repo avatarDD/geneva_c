@@ -22,7 +22,8 @@
  * A tree whose FLOW range (of this side) is behind the packet's flow for
  * good is cut off on that flow (zapret2's instance cutoff, D7): it is not
  * looked at again there. When every tree of a forest is cut off, the flow's
- * packets in that direction pass by the strategy (xtrig_all_cut).
+ * packets in that direction pass by the strategy (xtrig_all_cut). The
+ * x-action xcutoff cuts trees off the same way (xtrig_cut).
  *
  * Without a flow (no ctrack, or a packet ctrack does not track) a FLOW
  * trigger matches only an "a" range, as in zapret2.
@@ -52,5 +53,8 @@ extern const strat_xtrig xtrig_ops;
 
 /* Every tree of the forest of dir is cut off on f (for strategy s). */
 int xtrig_all_cut(const strategy *s, strat_dir dir, ct_flow *f);
+/* xcutoff: cuts tree number tree of the forest of dir (every tree of it
+ * when all) off on the packet's flow. 0 when there is no flow to cut. */
+int xtrig_cut(void *ctx, strat_dir dir, size_t tree, int all);
 
 #endif

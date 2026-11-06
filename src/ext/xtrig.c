@@ -165,6 +165,17 @@ static const ct_side *side(const xpkt_ctx *c, int other)
     return srv ? &c->f->server : &c->f->client;
 }
 
+/* the cut bits are about the strategy running: another one clears them */
+static void cut_sync(const xpkt_ctx *c, ct_flow *f)
+{
+    int serial = c->st ? c->st->serial : 0;
+    if (f->cut_serial != serial) {
+        f->tree_cut[0] = f->tree_cut[1] = 0;
+        f->all_cut[0] = f->all_cut[1] = 0;
+        f->cut_serial = serial;
+    }
+}
+
 static int match(const void *x, void *ctx, strat_dir dir, size_t tree, const gpkt *p)
 {
     const xtrig *t = x;
@@ -176,13 +187,7 @@ static int match(const void *x, void *ctx, strat_dir dir, size_t tree, const gpk
     case XT_RANGE:
         if (!f)
             return xrange_in(NULL, &t->r);
-        if (f->cut_serial != (c->st ? c->st->serial : 0)) {
-            f->tree_cut[0] = f->tree_cut[1] = 0;
-            f->all_cut[0] = f->all_cut[1] = 0;
-            f->cut_serial = c->st ? c->st->serial : 0;
-        }
-        if (tree < CT_MAX_TREES && f->tree_cut[dir] >> tree & 1)
-            return 0;
+        cut_sync(c, f); /* a tree already cut is not looked at (is_cut) */
         ct_view(side(c, t->other), &v);
         if (!t->other && xrange_cutoff(&v, &t->r)) {
             if (tree < CT_MAX_TREES)
@@ -227,15 +232,43 @@ static void xfree(void *x)
     free(x);
 }
 
-const strat_xtrig xtrig_ops = {parse, match, dup, xfree};
+static int is_cut(void *ctx, strat_dir dir, size_t tree)
+{
+    xpkt_ctx *c = ctx;
+    if (!c || !c->f)
+        return 0;
+    cut_sync(c, c->f);
+    return c->f->all_cut[dir] || (tree < CT_MAX_TREES && c->f->tree_cut[dir] >> tree & 1);
+}
+
+const strat_xtrig xtrig_ops = {parse, match, dup, xfree, is_cut};
+
+int xtrig_cut(void *ctx, strat_dir dir, size_t tree, int all)
+{
+    xpkt_ctx *c = ctx;
+    if (!c || !c->f)
+        return 0;
+    cut_sync(c, c->f);
+    if (all) {
+        c->f->tree_cut[dir] = ~0ULL;
+        c->f->all_cut[dir] = 1;
+    } else if (tree < CT_MAX_TREES) {
+        c->f->tree_cut[dir] |= 1ULL << tree;
+    } else {
+        return 0;
+    }
+    return 1;
+}
 
 int xtrig_all_cut(const strategy *s, strat_dir dir, ct_flow *f)
 {
     size_t n = dir == DIR_IN ? s->nin : s->nout;
-    if (!f || f->cut_serial != s->serial || !n || n > CT_MAX_TREES)
+    if (!f || f->cut_serial != s->serial || !n)
         return 0;
     if (f->all_cut[dir])
-        return 1;
+        return 1; /* xcutoff{dir=...}, or every tree below */
+    if (n > CT_MAX_TREES)
+        return 0;
     for (size_t i = 0; i < n; i++)
         if (!(f->tree_cut[dir] >> i & 1))
             return 0;
