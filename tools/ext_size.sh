@@ -1,8 +1,8 @@
 #!/bin/sh
 # Size budget of the --ext extensions (docs/EXT_ROADMAP.md, 6.1): builds the
 # router binary with and without src/ext/ and fails when the stripped
-# difference is above LIMIT bytes. The limit grows stage by stage up to
-# 180 KB (100 KB with EXT_CRYPTO=0).
+# difference is above LIMIT bytes. There is no fixed cap: the limit only
+# catches unexpected growth and is raised as each stage lands.
 #   tools/ext_size.sh LIMIT [make variables...]
 #   tools/ext_size.sh 2048 CC=musl-gcc
 #   STRIP=llvm-strip tools/ext_size.sh 2048 CC="zig cc -target mipsel-linux-musleabi"

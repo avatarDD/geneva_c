@@ -16,8 +16,9 @@
 #include "rng.h"
 
 static const xa_kind *const kinds[] = {
-    &xa_send, &xa_mod, &xa_fake, &xa_split, &xa_disorder, &xa_tcpseg, &xa_hostfake, &xa_fakedsplit,
-    &xa_fakeddisorder,
+    &xa_send,     &xa_mod,    &xa_fake,  &xa_split,  &xa_disorder, &xa_tcpseg,  &xa_hostfake,
+    &xa_fakedsplit, &xa_fakeddisorder, &xa_synacksplit, &xa_synack, &xa_wsize, &xa_wssize, &xa_syndata,
+    &xa_rst,      &xa_http,   &xa_tlsclone, &xa_udplen, &xa_dhtdn, &xa_xlog,  &xa_tag,     &xa_pcap,
 };
 
 /* ---- keys ------------------------------------------------------------------ */
@@ -106,6 +107,116 @@ static const xparam *find(const xact *a, const char *key)
 
 int xa_has(const xact *a, const char *key) { return find(a, key) != NULL; }
 
+const char *xa_raw(const xact *a, const char *key)
+{
+    const xparam *p = find(a, key);
+    return p ? p->v : NULL;
+}
+
+/* ---- the packet's own state --------------------------------------------------- */
+
+typedef struct xdblob {
+    struct xdblob *next;
+    char name[BLOB_NAME_MAX];
+    size_t len;
+    uint8_t *data;
+} xdblob;
+
+typedef struct {
+    xdblob *blobs;
+    int tagged;
+    char tag[256];
+} xa_dyn;
+
+static void dyn_done(void *x)
+{
+    xa_dyn *d = x;
+    while (d->blobs) {
+        xdblob *b = d->blobs;
+        d->blobs = b->next;
+        free(b->data);
+        free(b);
+    }
+    free(d);
+}
+
+static xa_dyn *dyn(xrun *r, int create)
+{
+    void **slot = r->env ? r->env->dyn : NULL;
+    if (!slot)
+        return NULL;
+    if (!*slot && create)
+        *slot = xcalloc(1, sizeof(xa_dyn));
+    return *slot;
+}
+
+static const xdblob *dyn_blob(xrun *r, const char *name)
+{
+    xa_dyn *d = dyn(r, 0);
+    for (const xdblob *b = d ? d->blobs : NULL; b; b = b->next)
+        if (!strcmp(b->name, name))
+            return b;
+    return NULL;
+}
+
+int xa_dyn_has(xrun *r, const char *name) { return dyn_blob(r, name) != NULL; }
+
+void xa_dyn_blob_set(xrun *r, const char *name, const uint8_t *data, size_t n)
+{
+    xa_dyn *d = dyn(r, 1);
+    xdblob *b;
+    if (!d || strlen(name) >= BLOB_NAME_MAX)
+        return;
+    for (b = d->blobs; b; b = b->next)
+        if (!strcmp(b->name, name))
+            break;
+    if (!b) {
+        b = xcalloc(1, sizeof(*b));
+        snprintf(b->name, sizeof(b->name), "%s", name);
+        b->next = d->blobs;
+        d->blobs = b;
+    }
+    free(b->data);
+    b->data = xmalloc(n ? n : 1);
+    if (n)
+        memcpy(b->data, data, n);
+    b->len = n;
+}
+
+void xa_set_tag(xrun *r, const char *label)
+{
+    xa_dyn *d = dyn(r, 1);
+    if (!d)
+        return;
+    snprintf(d->tag, sizeof(d->tag), "%s", label);
+    d->tagged = 1;
+    r->l7name = d->tag;
+    r->l7p = l7_payload_by_name(label);
+    if (r->l7p < 0)
+        r->l7p = L7P_UNKNOWN;
+}
+
+const uint8_t *xa_blob_named(xrun *r, const char *name, size_t *len)
+{
+    const xdblob *d = dyn_blob(r, name);
+    const xblob *b;
+    if (d) {
+        *len = d->len;
+        return d->data;
+    }
+    b = blob_find(name);
+    if (!b)
+        return NULL;
+    *len = b->len;
+    return b->data;
+}
+
+void xa_modified(gpkt *p)
+{
+    p->auto_fields |= XA_AUTO;
+    pkt_mark_dirty(p);
+}
+
 /* ---- numbers --------------------------------------------------------------- */
 
 /* Lua's tonumber for integers: an optional sign, decimal or 0x hex */
@@ -159,15 +270,6 @@ void xa_log(const xrun *r, const char *fmt, ...)
 
 /* ---- argument values ----------------------------------------------------------- */
 
-static const uint8_t *blob_bytes(const char *name, size_t *len)
-{
-    const xblob *b = blob_find(name);
-    if (!b)
-        return NULL;
-    *len = b->len;
-    return b->data;
-}
-
 const char *xa_arg(xrun *r, const char *key, size_t *len)
 {
     const xparam *p = find(r->a, key);
@@ -180,7 +282,7 @@ const char *xa_arg(xrun *r, const char *key, size_t *len)
     }
     v = p->v ? p->v : "";
     if (v[0] == '#' || v[0] == '%') {
-        const uint8_t *b = blob_bytes(v + 1, &n);
+        const uint8_t *b = xa_blob_named(r, v + 1, &n);
         char *dst;
         if (r->nscratch >= 2)
             r->nscratch = 0; /* two values live at a time at most */
@@ -229,8 +331,8 @@ int xa_num(xrun *r, const char *key, int64_t def, int64_t lo, int64_t hi, int64_
 
 int xa_blob_exists(xrun *r, const char *name)
 {
-    (void)r;
-    return name && ((name[0] == '0' && (name[1] == 'x' || name[1] == 'X')) || blob_find(name));
+    size_t n;
+    return name && ((name[0] == '0' && (name[1] == 'x' || name[1] == 'X')) || xa_blob_named(r, name, &n));
 }
 
 const uint8_t *xa_blob(xrun *r, const char *name, size_t *len, int optional)
@@ -251,7 +353,7 @@ const uint8_t *xa_blob(xrun *r, const char *name, size_t *len, int optional)
         return dst;
     }
     {
-        const uint8_t *b = blob_bytes(name, len);
+        const uint8_t *b = xa_blob_named(r, name, len);
         if (!b && !optional)
             LOGW("xact", "%s: blob \"%s\" unavailable", r->a->kind->name, name);
         return b;
@@ -545,10 +647,23 @@ static int std_one(xrun *r, const xparam *p, xfool *f, xsendopt *o, sbuf *err)
             BAD("bad ipfrag_next \"%s\" (0..255)", v);
         o->ipfrag_next = (int)n;
     } else if (!strcmp(k, "payload")) {
-        uint64_t set;
-        int neg;
-        if (l7_payload_list(v, &set, &neg, err) < 0)
-            return -1;
+        /* any names: xtag makes its own (zapret2's payload= is a list of
+         * strings in Lua) */
+        const char *q = v[0] == '~' ? v + 1 : v;
+        for (;;) {
+            const char *e = strchr(q, ',');
+            size_t nl = e ? (size_t)(e - q) : strlen(q);
+            char nm[BLOB_NAME_MAX];
+            if (!nl || nl >= sizeof(nm))
+                BAD("bad payload list \"%s\"", v);
+            memcpy(nm, q, nl);
+            nm[nl] = 0;
+            if (!blob_name_ok(nm))
+                BAD("bad payload name \"%s\"", nm);
+            if (!e)
+                break;
+            q = e + 1;
+        }
     }
 #undef BAD
     return 0;
@@ -682,7 +797,7 @@ static const char *op_name(const void *x) { return ((const xact *)x)->kind->name
 
 /* ---- per-flow state ----------------------------------------------------------------- */
 
-enum { XF_REPLAY_DROP = 1, XF_ATTL4 = 2, XF_ATTL6 = 4 };
+enum { XF_REPLAY_DROP = 1, XF_ATTL4 = 2, XF_ATTL6 = 4, XF_CUT = 8 };
 
 typedef struct {
     const void *inst;
@@ -760,25 +875,48 @@ int xa_replay_drop(xrun *r)
     return drop;
 }
 
+int xa_in_list(const char *list, const char *v)
+{
+    size_t vl = strlen(v);
+    for (;;) {
+        const char *e = strchr(list, ',');
+        size_t n = e ? (size_t)(e - list) : strlen(list);
+        if (n == vl && !memcmp(list, v, n))
+            return 1;
+        if (!e)
+            return 0;
+        list = e + 1;
+    }
+}
+
 int xa_payload_ok(xrun *r, const char *def)
 {
-    const char *v = xa_arg(r, "payload", NULL);
-    uint64_t set;
-    int neg;
-    sbuf err;
-    int ok;
+    const char *v = xa_arg(r, "payload", NULL), *pl;
+    int neg, ok;
     if (!v)
         v = def;
-    sb_init(&err);
-    if (l7_payload_list(v, &set, &neg, &err) < 0) {
-        sb_free(&err);
-        return 0;
-    }
-    sb_free(&err);
-    ok = neg != l7_payload_match(r->l7p, set);
+    neg = v[0] == '~';
+    pl = neg ? v + 1 : v;
+    ok = neg != (xa_in_list(pl, "all") || xa_in_list(pl, r->l7name) ||
+                 (xa_in_list(pl, "known") && strcmp(r->l7name, "unknown") && strcmp(r->l7name, "empty")));
     if (!ok)
-        xa_log(r, "payload \"%s\" does not pass \"%s\"", l7_payload_name(r->l7p), v);
+        xa_log(r, "payload \"%s\" does not pass \"%s\"", r->l7name, v);
     return ok;
+}
+
+void xa_cutoff(xrun *r)
+{
+    xa_slot *s = r->f ? slot(r) : NULL;
+    if (s) {
+        s->flags |= XF_CUT;
+        xa_log(r, "cutoff");
+    }
+}
+
+int xa_is_cut(xrun *r)
+{
+    xa_slot *s = r->f ? slot(r) : NULL;
+    return s && (s->flags & XF_CUT);
 }
 
 /* ---- fooling ---------------------------------------------------------------------- */
@@ -895,12 +1033,6 @@ static void ext6_insert(gpkt *p, int front, uint8_t type, const uint8_t *data, s
     p->ext = e;
     p->ext_len += total;
 }
-
-/* a changed packet gets its lengths and checksums anew, as zapret2's
- * reconstruction does */
-#define XA_AUTO                                                                                                      \
-    (AUTO_IP_LEN | AUTO_IP_CSUM | AUTO_IP_IHL | AUTO_TCP_DOFS | AUTO_TCP_CSUM | AUTO_UDP_LEN | AUTO_UDP_CSUM |         \
-     AUTO_V6_PLEN)
 
 void xa_fooling(xrun *r, gpkt *p, const xfool *f, int tsup_only)
 {
@@ -1303,6 +1435,17 @@ static void op_run(void *x, gpkt *p, strat_xenv *env)
             r->pieces = v->pieces;
         }
     }
+    {
+        xa_dyn *d = dyn(r, 0);
+        if (d && d->tagged) {
+            r->l7name = d->tag;
+            r->l7p = l7_payload_by_name(d->tag);
+            if (r->l7p < 0)
+                r->l7p = L7P_UNKNOWN;
+        } else {
+            r->l7name = l7_payload_name(r->l7p);
+        }
+    }
     r->mss = r->f ? ct_mss(r->f) : CT_DEFAULT_MSS;
     sb_init(&err);
     if (std_all(r, a, &r->fool, &r->opt, &err) < 0) {
@@ -1317,4 +1460,4 @@ static void op_run(void *x, gpkt *p, strat_xenv *env)
     free(r);
 }
 
-const strat_xact xact_ops = {op_parse, op_print, op_name, xact_free, op_run};
+const strat_xact xact_ops = {op_parse, op_print, op_name, xact_free, op_run, dyn_done};

@@ -52,4 +52,22 @@ int tls_mod_apply(const tls_modspec *m, const uint8_t *payload, size_t plen, uin
  * template when there is one ("h82aj.google.com"); out holds len + 1. */
 void tls_genhost(size_t len, const char *tmpl, char *out);
 
+/* ---- tls_client_hello_mod (G12, J4) --------------------------------------- */
+
+typedef struct {
+    int snt, snt_new; /* sni_snt, sni_snt_new: the name type (-1: not given) */
+    int del_ext, del; /* sni_del_ext, sni_del */
+    const char *first, *last; /* sni_first, sni_last (NULL: not given) */
+    size_t first_len, last_len;
+} tls_cloneopt;
+
+/* zapret2's tls_client_hello_mod: the ClientHello in tls (TLS records, or a
+ * bare handshake message) dissected as tls_dissect does, its server_name
+ * list changed by o and the whole put together again as tls_reconstruct
+ * does: the extensions zapret2 dissects come out in their canonical form,
+ * the handshake goes back into records of the old lengths (the last one
+ * takes the rest). Returns 0 with *out (malloc'ed), or -1 when it cannot
+ * be dissected. */
+int tls_ch_clone(const uint8_t *tls, size_t n, const tls_cloneopt *o, uint8_t **out, size_t *outlen);
+
 #endif

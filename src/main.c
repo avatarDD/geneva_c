@@ -54,8 +54,13 @@ static void usage(FILE *f)
                "  censor models 12-20 (geneva censor --ext --list); triggers FLOW:,\n"
                "  META: and L7: ([L7:host:example.com]-drop-|); x-actions after zapret2's\n"
                "  functions, NAME{key=value;...}: xfake xsplit xdisorder xtcpseg xhostfake\n"
-               "  xfakedsplit xfakeddisorder xsend xmod, e.g.\n"
+               "  xfakedsplit xfakeddisorder xsend xmod; xsyndata xrst xsynack xsynacksplit\n"
+               "  xwsize xwssize; xhttp{domcase;hostcase=hoSt;methodeol;unixeol}; xudplen\n"
+               "  xdhtdn; xtlsclone (a changed copy of the ClientHello as a blob for the\n"
+               "  actions after it); xtag (an own payload label); xlog (event ext_pkt);\n"
+               "  xpcap{file=...}, e.g.\n"
                "  [TCP:flags:PA]-xfake{blob=fake_default_tls;ttl=3}(xdisorder{pos=1,midsld},)-| \\/\n"
+               "  [TCP:flags:PA]-xtlsclone{blob=c;sni_first=a.example}(xfake{blob=c;ttl=3},)-| \\/\n"
                "  See docs/EXT.md.\n");
 #endif
 }

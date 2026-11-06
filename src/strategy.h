@@ -146,6 +146,8 @@ typedef struct {
     strat_dir dir;
     size_t tree;     /* the tree of the forest that runs */
     action *a;       /* the x-action running */
+    void **dyn;      /* the x-actions' state of this packet, shared by every tree
+                      * of one strategy_apply_x() call (zapret2's desync table) */
 } strat_xenv;
 
 typedef struct {
@@ -160,6 +162,9 @@ typedef struct {
     /* Runs p (owned): an x-action ends with strat_xchild() for p (or for
      * packets made from it), or frees it. */
     void (*run)(void *x, gpkt *p, strat_xenv *env);
+    /* Frees *env->dyn once the packet went through every tree (NULL: no
+     * state); called only when it is not NULL. */
+    void (*done)(void *dyn);
 } strat_xact;
 
 void strategy_set_xact(const strat_xact *ops);

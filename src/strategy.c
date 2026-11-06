@@ -1413,13 +1413,14 @@ int strategy_apply_x(strategy *s, gpkt *pkt, strat_dir dir, pktlist *out, void *
     atree **f = dir == DIR_IN ? s->in : s->out;
     size_t n = dir == DIR_IN ? s->nin : s->nout;
     int fired = 0;
+    void *dyn = NULL;
     for (size_t i = 0; i < n; i++) {
         if (!trigger_applies(&f[i]->trig, pkt, xctx, dir, i))
             continue;
         fired++;
         f[i]->fired++;
         /* each tree starts from a fresh copy of the original packet */
-        strat_xenv env = {out, xctx, dir, i, NULL};
+        strat_xenv env = {out, xctx, dir, i, NULL, &dyn};
         size_t from = out->n, k = from;
         do_run(f[i]->root, fresh_copy(pkt), &env);
         /* a packet an x-action dropped went on through the tree, as later
@@ -1432,6 +1433,8 @@ int strategy_apply_x(strategy *s, gpkt *pkt, strat_dir dir, pktlist *out, void *
         }
         out->n = k;
     }
+    if (dyn && g_xact && g_xact->done)
+        g_xact->done(dyn);
     if (fired)
         pkt_free(pkt);
     else
