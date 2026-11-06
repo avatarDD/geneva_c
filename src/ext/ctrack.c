@@ -1,3 +1,7 @@
+/*
+ * Ported from zapret2 nfq2/conntrack.c (MIT License, Copyright (c) bol-van;
+ * the notice is in docs/EXT.md).
+ */
 #include "ctrack.h"
 
 #include <stdio.h>
@@ -32,6 +36,8 @@ void ct_config_default(ct_config *c)
     c->t_fin = 60;
     c->t_udp = 60;
     c->max = CT_DEFAULT_MAX;
+    c->clear = NULL;
+    c->clear_ud = NULL;
 }
 
 int ct_timeouts_parse(const char *s, ct_config *c)
@@ -76,6 +82,8 @@ void ctrack_free(ctrack *t)
         return;
     for (f = t->lru_head; f; f = nx) {
         nx = f->lnext;
+        if (t->c.clear)
+            t->c.clear(f, t->c.clear_ud);
         free(f);
     }
     free(t);
@@ -153,6 +161,8 @@ static void drop(ctrack *t, ct_flow *f)
         pp = &(*pp)->hnext;
     *pp = f->hnext;
     lru_unlink(t, f);
+    if (t->c.clear)
+        t->c.clear(f, t->c.clear_ud);
     free(f);
     t->n--;
 }
@@ -181,10 +191,12 @@ static ct_flow *create(ctrack *t, const ct_key *k)
 }
 
 /* ConntrackReInitTrack: everything but the key and the links */
-static void reinit(ct_flow *f)
+static void reinit(ctrack *t, ct_flow *f)
 {
     size_t keep = offsetof(ct_flow, client);
     size_t end = offsetof(ct_flow, hnext);
+    if (t->c.clear)
+        t->c.clear(f, t->c.clear_ud);
     memset((uint8_t *)f + keep, 0, end - keep);
 }
 
@@ -239,7 +251,7 @@ static void apply_pos(ct_flow *f, int reverse, const gpkt *p)
         rev->rseq_over_2g = 1;
 }
 
-static void feed_packet(ct_flow *f, int reverse, const gpkt *p, uint64_t now)
+static void feed_packet(ctrack *t, ct_flow *f, int reverse, const gpkt *p, uint64_t now)
 {
     ct_side *s = reverse ? &f->server : &f->client;
     s->pcounter++;
@@ -249,14 +261,14 @@ static void feed_packet(ct_flow *f, int reverse, const gpkt *p, uint64_t now)
     if (p->l4 == LAYER_TCP) {
         if (syn_segment(p)) {
             if (f->state != CT_SYN)
-                reinit(f); /* a new connection on this 4-tuple; as in zapret2
+                reinit(t, f); /* a new connection on this 4-tuple; as in zapret2
                             * the SYN counted above is erased too */
             f->client.seq0 = p->seq;
         } else if (synack_segment(p)) {
             /* duplicates of the SYN+ACK change nothing */
             uint32_t seq0 = p->ack - 1;
             if (f->state != CT_SYN && f->client.seq0 != seq0)
-                reinit(f);
+                reinit(t, f);
             if (!f->client.seq0)
                 f->client.seq0 = seq0;
             f->server.seq0 = p->seq;
@@ -425,7 +437,7 @@ ct_flow *ctrack_feed(ctrack *t, const gpkt *p, uint64_t now, int *reverse)
     } else {
         lru_front(t, f);
     }
-    feed_packet(f, r, p, now);
+    feed_packet(t, f, r, p, now);
     if (reverse)
         *reverse = r;
     return f;
@@ -448,4 +460,13 @@ void ct_view(const ct_side *s, xside_view *v)
     v->s = s->seq_last - s->seq0;
     v->p = s->pos - s->seq0;
     v->over2g = s->rseq_over_2g;
+}
+
+void ctrack_foreach(ctrack *t, void (*fn)(ct_flow *f, void *ud), void *ud)
+{
+    ct_flow *f, *n;
+    for (f = t->lru_tail; f; f = n) {
+        n = f->lprev;
+        fn(f, ud);
+    }
 }

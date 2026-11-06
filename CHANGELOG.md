@@ -39,6 +39,20 @@
   стратегии. `apply --ext --ext-posdebug` печатает строки `posdebug`
   zapret2; CI сверяет их с официальным nfqws2 на одном захвате. Фича
   `ext_ctrack`. Подробно — `docs/EXT.md`.
+- X4: распознавание L7 как в nfqws2 (`src/ext/l7.c`): 16 протоколов, 31
+  тип payload, имя хоста из HTTP, TLS и QUIC, MTProto по первому пакету.
+  Сборка ClientHello из нескольких сегментов TCP и нескольких QUIC
+  Initial: пакеты удерживаются (вердикт ждёт, счётчик `held` в `stats`) и
+  проходят стратегию со всем ClientHello; отменённая сборка отпускает их
+  через стратегию, а не мимо неё, как nfqws2. Триггеры `L7:proto`,
+  `L7:payload`, `L7:host`; опции `--ext-payload-disable`,
+  `--ext-reasm-disable`, `--ext-reasm-max`. Маркеры позиций zapret2 (`host`,
+  `midsld`, `sniext`…) для действий X5. Паритет закреплён выводом самого
+  кода zapret2 по всем `files/fake/*.bin` и снятым ClientHello Chromium и
+  curl (`tests/data/l7_expected.txt`), дифференциальный фаззинг
+  `tests/fuzz/l7_diff.sh`. QUIC Initial расшифровывается во всех версиях,
+  что знает zapret2 (v1, v2, черновики с 11, mvfst, Q050, T050, T051).
+  Фича `ext_l7`. Подробно — `docs/EXT.md`.
 
 ## v1.2.0
 

@@ -88,11 +88,12 @@ typedef struct {
 /* The counters of a worker; engine_counters() sums them over the list, so a
  * new counter goes here and nowhere else (plus its line in "stats").
  * passed_first: --first, packets past the first N of their flow;
- * flow_evictions: --first, live flows pushed out of a full table. */
+ * flow_evictions: --first, live flows pushed out of a full table;
+ * held: --ext, packets whose verdict waited for a reassembly. */
 #define ENG_COUNTERS(X)                                                             \
     X(pkts_out) X(pkts_in) X(triggered) X(accepted) X(modified) X(dropped)            \
     X(injected) X(delayed) X(send_errors) X(verdict_errors) X(parse_errors) X(overruns) \
-    X(passed_first) X(flow_evictions)
+    X(passed_first) X(flow_evictions) X(held)
 
 typedef struct {
 #define ENG_COUNTER_FIELD(n) uint64_t n;
@@ -116,6 +117,9 @@ struct ext_hooks {
      * the triggers of the extensions; the engine clears it afterwards. */
     int (*packet)(eng_worker *w, strategy *st, gpkt *p, strat_dir dir, const uint8_t *data, size_t len,
                   const void *pctx);
+    /* The capture is about to close (engine_run_timers with all): give
+     * every packet whose verdict the hook kept its verdict now. */
+    void (*flush)(eng_worker *w);
 };
 
 struct eng_worker {
@@ -130,6 +134,7 @@ struct eng_worker {
     uint64_t next_expire;
     void *x;            /* state of the extensions, NULL without --ext */
     void *xctx;         /* per packet: what the hook found for strat_xtrig */
+    eng_slot *slot;     /* per packet: its evaluator slot (NULL: none), for replays */
     int x_open;         /* worker_open succeeded: worker_close is due */
 };
 
@@ -168,6 +173,15 @@ void engine_counters(const engine *e, counters *sum, size_t *pending);
  * bytes when modified is 0; ignored for a drop). */
 void engine_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len, int modified);
 void engine_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t len);
+/* The extensions hold the captured packet (a reassembly, src/ext/xl7.c):
+ * its verdict waits, like that of a delayed packet, and it is counted as
+ * held. The hook keeps pctx and the bytes. */
+void engine_hold(eng_worker *w);
+/* A held packet back: runs it through st (NULL, or paused: it goes as it
+ * is) with xctx for the triggers of the extensions; the first result rides
+ * on its verdict, as for a packet that was never held. */
+void engine_replay(eng_worker *w, strategy *st, const uint8_t *data, size_t len, strat_dir dir, const void *pctx,
+                   void *xctx);
 
 /* Runs one captured packet through the strategy (call with e->lock held).
  * dir is DIR_OUT, DIR_IN, or -1 to decide by the ports. */

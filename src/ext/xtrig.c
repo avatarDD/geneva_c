@@ -3,18 +3,64 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "l7.h"
 #include "util.h"
 
-enum { XT_RANGE, XT_STATE, XT_RETRANS, XT_IFIN, XT_IFOUT, XT_MARK };
+enum { XT_RANGE, XT_STATE, XT_RETRANS, XT_IFIN, XT_IFOUT, XT_MARK, XT_PROTO, XT_PAYLOAD, XT_HOST };
 
 typedef struct {
     int kind;
     int other;  /* XT_RANGE: the other side's counters */
     xrange r;
-    int value;  /* XT_STATE, XT_RETRANS */
+    int value;  /* XT_STATE, XT_RETRANS; XT_PROTO, XT_PAYLOAD: negated */
     char name[32];
     uint32_t mark, mask;
+    uint64_t set; /* XT_PROTO, XT_PAYLOAD */
+    char *hosts;  /* XT_HOST: the list as written, lowercased */
 } xtrig;
+
+/* "example.com,*cdn.net": a name and its subdomains, or with a leading "*"
+ * any host that ends so */
+static int host_list_ok(const char *v, sbuf *err)
+{
+    const char *p = v;
+    for (;;) {
+        const char *e = strchr(p, ',');
+        size_t n = e ? (size_t)(e - p) : strlen(p);
+        size_t k = n && *p == '*' ? 1 : 0;
+        if (n == k || n >= XL7_HOST_MAX) {
+            sb_printf(err, "bad host \"%.*s\" in L7:host (a name, or *suffix)", (int)n, p);
+            return -1;
+        }
+        for (; k < n; k++)
+            if (p[k] == '*' || (unsigned char)p[k] <= ' ') {
+                sb_printf(err, "bad host \"%.*s\" in L7:host (a name, or *suffix)", (int)n, p);
+                return -1;
+            }
+        if (!e)
+            return 0;
+        p = e + 1;
+    }
+}
+
+static int host_match(const char *list, const char *host)
+{
+    size_t hl = strlen(host);
+    const char *p = list;
+    for (;;) {
+        const char *e = strchr(p, ',');
+        size_t n = e ? (size_t)(e - p) : strlen(p);
+        if (*p == '*') {
+            if (n - 1 <= hl && !memcmp(host + hl - (n - 1), p + 1, n - 1))
+                return 1;
+        } else if (n <= hl && !memcmp(host + hl - n, p, n) && (n == hl || host[hl - n - 1] == '.')) {
+            return 1;
+        }
+        if (!e)
+            return 0;
+        p = e + 1;
+    }
+}
 
 static int parse(const char *layer, const char *field, const char *value, void **out, sbuf *err)
 {
@@ -83,6 +129,26 @@ static int parse(const char *layer, const char *field, const char *value, void *
             sb_printf(err, "unknown field \"%s\" for META in trigger (ifin, ifout, mark)", field);
             return -1;
         }
+    } else if (str_ieq(layer, "L7")) {
+        if (!strcmp(field, "proto") || !strcmp(field, "payload")) {
+            int neg = 0;
+            t.kind = field[1] == 'r' ? XT_PROTO : XT_PAYLOAD;
+            if ((t.kind == XT_PROTO ? l7_proto_list(value, &t.set, &neg, err)
+                                    : l7_payload_list(value, &t.set, &neg, err)) < 0)
+                return -1;
+            t.value = neg;
+        } else if (!strcmp(field, "host")) {
+            t.kind = XT_HOST;
+            if (host_list_ok(value, err) < 0)
+                return -1;
+            t.hosts = xstrdup(value);
+            for (char *q = t.hosts; *q; q++)
+                if (*q >= 'A' && *q <= 'Z')
+                    *q = (char)(*q - 'A' + 'a');
+        } else {
+            sb_printf(err, "unknown field \"%s\" for L7 in trigger (proto, payload, host)", field);
+            return -1;
+        }
     } else {
         return 0;
     }
@@ -94,6 +160,8 @@ static int parse(const char *layer, const char *field, const char *value, void *
 static const ct_side *side(const xpkt_ctx *c, int other)
 {
     int srv = c->reverse ^ other;
+    if (c->l7 && c->l7->cli) /* a replayed piece: the sides as it saw them */
+        return srv ? c->l7->srv : c->l7->cli;
     return srv ? &c->f->server : &c->f->client;
 }
 
@@ -132,18 +200,32 @@ static int match(const void *x, void *ctx, strat_dir dir, size_t tree, const gpk
         return c && c->ifout && !strcmp(c->ifout, t->name);
     case XT_MARK:
         return c && c->has_meta && (c->mark & t->mask) == t->mark;
+    case XT_PROTO:
+        return l7_proto_match(c && c->l7 ? c->l7->l7 : L7_UNKNOWN, t->set) != t->value;
+    case XT_PAYLOAD:
+        return l7_payload_match(c && c->l7 ? c->l7->l7p : (p->payload_len ? L7P_UNKNOWN : L7P_EMPTY), t->set) !=
+               t->value;
+    case XT_HOST:
+        return c && c->l7 && c->l7->host && host_match(t->hosts, c->l7->host);
     }
     return 0;
 }
 
 static void *dup(const void *x)
 {
-    void *d = xmalloc(sizeof(xtrig));
+    xtrig *d = xmalloc(sizeof(xtrig));
     memcpy(d, x, sizeof(xtrig));
+    if (d->hosts)
+        d->hosts = xstrdup(d->hosts);
     return d;
 }
 
-static void xfree(void *x) { free(x); }
+static void xfree(void *x)
+{
+    if (x)
+        free(((xtrig *)x)->hosts);
+    free(x);
+}
 
 const strat_xtrig xtrig_ops = {parse, match, dup, xfree};
 

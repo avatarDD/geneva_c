@@ -185,6 +185,90 @@ static void tree_stats_json(jw *w, atree **f, size_t n)
     jw_arr_end(w);
 }
 
+/* What "apply" keeps while it writes results */
+typedef struct {
+    strategy *st;
+    pcap_writer *wr;
+    int verbose, posdebug;
+    uint64_t ts_ns, n_in, n_out, n_changed, n_replays;
+    sbuf *line;
+} apply_ctx;
+
+/* Runs p through the strategy (unless run is 0: it passes as it is), with
+ * xctx for the extensions, writes the results and frees p. what: the
+ * packet's label in --verbose ("pass", "out", "in", "out piece 1/2"). */
+static void apply_pkt(apply_ctx *ac, gpkt *p, strat_dir dir, int run, void *xctx, const char *what)
+{
+    pktlist out = {0};
+    int fired = 0;
+#if GENEVA_EXT
+    if (ac->posdebug && run >= 0) {
+        sb_reset(ac->line);
+        xoff_posdebug(xctx, dir, p, ac->line);
+        fprintf(stderr, "%s\n", ac->line->data);
+    }
+#endif
+    if (ac->verbose)
+        describe(p, ac->line);
+    if (run > 0) {
+        fired = strategy_apply_x(ac->st, p, dir, &out, xctx);
+        /* inbound packets cannot branch: the engine accepts the first
+         * result (possibly modified) or drops the packet */
+        if (dir == DIR_IN)
+            while (out.n > 1)
+                pkt_free(out.v[--out.n]);
+    } else {
+        pktlist_push(&out, p);
+    }
+    if (fired)
+        ac->n_changed++;
+    if (ac->verbose)
+        fprintf(stderr, "#%llu %s %s -> %zu packet(s)%s\n", (unsigned long long)ac->n_in, what, ac->line->data,
+                out.n, fired ? "" : " (no tree fired)");
+    for (size_t i = 0; i < out.n; i++) {
+        size_t len;
+        uint8_t *b = pkt_bytes(out.v[i], &len);
+        if (ac->verbose && fired) {
+            describe(out.v[i], ac->line);
+            fprintf(stderr, "    -> %s\n", ac->line->data);
+            if (out.v[i]->sleep > 0)
+                fprintf(stderr, "       (after %g s)\n", out.v[i]->sleep);
+        }
+        if (!len) {
+            fprintf(stderr, "geneva apply: #%llu: cannot build a result packet\n", (unsigned long long)ac->n_in);
+        } else {
+            if (ac->wr)
+                pcap_write(ac->wr, ac->ts_ns + (uint64_t)(out.v[i]->sleep * 1e9), b, len);
+            ac->n_out++;
+        }
+        free(b);
+    }
+    pktlist_free(&out);
+}
+
+#if GENEVA_EXT
+/* A packet held for a reassembly comes back (xoff_packet, xoff_end) */
+static void apply_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, unsigned piece, unsigned pieces,
+                         void *xctx)
+{
+    apply_ctx *ac = ud;
+    char what[48];
+    gpkt *p = pkt_parse(raw, len);
+    ac->n_replays++;
+    if (!p)
+        return;
+    if (!xctx) {
+        apply_pkt(ac, p, dir, -1, NULL, "pass");
+        return;
+    }
+    if (pieces)
+        snprintf(what, sizeof(what), "%s piece %u/%u", dir == DIR_OUT ? "out" : "in", piece, pieces);
+    else
+        snprintf(what, sizeof(what), "%s released", dir == DIR_OUT ? "out" : "in");
+    apply_pkt(ac, p, dir, 1, xctx, what);
+}
+#endif
+
 int cmd_apply(int argc, char **argv)
 {
     static const optdef defs[] = {
@@ -217,13 +301,14 @@ int cmd_apply(int argc, char **argv)
     int64_t seed = 0;
     uint64_t n_in = 0, n_out = 0, n_skipped = 0, n_changed = 0;
     pcap_rec rec;
+    apply_ctx ac;
 #if GENEVA_EXT
     xoffline *xo = NULL;
-    int posdebug = 0;
 #endif
 
     sb_init(&e);
     sb_init(&line);
+    memset(&ac, 0, sizeof(ac));
     if (args_parse(&a, argc, argv, defs, err, sizeof(err)) < 0) {
         fprintf(stderr, "geneva apply: %s\n", err);
         return EXIT_USAGE;
@@ -281,7 +366,7 @@ int cmd_apply(int argc, char **argv)
     }
 #if GENEVA_EXT
     xo = xoff_new();
-    posdebug = arg_has(&a, "ext-posdebug");
+    ac.posdebug = xo && arg_has(&a, "ext-posdebug");
 #endif
     rd = pcap_open_read(arg_str(&a, "input", "-"), &e);
     if (!rd) {
@@ -298,12 +383,17 @@ int cmd_apply(int argc, char **argv)
         }
     }
 
+    ac.st = st;
+    ac.wr = wr;
+    ac.verbose = verbose;
+    ac.line = &line;
     while ((r = pcap_next(rd, &rec, &e)) > 0) {
         gpkt *p;
         strat_dir dir = def_dir;
-        pktlist out = {0};
-        int fired = 0, pass = 0;
-        n_in++;
+        int pass = 0, run = 1;
+        void *xctx = NULL;
+        ac.n_in = ++n_in;
+        ac.ts_ns = rec.ts_ns;
         p = rec.ip ? pkt_parse(rec.ip, rec.ip_len) : NULL;
         if (!p) {
             n_skipped++;
@@ -321,66 +411,36 @@ int cmd_apply(int argc, char **argv)
             else
                 pass = 1;
         }
-        if (verbose)
-            describe(p, &line);
         if (pass) {
-            pktlist_push(&out, p);
-        } else {
-            void *xctx = NULL;
+            apply_pkt(&ac, p, dir, -1, NULL, "pass");
+            continue;
+        }
 #if GENEVA_EXT
-            int bypass = 0;
-            if (xo) {
-                xctx = xoff_packet(xo, st, p, dir, rec.ts_ns / 1000000, &bypass);
-                if (posdebug) {
-                    sb_reset(&line);
-                    xoff_posdebug(xo, dir, p, &line);
-                    fprintf(stderr, "%s\n", line.data);
-                    if (verbose)
-                        describe(p, &line);
+        if (xo) {
+            int v;
+            uint64_t replays = ac.n_replays;
+            xctx = xoff_packet(xo, st, p, dir, rec.ts_ns / 1000000, rec.ip, rec.ip_len, apply_replay, &ac, &v);
+            if (v == XOFF_HOLD) {
+                /* (when it completed a reassembly, it was the last piece) */
+                if (verbose && replays == ac.n_replays) {
+                    describe(p, &line);
+                    fprintf(stderr, "#%llu %s %s -> held\n", (unsigned long long)n_in,
+                            dir == DIR_OUT ? "out" : "in", line.data);
                 }
+                pkt_free(p);
+                continue;
             }
-            if (bypass) {
-                pktlist_push(&out, p);
-                goto applied;
-            }
-#endif
-            fired = strategy_apply_x(st, p, dir, &out, xctx);
-            /* inbound packets cannot branch: the engine accepts the first
-             * result (possibly modified) or drops the packet */
-            if (dir == DIR_IN)
-                while (out.n > 1)
-                    pkt_free(out.v[--out.n]);
+            if (v == XOFF_BYPASS)
+                run = 0;
         }
-#if GENEVA_EXT
-    applied:
 #endif
-        if (fired)
-            n_changed++;
-        if (verbose)
-            fprintf(stderr, "#%llu %s %s -> %zu packet(s)%s\n", (unsigned long long)n_in,
-                    pass ? "pass" : (dir == DIR_OUT ? "out" : "in"), line.data, out.n,
-                    fired ? "" : " (no tree fired)");
-        for (size_t i = 0; i < out.n; i++) {
-            size_t len;
-            uint8_t *b = pkt_bytes(out.v[i], &len);
-            if (verbose && fired) {
-                describe(out.v[i], &line);
-                fprintf(stderr, "    -> %s\n", line.data);
-                if (out.v[i]->sleep > 0)
-                    fprintf(stderr, "       (after %g s)\n", out.v[i]->sleep);
-            }
-            if (!len) {
-                fprintf(stderr, "geneva apply: #%llu: cannot build a result packet\n",
-                        (unsigned long long)n_in);
-            } else {
-                if (wr)
-                    pcap_write(wr, rec.ts_ns + (uint64_t)(out.v[i]->sleep * 1e9), b, len);
-                n_out++;
-            }
-            free(b);
-        }
-        pktlist_free(&out);
+        apply_pkt(&ac, p, dir, run, xctx, dir == DIR_OUT ? "out" : "in");
     }
+#if GENEVA_EXT
+    xoff_end(xo, st, apply_replay, &ac);
+#endif
+    n_out = ac.n_out;
+    n_changed = ac.n_changed;
     if (r < 0) {
         fprintf(stderr, "geneva apply: %s\n", e.data);
         rc = EXIT_IO;

@@ -39,11 +39,25 @@ const struct ext_hooks *ext_engine_hooks(void);
 typedef struct xoffline xoffline;
 xoffline *xoff_new(void);
 void xoff_free(xoffline *x);
-/* The context for strategy_apply_x() for p; *bypass is 1 when every tree
- * of dir is cut off on its flow (the packet passes by the strategy). */
-void *xoff_packet(xoffline *x, const strategy *st, const gpkt *p, strat_dir dir, uint64_t now_ms, int *bypass);
-/* zapret2's posdebug line for the packet xoff_packet() just took, without
- * its time ("posdebug: out direct n1 d0 b0 s0 p0 reverse n0 ... payload 0"). */
-void xoff_posdebug(const xoffline *x, strat_dir dir, const gpkt *p, sbuf *out);
+/* A packet held for a reassembly comes back: run it through the strategy
+ * with xctx (piece of pieces; 0 of 0 when the reassembly failed and the
+ * packet goes alone). xctx NULL: the conntrack forgot its flow, the packet
+ * goes on as it is, outside the strategy. */
+typedef void (*xoff_replay_fn)(void *ud, const uint8_t *raw, size_t len, strat_dir dir, unsigned piece,
+                               unsigned pieces, void *xctx);
+enum { XOFF_RUN = 0, XOFF_BYPASS, XOFF_HOLD };
+/* The context for strategy_apply_x() for p (raw: its bytes). *verdict:
+ * XOFF_RUN, run the strategy; XOFF_BYPASS, every tree of dir is cut off on
+ * its flow, so the packet passes by the strategy; XOFF_HOLD, p is held for
+ * a reassembly and leaves later through fn (NULL is returned). fn may be
+ * called before the return for packets held earlier, p among them. */
+void *xoff_packet(xoffline *x, const strategy *st, const gpkt *p, strat_dir dir, uint64_t now_ms,
+                  const uint8_t *raw, size_t rawlen, xoff_replay_fn fn, void *ud, int *verdict);
+/* At the end of the capture: packets still held go through fn alone. */
+void xoff_end(xoffline *x, const strategy *st, xoff_replay_fn fn, void *ud);
+/* zapret2's posdebug line of a packet with its context from xoff_packet()
+ * or a replay, without its time ("posdebug: out direct n1 d0 b0 s0 p0
+ * reverse n0 ... payload 0"). */
+void xoff_posdebug(const void *xctx, strat_dir dir, const gpkt *p, sbuf *out);
 
 #endif

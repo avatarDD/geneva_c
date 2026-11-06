@@ -69,6 +69,12 @@ struct ct_flow {
     uint8_t all_cut[2];
     int cut_serial; /* the strategy the bits are about (strategy.serial) */
     uint8_t xstate[CT_XSTATE]; /* D8, zeroed with the flow */
+    /* L7 of the extensions (src/ext/xl7.c): the flow's protocol (L7_*, 0:
+     * not known yet), its host name and a reassembly in progress; freed
+     * through ct_config.clear */
+    uint8_t l7proto;
+    char *host;
+    void *xr;
 
     /* table links */
     ct_flow *hnext, *lprev, *lnext;
@@ -78,6 +84,10 @@ struct ct_flow {
 typedef struct {
     uint32_t t_syn, t_est, t_fin, t_udp; /* seconds */
     size_t max;
+    /* called before a flow is started over or freed: frees what its
+     * pointers hold (NULL: nothing to free); ud is clear_ud */
+    void (*clear)(ct_flow *f, void *ud);
+    void *clear_ud;
 } ct_config;
 
 void ct_config_default(ct_config *c);
@@ -99,6 +109,9 @@ uint64_t ctrack_evictions(const ctrack *t);
 ct_flow *ctrack_feed(ctrack *t, const gpkt *p, uint64_t now, int *reverse);
 /* Finds p's flow without changing anything (ConntrackPoolDoubleSearch). */
 ct_flow *ctrack_find(ctrack *t, const gpkt *p, int *reverse);
+/* Calls fn for every flow, the least recently active first; fn must not
+ * feed or purge t. */
+void ctrack_foreach(ctrack *t, void (*fn)(ct_flow *f, void *ud), void *ud);
 /* Purges expired flows now (also done by feed every 10 s). */
 void ctrack_purge(ctrack *t, uint64_t now);
 

@@ -29,13 +29,18 @@
  * the "ext" feature of "version --json". */
 #define EXT_OPT {"ext", 0, 0, NULL, EXT_HELP("turn on the extensions beyond Geneva (docs/EXT.md)")}
 
-/* The conntrack of the extensions (FLOW: triggers), for the commands that
- * run strategies: run, eval, evolve, apply. */
+/* The conntrack and the L7 of the extensions (FLOW: and L7: triggers), for
+ * the commands that run strategies: run, eval, evolve, apply. */
 #define EXT_CTRACK_OPTS                                                                                       \
     {"ext-ctrack-timeouts", 0, 1, "S:E:F[:U]",                                                                \
      EXT_HELP("conntrack timeouts, s: TCP SYN, ESTABLISHED, FIN, UDP (60:300:60:60)")},                       \
     {"ext-ctrack-max", 0, 1, "N", EXT_HELP("flows the conntrack keeps per worker (16384)")},                   \
-    {"ext-ctrack-disable", 0, 0, NULL, EXT_HELP("no conntrack: FLOW triggers match only the \"a\" range")}
+    {"ext-ctrack-disable", 0, 0, NULL, EXT_HELP("no conntrack: FLOW triggers match only the \"a\" range")},      \
+    {"ext-payload-disable", 0, 1, "LIST",                                                                     \
+     EXT_HELP("payload types not to recognize (L7:payload), e.g. dht,stun, or all")},                    \
+    {"ext-reasm-disable", 0, 1, "LIST",                                                                       \
+     EXT_HELP("do not reassemble a ClientHello split over packets: tls_client_hello, quic_initial or all")},   \
+    {"ext-reasm-max", 0, 1, "BYTES", EXT_HELP("the longest ClientHello reassembled (16384)")}
 
 /* After args_parse: takes --ext and checks that no --ext-* option comes
  * without it. Prints "geneva CMD: ..." and returns -1 on a usage error

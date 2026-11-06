@@ -1,6 +1,7 @@
 /*
  * Triggers of the extensions (docs/EXT_ROADMAP.md, 5.1): FLOW: (the
- * packet's flow in ctrack) and META: (where the packet came from).
+ * packet's flow in ctrack), META: (where the packet came from) and L7:
+ * (what it carries, src/ext/xl7.c).
  *
  *   FLOW:n|d|b|s|p:RANGE      this side's packets, packets with data, data
  *                             bytes, relative seq, position (zapret2's
@@ -11,6 +12,12 @@
  *   FLOW:retrans:0|1          the packet repeats data already seen (TCP)
  *   META:ifin|ifout:NAME      the interface the packet came in or goes out
  *   META:mark:N[/MASK]        the firewall mark
+ *   L7:proto:LIST             the flow's protocol (tls,quic,...,known,unknown;
+ *                             "~" in front negates: zapret2's --filter-l7)
+ *   L7:payload:LIST           what the packet carries (tls_client_hello,
+ *                             empty, known, ...: zapret2's --payload)
+ *   L7:host:LIST              the flow's host name: "example.com" is the name
+ *                             and its subdomains, "*cdn.net" any name ending so
  *
  * A tree whose FLOW range (of this side) is behind the packet's flow for
  * good is cut off on that flow (zapret2's instance cutoff, D7): it is not
@@ -25,6 +32,7 @@
 
 #include "ctrack.h"
 #include "strategy.h"
+#include "xl7.h"
 
 /* What strategy_apply_x() gets as its context. */
 typedef struct {
@@ -34,6 +42,7 @@ typedef struct {
     const char *ifin, *ifout; /* NULL: unknown */
     uint32_t mark;
     int has_meta;
+    const xl7_view *l7; /* NULL: not looked at */
 } xpkt_ctx;
 
 extern const strat_xtrig xtrig_ops;
