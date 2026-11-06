@@ -268,6 +268,24 @@ for FW in $FIREWALLS; do
     exchange && ok "exchange works" || bad "exchange failed"
     stop_case
     check "IP fragments on the wire" '[ $(cnt "flags \[+") -ge 2 ]'
+
+    start_case "xtlsclone: a fake ClientHello with another SNI" "$FW" '[TCP:flags:PA]-xtlsclone{blob=c;sni_first=clone.example}(xfake{blob=c;optional;badsum},)-| \/' 10.77.0.2 --ext
+    exchange_ch && ok "exchange works" || bad "exchange failed"
+    stop_case
+    check "the clone went with a bad checksum" '[ $(grep -c "incorrect" "$WORK/cap.txt") -ge 1 ]'
+    check "the clone carries the new name" 'grep -aq clone.example "$WORK/cap.pcap"'
+
+    start_case "xsyndata + xwssize" "$FW" '[TCP:flags:S]-xsyndata{blob=0x0102}-| [TCP:dport:'"$PORT"']-xwssize{wsize=1000}-| \/' 10.77.0.2 --ext
+    exchange && ok "exchange works" || bad "exchange failed"
+    stop_case
+    check "a SYN with 2 bytes of data" '[ $(grep "10.77.0.1.* > 10.77.0.2.$PORT: Flags \[S\]" "$WORK/cap.txt" | grep -Ec "length 2(:|$)") -ge 1 ]'
+    check "the SYN window rewritten" '[ $(grep "10.77.0.1.* > 10.77.0.2.$PORT: Flags \[S\]" "$WORK/cap.txt" | grep -c "win 1000,") -ge 1 ]'
+
+    start_case "xlog + xrst" "$FW" '[TCP:flags:PA]-xlog{msg=seen}(xrst{payload=all;badsum},)-| \/' 10.77.0.2 --ext
+    exchange && ok "exchange works" || bad "exchange failed"
+    stop_case
+    check "an ext_pkt event" 'grep -q "\"ev\":\"ext_pkt\".*\"msg\":\"seen\"" "$WORK/ev.jsonl"'
+    check "an RST with a bad checksum" '[ $(grep "Flags \[R\]" "$WORK/cap.txt" | grep -c "incorrect") -ge 1 ]'
     fi
 
     start_case "SIGHUP reload" "$FW" '\/'

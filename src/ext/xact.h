@@ -26,6 +26,7 @@
 
 #include "ctrack.h"
 #include "strategy.h"
+#include "tls.h"
 #include "xtrig.h"
 
 extern const strat_xact xact_ops;
@@ -57,6 +58,7 @@ typedef struct {
     char *text; /* the parameters as written, NULL without braces */
     xparam *p;
     int np;
+    int started; /* xpcap: the file was started (zapret2's _G cache) */
 } xact;
 
 typedef struct xrun xrun;
@@ -117,7 +119,8 @@ struct xrun {
     void *fs;           /* the action's per-flow slot (NULL without a flow) */
     const uint8_t *data; /* the payload, or the reassembled message on a replayed piece */
     size_t len;
-    int l7p;
+    int l7p;            /* L7P_*: of the label when xtag set one (L7P_UNKNOWN for its own names) */
+    const char *l7name; /* zapret2's desync.l7payload: the name, or xtag's label */
     unsigned piece, pieces;
     size_t offset;
     unsigned mss;
@@ -144,8 +147,54 @@ int xa_blob_exists(xrun *r, const char *name);
  * (1-based) */
 void xa_pattern(const uint8_t *pat, size_t plen, size_t offset, uint8_t *out, size_t len);
 
-/* the payload filter (default def: "known" or "all") */
+/* the payload filter (default def: "known" or "all"), by names as
+ * zapret2's payload_match_filter: xtag's own labels match too */
 int xa_payload_ok(xrun *r, const char *def);
+/* zapret2's in_list: v is one of the comma-separated list */
+int xa_in_list(const char *list, const char *v);
+/* zapret2's instance cutoff: the action leaves the flow alone from now on
+ * (nothing without a flow); xa_is_cut tells */
+void xa_cutoff(xrun *r);
+int xa_is_cut(xrun *r);
+
+/* The packet's own state (zapret2's desync table): blobs that an action
+ * made for the actions after it (xtlsclone) and xtag's label. It lives
+ * while the packet goes through the trees. */
+void xa_dyn_blob_set(xrun *r, const char *name, const uint8_t *d, size_t n);
+int xa_dyn_has(xrun *r, const char *name);
+void xa_set_tag(xrun *r, const char *label);
+/* a blob by name: the packet's own first, then --ext-blob and the built-in
+ * ones (zapret2's blob(): desync, then _G) */
+const uint8_t *xa_blob_named(xrun *r, const char *name, size_t *len);
+
+/* tlsmod with "sni=%name" replaced by the blob (zapret2's tls_mod_shim) */
+int xa_tlsmod_list(xrun *r, const char *v, tls_modspec *m);
+
+/* checks at parse time, shared by the actions */
+int xa_check_markers(const xact *a, const char *key, int range, sbuf *err);
+int xa_check_num(const xact *a, const char *key, int64_t lo, int64_t hi, sbuf *err);
+int xa_check_blob(const xact *a, const char *key, sbuf *err);
+int xa_check_flag(const xact *a, const char *key, sbuf *err);
+int xa_check_tlsmod(const xact *a, const char *who, sbuf *err);
+/* a parameter's value as written (NULL: absent or a flag) */
+const char *xa_raw(const xact *a, const char *key);
+
+/* what every changed packet needs computed again */
+#define XA_AUTO                                                                                                    \
+    (AUTO_IP_LEN | AUTO_IP_CSUM | AUTO_IP_IHL | AUTO_TCP_DOFS | AUTO_TCP_CSUM | AUTO_UDP_LEN | AUTO_UDP_CSUM |    \
+     AUTO_V6_PLEN)
+
+/* VERDICT_PASS: the packet goes on as it is (or as the action changed it:
+ * VERDICT_MODIFY); VERDICT_DROP: it goes on marked dropped (later
+ * x-actions still see it, as in zapret2) */
+static inline void xa_pass(xrun *r, gpkt *p) { strat_xchild(r->env, 0, p); }
+static inline void xa_drop(xrun *r, gpkt *p)
+{
+    p->xdrop = 1;
+    strat_xchild(r->env, 0, p);
+}
+/* the packet changed in place: lengths and checksums are computed again */
+void xa_modified(gpkt *p);
 /* zapret2's replay_first, replay_drop_set, replay_drop */
 int xa_replay_first(const xrun *r);
 void xa_replay_drop_set(xrun *r);
@@ -168,5 +217,7 @@ void xa_log(const xrun *r, const char *fmt, ...) PRINTF_LIKE(2, 3);
 /* The actions */
 extern const xa_kind xa_send, xa_mod, xa_fake, xa_split, xa_disorder, xa_tcpseg, xa_hostfake, xa_fakedsplit,
     xa_fakeddisorder;
+extern const xa_kind xa_synacksplit, xa_synack, xa_wsize, xa_wssize, xa_syndata, xa_rst;
+extern const xa_kind xa_http, xa_tlsclone, xa_udplen, xa_dhtdn, xa_xlog, xa_tag, xa_pcap;
 
 #endif

@@ -31,6 +31,7 @@ geneva run --ext -s '...'
 | X3 | conntrack, позиции и диапазоны zapret2, триггеры `FLOW:` и `META:`, отсечка деревьев на поток | ниже |
 | X4 | распознавание L7 как в zapret2, сборка ClientHello из нескольких пакетов, имя хоста, триггеры `L7:`, маркеры позиций | ниже |
 | X5a | x-действия по функциям zapret2: `xfake`, `xsplit`, `xdisorder`, `xtcpseg`, `xhostfake`, `xfakedsplit`, `xfakeddisorder`, `xsend`, `xmod`; общие аргументы (fooling, ipfrag, repeats…), блобы, `tls_mod` | ниже |
+| X5b | остальные функции zapret2: `xsynacksplit`, `xsynack`, `xwsize`, `xwssize`, `xsyndata`, `xrst`, `xhttp`, `xudplen`, `xdhtdn`, `xtlsclone`, `xtag`, `xlog`, `xpcap`; состояние пакета (блобы `xtlsclone`, метка `xtag`) | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
 
@@ -328,11 +329,110 @@ raw-сокетом. На Windows метки и интерфейса нет.
   фрагментацию настоящего хоста.
 - `tlsmod` работает только на TCP: на UDP у zapret2 нет `reasm_data`.
 
+## x-действия (X5b)
+
+Остальные функции `zapret-antidpi.lua`, `zapret-lib.lua` и
+`zapret-pcap.lua`. Синтаксис, общие аргументы и отправка — как в X5a.
+
+```
+[TCP:flags:S]-xsyndata{blob=fake_default_tls;tlsmod=rnd}-| \/
+[TCP:flags:PA]-xhttp{domcase;hostcase=hoSt}-| \/
+[TCP:flags:PA]-xtlsclone{blob=c;sni_first=allowed.example}(xfake{blob=c;ttl=3},)-| \/
+[TCP:flags:PA]-xtag{pattern=Blocked;payload=blk}(xfake{blob=fake_default_http;payload=blk;ttl=2},)-| \/
+\/ [TCP:flags:SA]-xwsize{wsize=1;scale=6}-|
+```
+
+| Действие | Функция zapret2 | Свои параметры | Общие | Входящий лес |
+|---|---|---|---|---|
+| `xsynacksplit` | `synack_split` | `mode=syn\|synack\|acksyn` (`synack`) | `badsum`, `repeats`, `fwmark`, `ifout`, ipfrag | нет |
+| `xsynack` | `synack` | — | то же | нет |
+| `xwsize` | `wsize` | `wsize=N`, `scale=N` | — | да |
+| `xwssize` | `wssize` | `wsize`, `scale`, `forced_cutoff=СПИСОК` | — | да |
+| `xsyndata` | `syndata` | `blob` (16 нулей), `tlsmod` | fooling, `badsum`, `repeats`, `fwmark`, `ifout`, ipfrag | нет |
+| `xrst` | `rst` | `rstack` | все | нет |
+| `xhttp` | `http_domcase`, `http_hostcase`, `http_methodeol`, `http_unixeol` | флаги `domcase`, `methodeol`, `unixeol`, `hostcase[=ЧЕТЫРЕ]` (`host`) | — | да |
+| `xudplen` | `udplen` | `min`, `max`, `increment` (2; меньше нуля — укоротить), `pattern`, `pattern_offset` | `payload` | да |
+| `xdhtdn` | `dht_dn` | `dn=N` (3) | — | да |
+| `xtlsclone` | `tls_client_hello_clone` | `blob` (обязателен), `fallback`, `sni_snt`, `sni_snt_new`, `sni_del_ext`, `sni_del`, `sni_first`, `sni_last` | — | да |
+| `xtag` | `detect_payload_str` | `pattern` (обязателен), `payload=МЕТКА`, `undetected=МЕТКА` | — | да |
+| `xlog` | `pass`, `pktdebug`, `posdebug` | `msg=ТЕКСТ`, флаги `pkt` (пакет), `pos` (строка posdebug), `hex` (payload, до 2048 байт) | — | да |
+| `xpcap` | `pcap` | `file=ПУТЬ` (обязателен), `keep` | — | да |
+
+**Что делают.** `xsynacksplit` на SYN,ACK шлёт вместо него SYN и ACK
+(`synack`), только SYN (`syn`) или ACK и SYN (`acksyn`). `xsynack` перед
+SYN шлёт его копию с ACK. `xwsize` на SYN,ACK ставит окно и уменьшает
+(никогда не увеличивает) масштаб окна; `xwssize` делает то же со всеми
+пакетами направления, пока не уйдёт первый payload (или payload из
+`forced_cutoff`). `xsyndata` шлёт вместо SYN его копию с данными блоба.
+`xrst` перед пакетом шлёт его копию без данных с RST (`rstack` — RST,ACK);
+IP ID по умолчанию не меняет. `xhttp` правит HTTP-запрос: регистр имени
+хоста через букву (`domcase`), написание заголовка `Host` (`hostcase`),
+`\r\n` перед методом за счёт двух байт User-Agent (`methodeol`), `\n`
+вместо `\r\n` с той же длиной за счёт пробелов в User-Agent (`unixeol`).
+Несколько правок идут в порядке `domcase`, `hostcase`, `unixeol`,
+`methodeol` («methodeol должен быть последним» в zapret2). `xudplen`
+удлиняет UDP-payload шаблоном или укорачивает (не до нуля). `xdhtdn`
+заменяет начало `d1:` DHT-сообщения на `dN:000…1:x`.
+
+**Состояние пакета.** Как таблица `desync` у zapret2, оно живёт, пока пакет
+идёт по всем деревьям леса. `xtlsclone` на ClientHello (собранном, если он
+пришёл кусками) кладёт в блоб `blob` его изменённую копию: SNI-расширение
+удаляется (`sni_del_ext`), список имён очищается (`sni_del`), у имён
+меняется тип (`sni_snt`), имя добавляется в начало или в конец
+(`sni_first`, `sni_last`, тип `sni_snt_new`, иначе 0); без SNI-расширения
+оно добавляется первым. Если клонировать нечего, блобом становится
+`fallback`. Этот блоб видят действия после `xtlsclone` в его поддереве и в
+следующих деревьях — по имени (`blob=c`, `%c`, `#c`, `tlsmod=sni=%c`), раньше
+встроенных и `--ext-blob`; у следующего пакета его нет. `xtag` ищет строку
+`pattern` в payload (в собранном сообщении) и ставит метку `payload`, если
+нашёл, или `undetected`, если нет; метку видят фильтры `payload=` следующих
+действий (`known` — всё, кроме `unknown` и `empty`). Триггеры `L7:payload`
+метку не видят: они смотрят на распознанный тип.
+
+**Разбор и сборка TLS.** `xtlsclone` повторяет `tls_dissect` и
+`tls_reconstruct` zapret2, с их особенностями: записи TLS собираются в
+сообщения, сообщение после правки снова режется по прежним длинам записей
+(последняя берёт остаток), расширения, которые zapret2 разбирает
+(`server_name`, `alpn`, `supported_versions`, `supported_groups`,
+`signature_algorithms`, `key_share`, `ec_point_formats`,
+`psk_key_exchange_modes`, `compress_certificate`, `delegated_credentials`,
+`quic_transport_parameters`), выходят в канонической форме: байты после
+списка и нечётный байт списка пар пропадают, varint QUIC — кратчайшей
+длины. Остальные расширения идут как есть.
+
+**События и файлы.** `xlog` пишет строку лога (уровень info) и событие
+`ext_pkt`: `msg`, `dir`, `tree`, `l7payload`, `len`, `piece`/`pieces`
+у куска собранного сообщения, `pkt`, `pos`, `hex` по флагам. `xpcap`
+дописывает пакет — каким он стал к этому месту дерева — в pcap того же
+формата, что `pcap` zapret2 (big endian, наносекунды, `LINKTYPE_RAW`);
+первый пакет экземпляра стратегии начинает файл заново, `keep` — дописывать
+к прежнему. Путь берётся как есть (от текущего каталога движка).
+
+Отличия от zapret2:
+
+- `xsynacksplit`, `xsynack`, `xsyndata`, `xrst` шлют копии и потому, как
+  `xsend`, только в исходящем лесу (`rst` у zapret2 по умолчанию в обе
+  стороны). `xwsize` и правки пакета (`xhttp`, `xudplen`, `xdhtdn`,
+  `xwssize`) можно и во входящем лесу.
+- Отсечка экземпляра (`instance_cutoff`): у `xwsize`, `xwssize`, `xsynack`,
+  `xsynacksplit`, `xsyndata` — на потоке, как в zapret2 (после неё действие
+  пропускает пакеты потока как есть); у остальных отсечка лишь экономит
+  время zapret2 и не нужна.
+- `pass`, `pktdebug`, `argdebug`, `posdebug` — одно `xlog`; дамп всей
+  таблицы `desync` и аргументов заменён полями события.
+- `xpcap` пишет пакет в его состоянии в этом месте дерева, а не исходный
+  пакет из очереди, и без `--writable` (путь как есть).
+- `payload=` принимает любые имена (из букв, цифр и `_`), как строковый
+  фильтр Lua: свои метки `xtag` должны проходить. Опечатка в имени тоже
+  пройдёт разбор и просто не совпадёт.
+- `xtlsclone` пишет varint QUIC в кратчайшей форме, как Lua 5.3+; LuaJIT
+  оставляет большие значения как были.
+
 ## Код zapret2
 
 Распознавание L7, маркеры, сборка, conntrack и x-действия
 (`src/ext/l7.c`, `markers.c`, `xl7.c`, `ctrack.c`, `xact.c`, `xact_tcp.c`,
-`tls.c` — `tls_mod`, `genhost`) перенесены из zapret2
+`xact_http.c`, `xact_misc.c`, `tls.c` — `tls_mod`, `genhost`, `tls_clone.c`) перенесены из zapret2
 (https://github.com/bol-van/zapret2) и распространяются на условиях его
 лицензии:
 

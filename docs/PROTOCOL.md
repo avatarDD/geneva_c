@@ -34,6 +34,7 @@
 | `ready` | (agent) агент ждёт оценщика или начал к нему подключаться | `addr` |
 | `state` | `pause` / `resume` | `state` (`paused`, `running`) |
 | `stats` | каждые `--stats-interval` с (по умолчанию 10 с, если есть `--events` или `--control`), по SIGUSR1 и при выходе | см. ниже |
+| `ext_pkt` | (`--ext`) пакет прошёл x-действие `xlog` (`docs/EXT.md`, X5b) | `dir` (`out`, `in`), `tree`, `l7payload`, `len`; по параметрам — `msg`, `pkt`, `pos`, `hex`; у куска собранного сообщения `piece`, `pieces` |
 | `log` | сообщение лога (в `--log-format json` и для подписчиков) | `level`, `mod`, `msg` |
 | `error` | ошибка | `where` (`strategy`, `nfqueue`, `rawsend`, `firewall`, `windivert`, `control`, `reload`, `filter`), `message`; у `filter` для некомпилируемого выражения ещё `pos` |
 | `dropped` | только подписчику: он читал слишком медленно и потерял события | `count` |

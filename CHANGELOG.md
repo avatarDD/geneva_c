@@ -68,6 +68,17 @@
   `--ext-bind-fix4/6`, `SO_PRIORITY 6`, `IP_FREEBIND`; сделанные пакеты и
   вердикт уходят в порядке zapret2. Фича `ext_xact`. Подробно —
   `docs/EXT.md`.
+- X5b: остальные функции zapret2 как x-действия: `xsynacksplit`,
+  `xsynack`, `xwsize`, `xwssize` (с `forced_cutoff`), `xsyndata`, `xrst`,
+  `xhttp{domcase;hostcase;methodeol;unixeol}`, `xudplen`, `xdhtdn`,
+  `xtlsclone` (`tls_client_hello_clone`: полный разбор и сборка
+  ClientHello, правка списка SNI), `xtag` (`detect_payload_str`: своя
+  метка payload), `xlog` (`pass`/`pktdebug`/`posdebug`, событие `ext_pkt`),
+  `xpcap{file;keep}` (`pcap` в любой точке дерева). Состояние пакета как
+  таблица `desync` zapret2: блоб, сделанный `xtlsclone`, и метка `xtag`
+  видны следующим действиям и деревьям этого пакета. Отсечка экземпляра
+  на потоке (`instance_cutoff`) для `xwsize`, `xwssize`, `xsynack`,
+  `xsynacksplit`, `xsyndata`. В `payload=` — любые имена (как в Lua).
 
 ## v1.2.0
 

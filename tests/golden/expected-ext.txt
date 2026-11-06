@@ -25,8 +25,13 @@ Extensions (with --ext):
   censor models 12-20 (geneva censor --ext --list); triggers FLOW:,
   META: and L7: ([L7:host:example.com]-drop-|); x-actions after zapret2's
   functions, NAME{key=value;...}: xfake xsplit xdisorder xtcpseg xhostfake
-  xfakedsplit xfakeddisorder xsend xmod, e.g.
+  xfakedsplit xfakeddisorder xsend xmod; xsyndata xrst xsynack xsynacksplit
+  xwsize xwssize; xhttp{domcase;hostcase=hoSt;methodeol;unixeol}; xudplen
+  xdhtdn; xtlsclone (a changed copy of the ClientHello as a blob for the
+  actions after it); xtag (an own payload label); xlog (event ext_pkt);
+  xpcap{file=...}, e.g.
   [TCP:flags:PA]-xfake{blob=fake_default_tls;ttl=3}(xdisorder{pos=1,midsld},)-| \/
+  [TCP:flags:PA]-xtlsclone{blob=c;sni_first=a.example}(xfake{blob=c;ttl=3},)-| \/
   See docs/EXT.md.
 [exit 0]
 ### help-ext-censor
@@ -521,6 +526,112 @@ $ $G apply --ext --rng-seed 7 -s '[TCP:flags:PA]-xsend{ipfrag;ipfrag_pos_tcp=24;
 #13 pass UDP 192.168.1.2:50003 --> 104.16.1.1:443 len=1200 ttl=64 \xc3\x00\x00\x00\x01\x08x\xe7\x98F\xbb\xf3y\x84\x00\x00D\x9e\xb2\xe2\x1bM\x8b\xcc/\xc9>\xef\x81I\x95J[\xa66K\x91\x19\x1b}\x0e\xe9?8\xff\x91\x92\xfd... -> 1 packet(s) (no tree fired)
 #14 pass UDP 104.16.1.1:443 --> 192.168.1.2:50003 len=31 ttl=64 @\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 -> 1 packet(s) (no tree fired)
 3221476104 6580
+[exit 0]
+### check-ext-xact5b
+$ $G check --ext '[TCP:flags:PA]-xtag{pattern=Host;payload=web}(xhttp{domcase;hostcase=hoSt;methodeol;unixeol},)-| [TCP:flags:PA]-xtlsclone{blob=c;sni_first=a.example;sni_snt_new=0}(xfake{blob=c;ttl=3},)-| [TCP:flags:S]-xsyndata{blob=0x1603;tlsmod=rnd}-| [TCP:flags:S]-xsynack-| [TCP:flags:SA]-xsynacksplit{mode=acksyn}-| [TCP:dport:443]-xwssize{wsize=1;scale=6;forced_cutoff=tls_client_hello}-| [TCP:flags:PA]-xrst{rstack;payload=web}-| [UDP:dport:443]-xudplen{increment=-2;payload=all}(xdhtdn{dn=4},)-| [TCP:flags:PA]-xlog{msg=x;pos}(xpcap{file=/tmp/x.pcap;keep},)-| \/ [TCP:flags:SA]-xwsize{wsize=1;scale=2}-|'
+[TCP:flags:PA]-xtag{pattern=Host;payload=web}(xhttp{domcase;hostcase=hoSt;methodeol;unixeol},)-| [TCP:flags:PA]-xtlsclone{blob=c;sni_first=a.example;sni_snt_new=0}(xfake{blob=c;ttl=3},)-| [TCP:flags:S]-xsyndata{blob=0x1603;tlsmod=rnd}-| [TCP:flags:S]-xsynack-| [TCP:flags:SA]-xsynacksplit{mode=acksyn}-| [TCP:dport:443]-xwssize{wsize=1;scale=6;forced_cutoff=tls_client_hello}-| [TCP:flags:PA]-xrst{rstack;payload=web}-| [UDP:dport:443]-xudplen{increment=-2;payload=all}(xdhtdn{dn=4},)-| [TCP:flags:PA]-xlog{msg=x;pos}(xpcap{file=/tmp/x.pcap;keep},)-| \/ [TCP:flags:SA]-xwsize{wsize=1;scale=2}-|
+[exit 0]
+### check-ext-xact5b-bad
+$ $G check --ext '[TCP:flags:SA]-xsynacksplit{mode=foo}-| [TCP:flags:PA]-xhttp-| \/ [TCP:flags:SA]-xrst-|'
+geneva check: xsynacksplit: bad mode 'foo'
+  in: [TCP:flags:SA]-xsynacksplit{mode=foo}-| [TCP:flags:PA]-xhttp-| \/ [TCP:flags:SA]-xrst-|
+[exit 3]
+### apply-ext-xact-syn
+$ $G apply --ext --rng-seed 7 -s '[TCP:flags:S]-xsyndata{blob=0x16030100;ttl=3}-| [TCP:flags:S]-xsynack-| \/ [TCP:flags:SA]-xwsize{wsize=1}-|' -i $D/l7.pcap -p 443 -v -o $T/out.pcap && cksum < $T/out.pcap
+#1 out TCP 192.168.1.2:50000 --> 93.184.215.14:443 [S] seq=1000 ack=0 len=0 ttl=64 -> 3 packet(s)
+    -> TCP 192.168.1.2:50000 --> 93.184.215.14:443 [S] seq=1000 ack=0 len=4 ttl=3 \x16\x03\x01\x00
+    -> TCP 192.168.1.2:50000 --> 93.184.215.14:443 [SA] seq=1000 ack=0 len=0 ttl=64
+    -> TCP 192.168.1.2:50000 --> 93.184.215.14:443 [S] seq=1000 ack=0 len=0 ttl=64
+#2 in TCP 93.184.215.14:443 --> 192.168.1.2:50000 [SA] seq=7000 ack=1001 len=0 ttl=64 -> 1 packet(s)
+    -> TCP 93.184.215.14:443 --> 192.168.1.2:50000 [SA] seq=7000 ack=1001 len=0 ttl=64
+#3 out TCP 192.168.1.2:50000 --> 93.184.215.14:443 [A] seq=1001 ack=7001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#4 out TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=1001 ack=7001 len=1000 ttl=64 \x16\x03\x01\x07\x1c\x01\x00\x07\x18\x03\x03\xd9\xf6\xc6GJ\x00\x85\x193\x0bPm\xe4\x9e\xa5&\xceT\xeeD\xcd\xfe6R2\xe99\x188\x09\xd9a \xba8T\x5c... -> held
+#5 in TCP 93.184.215.14:443 --> 192.168.1.2:50000 [A] seq=7001 ack=2001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#6 out piece 1/2 TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=1001 ack=7001 len=1000 ttl=64 \x16\x03\x01\x07\x1c\x01\x00\x07\x18\x03\x03\xd9\xf6\xc6GJ\x00\x85\x193\x0bPm\xe4\x9e\xa5&\xceT\xeeD\xcd\xfe6R2\xe99\x188\x09\xd9a \xba8T\x5c... -> 1 packet(s) (no tree fired)
+#6 out piece 2/2 TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=2001 ack=7001 len=825 ttl=64 \x92$\x8b\x16\xc0F\xa3\x9a\xa6\xa6\x1e\x94\xecz\x5c\x91\xc6p\x98\x84\xd3\xc5\x0a\x13'\x0c{\xd0\x14u*\x0d\xc7\xa0\xbc\x93\xb6S\x98\x82\xa1)\x1br&8\x9cG... -> 1 packet(s) (no tree fired)
+#7 in TCP 93.184.215.14:443 --> 192.168.1.2:50000 [PA] seq=7001 ack=2826 len=122 ttl=64 \x16\x03\x03\x00z\x02\x00\x00v\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00... -> 1 packet(s) (no tree fired)
+#8 pass TCP 192.168.1.2:50001 --> 104.16.1.1:80 [S] seq=500 ack=0 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#9 pass TCP 104.16.1.1:80 --> 192.168.1.2:50001 [SA] seq=900 ack=501 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#10 pass TCP 192.168.1.2:50001 --> 104.16.1.1:80 [PA] seq=501 ack=901 len=45 ttl=64 GET / HTTP/1.1\x0d\x0aHost: Blocked.Example.ORG\x0d\x0a\x0d\x0a -> 1 packet(s) (no tree fired)
+#11 out UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1230 ttl=64 \xcb\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbc\xfb\x16\xc6\xd9\x8b;\xbd\xef~\x03\xf1Zv\x8d\xbd\xd6Z\xe1\x8be3\x93\xff\x96\x09H\x8b\xc3(\xcc... -> held
+#12 out piece 1/2 UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1230 ttl=64 \xcb\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbc\xfb\x16\xc6\xd9\x8b;\xbd\xef~\x03\xf1Zv\x8d\xbd\xd6Z\xe1\x8be3\x93\xff\x96\x09H\x8b\xc3(\xcc... -> 1 packet(s) (no tree fired)
+#12 out piece 2/2 UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1230 ttl=64 \xca\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbch\x19i~\xb0\xa5b\x16KBl\x91 Z4\x1b\xe3\x057b\x89X\xc9\xb2\x1d\x1bPUI\xbe... -> 1 packet(s) (no tree fired)
+#13 out UDP 192.168.1.2:50003 --> 104.16.1.1:443 len=1200 ttl=64 \xc3\x00\x00\x00\x01\x08x\xe7\x98F\xbb\xf3y\x84\x00\x00D\x9e\xb2\xe2\x1bM\x8b\xcc/\xc9>\xef\x81I\x95J[\xa66K\x91\x19\x1b}\x0e\xe9?8\xff\x91\x92\xfd... -> 1 packet(s) (no tree fired)
+#14 in UDP 104.16.1.1:443 --> 192.168.1.2:50003 len=31 ttl=64 @\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 -> 1 packet(s) (no tree fired)
+1088368979 6559
+[exit 0]
+### apply-ext-xact-httpmod
+$ $G apply --ext --rng-seed 7 -s '[TCP:flags:PA]-xhttp{domcase;hostcase=hoSt}-| [TCP:flags:PA]-xrst{rstack;payload=http_req}-| \/' -i $D/l7.pcap -p 80 -v -o $T/out.pcap && cksum < $T/out.pcap
+#1 pass TCP 192.168.1.2:50000 --> 93.184.215.14:443 [S] seq=1000 ack=0 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#2 pass TCP 93.184.215.14:443 --> 192.168.1.2:50000 [SA] seq=7000 ack=1001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#3 pass TCP 192.168.1.2:50000 --> 93.184.215.14:443 [A] seq=1001 ack=7001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#4 pass TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=1001 ack=7001 len=1000 ttl=64 \x16\x03\x01\x07\x1c\x01\x00\x07\x18\x03\x03\xd9\xf6\xc6GJ\x00\x85\x193\x0bPm\xe4\x9e\xa5&\xceT\xeeD\xcd\xfe6R2\xe99\x188\x09\xd9a \xba8T\x5c... -> 1 packet(s) (no tree fired)
+#5 pass TCP 93.184.215.14:443 --> 192.168.1.2:50000 [A] seq=7001 ack=2001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#6 pass TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=2001 ack=7001 len=825 ttl=64 \x92$\x8b\x16\xc0F\xa3\x9a\xa6\xa6\x1e\x94\xecz\x5c\x91\xc6p\x98\x84\xd3\xc5\x0a\x13'\x0c{\xd0\x14u*\x0d\xc7\xa0\xbc\x93\xb6S\x98\x82\xa1)\x1br&8\x9cG... -> 1 packet(s) (no tree fired)
+#7 pass TCP 93.184.215.14:443 --> 192.168.1.2:50000 [PA] seq=7001 ack=2826 len=122 ttl=64 \x16\x03\x03\x00z\x02\x00\x00v\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00... -> 1 packet(s) (no tree fired)
+#8 out TCP 192.168.1.2:50001 --> 104.16.1.1:80 [S] seq=500 ack=0 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#9 in TCP 104.16.1.1:80 --> 192.168.1.2:50001 [SA] seq=900 ack=501 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#10 out TCP 192.168.1.2:50001 --> 104.16.1.1:80 [PA] seq=501 ack=901 len=45 ttl=64 GET / HTTP/1.1\x0d\x0aHost: Blocked.Example.ORG\x0d\x0a\x0d\x0a -> 3 packet(s)
+    -> TCP 192.168.1.2:50001 --> 104.16.1.1:80 [PA] seq=501 ack=901 len=45 ttl=64 GET / HTTP/1.1\x0d\x0ahoSt: BlOcKeD.ExAmPlE.OrG\x0d\x0a\x0d\x0a
+    -> TCP 192.168.1.2:50001 --> 104.16.1.1:80 [RA] seq=501 ack=901 len=0 ttl=64
+    -> TCP 192.168.1.2:50001 --> 104.16.1.1:80 [PA] seq=501 ack=901 len=45 ttl=64 GET / HTTP/1.1\x0d\x0aHost: Blocked.Example.ORG\x0d\x0a\x0d\x0a
+#11 pass UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1230 ttl=64 \xcb\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbc\xfb\x16\xc6\xd9\x8b;\xbd\xef~\x03\xf1Zv\x8d\xbd\xd6Z\xe1\x8be3\x93\xff\x96\x09H\x8b\xc3(\xcc... -> 1 packet(s) (no tree fired)
+#12 pass UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1230 ttl=64 \xca\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbch\x19i~\xb0\xa5b\x16KBl\x91 Z4\x1b\xe3\x057b\x89X\xc9\xb2\x1d\x1bPUI\xbe... -> 1 packet(s) (no tree fired)
+#13 pass UDP 192.168.1.2:50003 --> 104.16.1.1:443 len=1200 ttl=64 \xc3\x00\x00\x00\x01\x08x\xe7\x98F\xbb\xf3y\x84\x00\x00D\x9e\xb2\xe2\x1bM\x8b\xcc/\xc9>\xef\x81I\x95J[\xa66K\x91\x19\x1b}\x0e\xe9?8\xff\x91\x92\xfd... -> 1 packet(s) (no tree fired)
+#14 pass UDP 104.16.1.1:443 --> 192.168.1.2:50003 len=31 ttl=64 @\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 -> 1 packet(s) (no tree fired)
+1978773090 6600
+[exit 0]
+### apply-ext-xact-clone
+$ $G apply --ext --rng-seed 7 -s '[TCP:flags:PA]-xtlsclone{blob=c;sni_first=example.net}(xfake{blob=c;optional;ttl=2},)-| [TCP:flags:PA]-xtag{pattern=Blocked;payload=blk}(xfake{blob=0x41;payload=blk;ttl=1},)-| \/' -i $D/l7.pcap -p 443,80 -v -o $T/out.pcap && cksum < $T/out.pcap
+#1 out TCP 192.168.1.2:50000 --> 93.184.215.14:443 [S] seq=1000 ack=0 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#2 in TCP 93.184.215.14:443 --> 192.168.1.2:50000 [SA] seq=7000 ack=1001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#3 out TCP 192.168.1.2:50000 --> 93.184.215.14:443 [A] seq=1001 ack=7001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#4 out TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=1001 ack=7001 len=1000 ttl=64 \x16\x03\x01\x07\x1c\x01\x00\x07\x18\x03\x03\xd9\xf6\xc6GJ\x00\x85\x193\x0bPm\xe4\x9e\xa5&\xceT\xeeD\xcd\xfe6R2\xe99\x188\x09\xd9a \xba8T\x5c... -> held
+#5 in TCP 93.184.215.14:443 --> 192.168.1.2:50000 [A] seq=7001 ack=2001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#6 out piece 1/2 TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=1001 ack=7001 len=1000 ttl=64 \x16\x03\x01\x07\x1c\x01\x00\x07\x18\x03\x03\xd9\xf6\xc6GJ\x00\x85\x193\x0bPm\xe4\x9e\xa5&\xceT\xeeD\xcd\xfe6R2\xe99\x188\x09\xd9a \xba8T\x5c... -> 4 packet(s)
+    -> TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=1001 ack=7001 len=1220 ttl=2 \x16\x03\x01\x07*\x01\x00\x07&\x03\x03\xd9\xf6\xc6GJ\x00\x85\x193\x0bPm\xe4\x9e\xa5&\xceT\xeeD\xcd\xfe6R2\xe99\x188\x09\xd9a \xba8T\x5c...
+    -> TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=2221 ack=7001 len=619 ttl=2 ]n\xa9C\x0e\x88\x96\xfe\xb6\xa1\xfd\x01\xa1\xb1\xfck\xfa\xa6\xbe\xc0\xfc\xb2&'\x97\x1b\x85u\xcc\x19c\xad\xf5\x1a\xed\xc3fn\x86\x10\x10\x9aqw\xda%/\xc6...
+    -> TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=1001 ack=7001 len=1000 ttl=64 \x16\x03\x01\x07\x1c\x01\x00\x07\x18\x03\x03\xd9\xf6\xc6GJ\x00\x85\x193\x0bPm\xe4\x9e\xa5&\xceT\xeeD\xcd\xfe6R2\xe99\x188\x09\xd9a \xba8T\x5c...
+    -> TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=1001 ack=7001 len=1000 ttl=64 \x16\x03\x01\x07\x1c\x01\x00\x07\x18\x03\x03\xd9\xf6\xc6GJ\x00\x85\x193\x0bPm\xe4\x9e\xa5&\xceT\xeeD\xcd\xfe6R2\xe99\x188\x09\xd9a \xba8T\x5c...
+#6 out piece 2/2 TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=2001 ack=7001 len=825 ttl=64 \x92$\x8b\x16\xc0F\xa3\x9a\xa6\xa6\x1e\x94\xecz\x5c\x91\xc6p\x98\x84\xd3\xc5\x0a\x13'\x0c{\xd0\x14u*\x0d\xc7\xa0\xbc\x93\xb6S\x98\x82\xa1)\x1br&8\x9cG... -> 2 packet(s)
+    -> TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=2001 ack=7001 len=825 ttl=64 \x92$\x8b\x16\xc0F\xa3\x9a\xa6\xa6\x1e\x94\xecz\x5c\x91\xc6p\x98\x84\xd3\xc5\x0a\x13'\x0c{\xd0\x14u*\x0d\xc7\xa0\xbc\x93\xb6S\x98\x82\xa1)\x1br&8\x9cG...
+    -> TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=2001 ack=7001 len=825 ttl=64 \x92$\x8b\x16\xc0F\xa3\x9a\xa6\xa6\x1e\x94\xecz\x5c\x91\xc6p\x98\x84\xd3\xc5\x0a\x13'\x0c{\xd0\x14u*\x0d\xc7\xa0\xbc\x93\xb6S\x98\x82\xa1)\x1br&8\x9cG...
+#7 in TCP 93.184.215.14:443 --> 192.168.1.2:50000 [PA] seq=7001 ack=2826 len=122 ttl=64 \x16\x03\x03\x00z\x02\x00\x00v\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00... -> 1 packet(s) (no tree fired)
+#8 out TCP 192.168.1.2:50001 --> 104.16.1.1:80 [S] seq=500 ack=0 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#9 in TCP 104.16.1.1:80 --> 192.168.1.2:50001 [SA] seq=900 ack=501 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#10 out TCP 192.168.1.2:50001 --> 104.16.1.1:80 [PA] seq=501 ack=901 len=45 ttl=64 GET / HTTP/1.1\x0d\x0aHost: Blocked.Example.ORG\x0d\x0a\x0d\x0a -> 3 packet(s)
+    -> TCP 192.168.1.2:50001 --> 104.16.1.1:80 [PA] seq=501 ack=901 len=45 ttl=64 GET / HTTP/1.1\x0d\x0aHost: Blocked.Example.ORG\x0d\x0a\x0d\x0a
+    -> TCP 192.168.1.2:50001 --> 104.16.1.1:80 [PA] seq=501 ack=901 len=1 ttl=1 A
+    -> TCP 192.168.1.2:50001 --> 104.16.1.1:80 [PA] seq=501 ack=901 len=45 ttl=64 GET / HTTP/1.1\x0d\x0aHost: Blocked.Example.ORG\x0d\x0a\x0d\x0a
+#11 out UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1230 ttl=64 \xcb\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbc\xfb\x16\xc6\xd9\x8b;\xbd\xef~\x03\xf1Zv\x8d\xbd\xd6Z\xe1\x8be3\x93\xff\x96\x09H\x8b\xc3(\xcc... -> held
+#12 out piece 1/2 UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1230 ttl=64 \xcb\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbc\xfb\x16\xc6\xd9\x8b;\xbd\xef~\x03\xf1Zv\x8d\xbd\xd6Z\xe1\x8be3\x93\xff\x96\x09H\x8b\xc3(\xcc... -> 1 packet(s) (no tree fired)
+#12 out piece 2/2 UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1230 ttl=64 \xca\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbch\x19i~\xb0\xa5b\x16KBl\x91 Z4\x1b\xe3\x057b\x89X\xc9\xb2\x1d\x1bPUI\xbe... -> 1 packet(s) (no tree fired)
+#13 out UDP 192.168.1.2:50003 --> 104.16.1.1:443 len=1200 ttl=64 \xc3\x00\x00\x00\x01\x08x\xe7\x98F\xbb\xf3y\x84\x00\x00D\x9e\xb2\xe2\x1bM\x8b\xcc/\xc9>\xef\x81I\x95J[\xa66K\x91\x19\x1b}\x0e\xe9?8\xff\x91\x92\xfd... -> 1 packet(s) (no tree fired)
+#14 in UDP 104.16.1.1:443 --> 192.168.1.2:50003 len=31 ttl=64 @\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 -> 1 packet(s) (no tree fired)
+1476342987 10489
+[exit 0]
+### apply-ext-xact-udplen
+$ $G apply --ext --rng-seed 7 -s '[UDP:dport:443]-xudplen{increment=4;pattern=0x55aa}-| \/' -i $D/l7.pcap -p 443 -v -o $T/out.pcap && cksum < $T/out.pcap
+#1 out TCP 192.168.1.2:50000 --> 93.184.215.14:443 [S] seq=1000 ack=0 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#2 in TCP 93.184.215.14:443 --> 192.168.1.2:50000 [SA] seq=7000 ack=1001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#3 out TCP 192.168.1.2:50000 --> 93.184.215.14:443 [A] seq=1001 ack=7001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#4 out TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=1001 ack=7001 len=1000 ttl=64 \x16\x03\x01\x07\x1c\x01\x00\x07\x18\x03\x03\xd9\xf6\xc6GJ\x00\x85\x193\x0bPm\xe4\x9e\xa5&\xceT\xeeD\xcd\xfe6R2\xe99\x188\x09\xd9a \xba8T\x5c... -> held
+#5 in TCP 93.184.215.14:443 --> 192.168.1.2:50000 [A] seq=7001 ack=2001 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#6 out piece 1/2 TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=1001 ack=7001 len=1000 ttl=64 \x16\x03\x01\x07\x1c\x01\x00\x07\x18\x03\x03\xd9\xf6\xc6GJ\x00\x85\x193\x0bPm\xe4\x9e\xa5&\xceT\xeeD\xcd\xfe6R2\xe99\x188\x09\xd9a \xba8T\x5c... -> 1 packet(s) (no tree fired)
+#6 out piece 2/2 TCP 192.168.1.2:50000 --> 93.184.215.14:443 [PA] seq=2001 ack=7001 len=825 ttl=64 \x92$\x8b\x16\xc0F\xa3\x9a\xa6\xa6\x1e\x94\xecz\x5c\x91\xc6p\x98\x84\xd3\xc5\x0a\x13'\x0c{\xd0\x14u*\x0d\xc7\xa0\xbc\x93\xb6S\x98\x82\xa1)\x1br&8\x9cG... -> 1 packet(s) (no tree fired)
+#7 in TCP 93.184.215.14:443 --> 192.168.1.2:50000 [PA] seq=7001 ack=2826 len=122 ttl=64 \x16\x03\x03\x00z\x02\x00\x00v\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00... -> 1 packet(s) (no tree fired)
+#8 pass TCP 192.168.1.2:50001 --> 104.16.1.1:80 [S] seq=500 ack=0 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#9 pass TCP 104.16.1.1:80 --> 192.168.1.2:50001 [SA] seq=900 ack=501 len=0 ttl=64 -> 1 packet(s) (no tree fired)
+#10 pass TCP 192.168.1.2:50001 --> 104.16.1.1:80 [PA] seq=501 ack=901 len=45 ttl=64 GET / HTTP/1.1\x0d\x0aHost: Blocked.Example.ORG\x0d\x0a\x0d\x0a -> 1 packet(s) (no tree fired)
+#11 out UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1230 ttl=64 \xcb\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbc\xfb\x16\xc6\xd9\x8b;\xbd\xef~\x03\xf1Zv\x8d\xbd\xd6Z\xe1\x8be3\x93\xff\x96\x09H\x8b\xc3(\xcc... -> held
+#12 out piece 1/2 UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1230 ttl=64 \xcb\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbc\xfb\x16\xc6\xd9\x8b;\xbd\xef~\x03\xf1Zv\x8d\xbd\xd6Z\xe1\x8be3\x93\xff\x96\x09H\x8b\xc3(\xcc... -> 1 packet(s)
+    -> UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1234 ttl=64 \xcb\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbc\xfb\x16\xc6\xd9\x8b;\xbd\xef~\x03\xf1Zv\x8d\xbd\xd6Z\xe1\x8be3\x93\xff\x96\x09H\x8b\xc3(\xcc...
+#12 out piece 2/2 UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1230 ttl=64 \xca\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbch\x19i~\xb0\xa5b\x16KBl\x91 Z4\x1b\xe3\x057b\x89X\xc9\xb2\x1d\x1bPUI\xbe... -> 1 packet(s)
+    -> UDP 192.168.1.2:50002 --> 93.184.215.14:443 len=1234 ttl=64 \xca\x00\x00\x00\x01\x08qC\x07Q\x1b\x90H\xcd\x00\x00D\xbch\x19i~\xb0\xa5b\x16KBl\x91 Z4\x1b\xe3\x057b\x89X\xc9\xb2\x1d\x1bPUI\xbe...
+#13 out UDP 192.168.1.2:50003 --> 104.16.1.1:443 len=1200 ttl=64 \xc3\x00\x00\x00\x01\x08x\xe7\x98F\xbb\xf3y\x84\x00\x00D\x9e\xb2\xe2\x1bM\x8b\xcc/\xc9>\xef\x81I\x95J[\xa66K\x91\x19\x1b}\x0e\xe9?8\xff\x91\x92\xfd... -> 1 packet(s)
+    -> UDP 192.168.1.2:50003 --> 104.16.1.1:443 len=1204 ttl=64 \xc3\x00\x00\x00\x01\x08x\xe7\x98F\xbb\xf3y\x84\x00\x00D\x9e\xb2\xe2\x1bM\x8b\xcc/\xc9>\xef\x81I\x95J[\xa66K\x91\x19\x1b}\x0e\xe9?8\xff\x91\x92\xfd...
+#14 in UDP 104.16.1.1:443 --> 192.168.1.2:50003 len=31 ttl=64 @\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 -> 1 packet(s) (no tree fired)
+3911803118 6455
 [exit 0]
 ### apply-ext-blob
 $ $G apply --ext --rng-seed 7 --ext-blob rdp:@$D/../../files/fake/rdp.bin --ext-blob hx:0x0102 -s '[TCP:flags:PA]-xfake{blob=rdp;payload=all}(xfake{blob=hx;payload=all},)-| \/' -i $D/l7.pcap -p 80 -v

@@ -14,15 +14,8 @@
 #include "tls.h"
 #include "xact.h"
 
-/* VERDICT_PASS: the packet goes on as it is; VERDICT_DROP: it goes on
- * marked dropped (later x-actions still see it, as in zapret2) */
-static void pass(xrun *r, gpkt *p) { strat_xchild(r->env, 0, p); }
-
-static void drop(xrun *r, gpkt *p)
-{
-    p->xdrop = 1;
-    strat_xchild(r->env, 0, p);
-}
+#define pass xa_pass
+#define drop xa_drop
 
 static void verdict_drop(xrun *r, gpkt *p, int nodrop)
 {
@@ -33,7 +26,7 @@ static void verdict_drop(xrun *r, gpkt *p, int nodrop)
 }
 
 /* marker lists, checked at parse time when they are written out */
-static int check_markers(const xact *a, const char *key, int range, sbuf *err)
+int xa_check_markers(const xact *a, const char *key, int range, sbuf *err)
 {
     xmarker m[XMARKER_MAX];
     int n;
@@ -55,7 +48,7 @@ static int check_markers(const xact *a, const char *key, int range, sbuf *err)
     return 0;
 }
 
-static int check_num(const xact *a, const char *key, int64_t lo, int64_t hi, sbuf *err)
+int xa_check_num(const xact *a, const char *key, int64_t lo, int64_t hi, sbuf *err)
 {
     const char *v = NULL;
     for (int i = 0; i < a->np; i++)
@@ -75,7 +68,7 @@ static int check_num(const xact *a, const char *key, int64_t lo, int64_t hi, sbu
     return 0;
 }
 
-static int check_blob(const xact *a, const char *key, sbuf *err)
+int xa_check_blob(const xact *a, const char *key, sbuf *err)
 {
     const char *v = NULL;
     for (int i = 0; i < a->np; i++)
@@ -103,7 +96,7 @@ static int check_blob(const xact *a, const char *key, sbuf *err)
     return 0;
 }
 
-static int check_flag(const xact *a, const char *key, sbuf *err)
+int xa_check_flag(const xact *a, const char *key, sbuf *err)
 {
     for (int i = 0; i < a->np; i++)
         if (!strcmp(a->p[i].k, key) && a->p[i].v) {
@@ -200,7 +193,7 @@ static void run_send(const xact *a, gpkt *p, xrun *r)
     pass(r, p);
 }
 
-static int check_send(const xact *a, sbuf *err) { return check_num(a, "delay", 0, 3600000, err); }
+static int check_send(const xact *a, sbuf *err) { return xa_check_num(a, "delay", 0, 3600000, err); }
 
 static void run_mod(const xact *a, gpkt *p, xrun *r)
 {
@@ -214,26 +207,16 @@ static void run_mod(const xact *a, gpkt *p, xrun *r)
 
 static int check_fake(const xact *a, sbuf *err)
 {
-    const char *tm = NULL;
     if (!xa_has(a, "blob")) {
         sb_puts(err, "xfake: 'blob' arg required");
         return -1;
     }
-    for (int i = 0; i < a->np; i++)
-        if (!strcmp(a->p[i].k, "tlsmod"))
-            tm = a->p[i].v;
-    if (tm && tm[0] != '%' && tm[0] != '#') {
-        tls_modspec m;
-        if (tls_mod_parse(tm, &m) < 0) {
-            sb_printf(err, "xfake: invalid tls mod list \"%s\"", tm);
-            return -1;
-        }
-    }
-    return check_blob(a, "blob", err) < 0 || check_flag(a, "optional", err) < 0 ? -1 : 0;
+    if (xa_check_tlsmod(a, "xfake", err) < 0)
+        return -1;
+    return xa_check_blob(a, "blob", err) < 0 || xa_check_flag(a, "optional", err) < 0 ? -1 : 0;
 }
 
-/* tlsmod with "sni=%name" replaced by the blob's bytes (tls_mod_shim) */
-static int tlsmod_list(xrun *r, const char *v, tls_modspec *m)
+int xa_tlsmod_list(xrun *r, const char *v, tls_modspec *m)
 {
     char b[600];
     const char *s = strstr(v, "sni=%");
@@ -241,22 +224,32 @@ static int tlsmod_list(xrun *r, const char *v, tls_modspec *m)
         const char *e = strchr(s, ','), *val;
         char name[BLOB_NAME_MAX];
         size_t nl = e ? (size_t)(e - s - 5) : strlen(s + 5), vl;
-        const xblob *bl;
         if (nl >= sizeof(name))
             return -1;
         memcpy(name, s + 5, nl);
         name[nl] = 0;
-        bl = blob_find(name);
-        if (!bl || bl->len > 255) {
+        val = (const char *)xa_blob_named(r, name, &vl);
+        if (!val || vl > 255) {
             xa_log(r, "tls_mod_shim: non-existent var '%s'", name);
             return -1;
         }
-        val = (const char *)bl->data;
-        vl = bl->len;
         snprintf(b, sizeof(b), "%.*s%.*s%s", (int)(s + 4 - v), v, (int)vl, val, e ? e : "");
         v = b;
     }
     return tls_mod_parse(v, m);
+}
+
+int xa_check_tlsmod(const xact *a, const char *who, sbuf *err)
+{
+    const char *tm = xa_raw(a, "tlsmod");
+    if (tm && tm[0] != '%' && tm[0] != '#') {
+        tls_modspec m;
+        if (tls_mod_parse(tm, &m) < 0) {
+            sb_printf(err, "%s: invalid tls mod list \"%s\"", who, tm);
+            return -1;
+        }
+    }
+    return 0;
 }
 
 static void run_fake(const xact *a, gpkt *p, xrun *r)
@@ -295,7 +288,7 @@ static void run_fake(const xact *a, gpkt *p, xrun *r)
         /* reasm_data: TCP only in zapret2 */
         if (tm && p->l4 == LAYER_TCP) {
             tls_modspec m;
-            if (tlsmod_list(r, tm, &m) == 0 && m.mod) {
+            if (xa_tlsmod_list(r, tm, &m) == 0 && m.mod) {
                 size_t cap = flen + sizeof(m.sni) + 4, nl = flen;
                 mod = xmalloc(cap);
                 memcpy(mod, fake, flen);
@@ -315,9 +308,9 @@ static void run_fake(const xact *a, gpkt *p, xrun *r)
 
 static int check_split(const xact *a, sbuf *err)
 {
-    if (check_markers(a, "pos", 0, err) < 0 || check_num(a, "seqovl", 0, 65535, err) < 0 ||
-        check_blob(a, "seqovl_pattern", err) < 0 || check_blob(a, "blob", err) < 0 ||
-        check_flag(a, "optional", err) < 0 || check_flag(a, "nodrop", err) < 0 || check_flag(a, "legacy", err) < 0)
+    if (xa_check_markers(a, "pos", 0, err) < 0 || xa_check_num(a, "seqovl", 0, 65535, err) < 0 ||
+        xa_check_blob(a, "seqovl_pattern", err) < 0 || xa_check_blob(a, "blob", err) < 0 ||
+        xa_check_flag(a, "optional", err) < 0 || xa_check_flag(a, "nodrop", err) < 0 || xa_check_flag(a, "legacy", err) < 0)
         return -1;
     return 0;
 }
@@ -523,9 +516,9 @@ static void run_disorder(const xact *a, gpkt *p, xrun *r)
 
 static int check_disorder(const xact *a, sbuf *err)
 {
-    if (check_markers(a, "pos", 0, err) < 0 || check_blob(a, "seqovl_pattern", err) < 0 ||
-        check_blob(a, "blob", err) < 0 || check_flag(a, "optional", err) < 0 || check_flag(a, "nodrop", err) < 0 ||
-        check_flag(a, "legacy", err) < 0)
+    if (xa_check_markers(a, "pos", 0, err) < 0 || xa_check_blob(a, "seqovl_pattern", err) < 0 ||
+        xa_check_blob(a, "blob", err) < 0 || xa_check_flag(a, "optional", err) < 0 || xa_check_flag(a, "nodrop", err) < 0 ||
+        xa_check_flag(a, "legacy", err) < 0)
         return -1;
     {
         const char *v = NULL;
@@ -553,9 +546,9 @@ static int check_tcpseg(const xact *a, sbuf *err)
         sb_puts(err, "xtcpseg: no pos specified");
         return -1;
     }
-    if (check_markers(a, "pos", 1, err) < 0 || check_num(a, "seqovl", 0, 65535, err) < 0 ||
-        check_blob(a, "seqovl_pattern", err) < 0 || check_blob(a, "blob", err) < 0 ||
-        check_flag(a, "optional", err) < 0)
+    if (xa_check_markers(a, "pos", 1, err) < 0 || xa_check_num(a, "seqovl", 0, 65535, err) < 0 ||
+        xa_check_blob(a, "seqovl_pattern", err) < 0 || xa_check_blob(a, "blob", err) < 0 ||
+        xa_check_flag(a, "optional", err) < 0)
         return -1;
     return 0;
 }
@@ -606,9 +599,9 @@ static void run_tcpseg(const xact *a, gpkt *p, xrun *r)
 
 static int check_hostfake(const xact *a, sbuf *err)
 {
-    if (check_markers(a, "midhost", 0, err) < 0 || check_markers(a, "disorder_after", 0, err) < 0 ||
-        check_blob(a, "blob", err) < 0 || check_flag(a, "optional", err) < 0 || check_flag(a, "nodrop", err) < 0 ||
-        check_flag(a, "nofake1", err) < 0 || check_flag(a, "nofake2", err) < 0)
+    if (xa_check_markers(a, "midhost", 0, err) < 0 || xa_check_markers(a, "disorder_after", 0, err) < 0 ||
+        xa_check_blob(a, "blob", err) < 0 || xa_check_flag(a, "optional", err) < 0 || xa_check_flag(a, "nodrop", err) < 0 ||
+        xa_check_flag(a, "nofake1", err) < 0 || xa_check_flag(a, "nofake2", err) < 0)
         return -1;
     return 0;
 }
@@ -723,14 +716,14 @@ passp:
 
 static int check_faked(const xact *a, sbuf *err)
 {
-    if (check_markers(a, "pos", 0, err) < 0 || check_blob(a, "pattern", err) < 0 ||
-        check_blob(a, "seqovl_pattern", err) < 0 || check_blob(a, "blob", err) < 0 ||
-        check_flag(a, "optional", err) < 0 || check_flag(a, "nodrop", err) < 0)
+    if (xa_check_markers(a, "pos", 0, err) < 0 || xa_check_blob(a, "pattern", err) < 0 ||
+        xa_check_blob(a, "seqovl_pattern", err) < 0 || xa_check_blob(a, "blob", err) < 0 ||
+        xa_check_flag(a, "optional", err) < 0 || xa_check_flag(a, "nodrop", err) < 0)
         return -1;
     for (int i = 1; i <= 4; i++) {
         char k[16];
         snprintf(k, sizeof(k), "nofake%d", i);
-        if (check_flag(a, k, err) < 0)
+        if (xa_check_flag(a, k, err) < 0)
             return -1;
     }
     {
@@ -750,7 +743,7 @@ static int check_faked(const xact *a, sbuf *err)
 
 static int check_fakedsplit(const xact *a, sbuf *err)
 {
-    return check_faked(a, err) < 0 || check_num(a, "seqovl", 0, 65535, err) < 0 ? -1 : 0;
+    return check_faked(a, err) < 0 || xa_check_num(a, "seqovl", 0, 65535, err) < 0 ? -1 : 0;
 }
 
 static int check_fakeddisorder(const xact *a, sbuf *err)
@@ -892,6 +885,259 @@ static void run_faked(const xact *a, gpkt *p, xrun *r, int disorder)
 static void run_fakedsplit(const xact *a, gpkt *p, xrun *r) { run_faked(a, p, r, 0); }
 static void run_fakeddisorder(const xact *a, gpkt *p, xrun *r) { run_faked(a, p, r, 1); }
 
+/* ---- synack_split, synack, wsize, wssize, syndata, rst (X5b) -------------------- */
+
+enum { XTH_SYN = 2, XTH_RST = 4, XTH_ACK = 16 };
+
+/* a copy of p to send */
+static gpkt *dis_copy(const gpkt *p)
+{
+    gpkt *d = pkt_copy(p);
+    d->sleep = 0;
+    d->xdrop = 0;
+    return d;
+}
+
+/* not TCP: zapret2 cuts the instance off (not on ICMP, which we do not
+ * get here); 1 when the packet went on */
+static int tcp_only(xrun *r, gpkt *p)
+{
+    if (p->l4 != LAYER_TCP) {
+        xa_cutoff(r);
+        pass(r, p);
+        return 1;
+    }
+    if (xa_is_cut(r)) {
+        pass(r, p);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_synacksplit(const xact *a, sbuf *err)
+{
+    const char *m = xa_raw(a, "mode");
+    if (xa_has(a, "mode") && (!m || (strcmp(m, "syn") && strcmp(m, "synack") && strcmp(m, "acksyn")))) {
+        sb_printf(err, "xsynacksplit: bad mode '%s'", m ? m : "");
+        return -1;
+    }
+    return 0;
+}
+
+static void run_synacksplit(const xact *a, gpkt *p, xrun *r)
+{
+    const char *mode;
+    uint16_t f0 = p->tcpflags;
+    gpkt *d;
+    int rc;
+    (void)a;
+    if (tcp_only(r, p))
+        return;
+    if ((f0 & (XTH_SYN | XTH_ACK)) != (XTH_SYN | XTH_ACK)) {
+        xa_cutoff(r); /* mission complete */
+        pass(r, p);
+        return;
+    }
+    mode = xa_arg(r, "mode", NULL);
+    if (!mode)
+        mode = "synack";
+    d = dis_copy(p);
+    if (!strcmp(mode, "acksyn")) {
+        d->tcpflags = (uint16_t)(f0 & ~XTH_SYN);
+        xa_log(r, "sending ACK");
+        rc = xa_send_ipfrag(r, d, &r->opt);
+        d->tcpflags = (uint16_t)(f0 & ~XTH_ACK);
+        xa_log(r, "sending SYN");
+        rc = rc < 0 ? rc : xa_send_ipfrag(r, d, &r->opt);
+    } else {
+        d->tcpflags = (uint16_t)(f0 & ~XTH_ACK);
+        xa_log(r, "sending SYN");
+        rc = xa_send_ipfrag(r, d, &r->opt);
+        if (!strcmp(mode, "synack")) {
+            d->tcpflags = (uint16_t)(f0 & ~XTH_SYN);
+            xa_log(r, "sending ACK");
+            rc = rc < 0 ? rc : xa_send_ipfrag(r, d, &r->opt);
+        }
+    }
+    pkt_free(d);
+    if (rc < 0)
+        pass(r, p);
+    else
+        drop(r, p);
+}
+
+static void run_synack(const xact *a, gpkt *p, xrun *r)
+{
+    (void)a;
+    if (tcp_only(r, p))
+        return;
+    if ((p->tcpflags & (XTH_SYN | XTH_ACK)) == XTH_SYN) {
+        gpkt *d = dis_copy(p);
+        d->tcpflags |= XTH_ACK;
+        xa_log(r, "sending");
+        xa_send_ipfrag(r, d, &r->opt);
+        pkt_free(d);
+    } else {
+        xa_cutoff(r);
+    }
+    pass(r, p);
+}
+
+static int check_wsize(const xact *a, sbuf *err)
+{
+    return xa_check_num(a, "wsize", 0, 65535, err) < 0 || xa_check_num(a, "scale", 0, 255, err) < 0 ? -1 : 0;
+}
+
+/* zapret2's wsize_rewrite: 1 when it changed anything (-1: a bad value) */
+static int wsize_rewrite(xrun *r, gpkt *p)
+{
+    int64_t w, sc;
+    int changed = 0;
+    if (xa_num(r, "wsize", -1, 0, 65535, &w) < 0 || xa_num(r, "scale", -1, 0, 255, &sc) < 0)
+        return -1;
+    if (w >= 0) {
+        xa_log(r, "window size %u => %u", p->window, (unsigned)w);
+        p->window = (uint16_t)w;
+        changed = 1;
+    }
+    if (sc >= 0) {
+        for (int i = 0; i < p->nopts; i++) {
+            if (p->opts[i].kind != 3)
+                continue;
+            if (p->opts[i].len >= 1) {
+                int old = p->opts[i].data[0];
+                if (sc > old) {
+                    xa_log(r, "not increasing scale factor");
+                } else if (sc < old) {
+                    xa_log(r, "scale factor %d => %d", old, (int)sc);
+                    p->opts[i].data[0] = (uint8_t)sc;
+                    changed = 1;
+                }
+            }
+            break;
+        }
+    }
+    if (changed)
+        xa_modified(p);
+    return changed;
+}
+
+static void run_wsize(const xact *a, gpkt *p, xrun *r)
+{
+    (void)a;
+    if (tcp_only(r, p))
+        return;
+    if ((p->tcpflags & (XTH_SYN | XTH_ACK)) == (XTH_SYN | XTH_ACK))
+        wsize_rewrite(r, p);
+    else
+        xa_cutoff(r); /* mission complete */
+    pass(r, p);
+}
+
+static int check_wssize(const xact *a, sbuf *err)
+{
+    const char *fc = xa_raw(a, "forced_cutoff");
+    if (xa_has(a, "forced_cutoff") && (!fc || !*fc)) {
+        sb_puts(err, "xwssize: forced_cutoff needs a list of payloads");
+        return -1;
+    }
+    return check_wsize(a, err);
+}
+
+static void run_wssize(const xact *a, gpkt *p, xrun *r)
+{
+    const char *fc;
+    (void)a;
+    if (tcp_only(r, p))
+        return;
+    wsize_rewrite(r, p);
+    fc = xa_arg(r, "forced_cutoff", NULL);
+    if (p->payload_len && (!fc || xa_in_list(fc, r->l7name))) {
+        xa_log(r, "forced cutoff");
+        xa_cutoff(r);
+    }
+    pass(r, p);
+}
+
+static int check_syndata(const xact *a, sbuf *err)
+{
+    return xa_check_blob(a, "blob", err) < 0 || xa_check_tlsmod(a, "xsyndata", err) < 0 ? -1 : 0;
+}
+
+static void run_syndata(const xact *a, gpkt *p, xrun *r)
+{
+    static const uint8_t zero16[16];
+    const char *bn, *tm;
+    const uint8_t *pl = zero16;
+    size_t plen = sizeof(zero16);
+    uint8_t *mod = NULL;
+    gpkt *d;
+    int rc;
+    (void)a;
+    if (tcp_only(r, p))
+        return;
+    if ((p->tcpflags & (XTH_SYN | XTH_ACK)) != XTH_SYN) {
+        xa_cutoff(r); /* mission complete */
+        pass(r, p);
+        return;
+    }
+    bn = xa_arg(r, "blob", NULL);
+    if (bn && !(pl = xa_blob(r, bn, &plen, 0))) {
+        pass(r, p);
+        return;
+    }
+    tm = xa_arg(r, "tlsmod", NULL);
+    if (tm) {
+        tls_modspec m;
+        if (xa_tlsmod_list(r, tm, &m) == 0 && m.mod) {
+            size_t cap = plen + sizeof(m.sni) + 4, nl = plen;
+            mod = xmalloc(cap);
+            memcpy(mod, pl, plen);
+            /* no payload to take the session id from (zapret2 passes nil) */
+            if (tls_mod_apply(&m, NULL, 0, mod, &nl, cap) == 0) {
+                pl = mod;
+                plen = nl;
+            }
+        }
+    }
+    d = dis_copy(p);
+    pkt_set_payload(d, pl, plen);
+    xa_fooling(r, d, &r->fool, 0);
+    rc = xa_send_ipfrag(r, d, &r->opt);
+    pkt_free(d);
+    free(mod);
+    if (rc < 0)
+        pass(r, p);
+    else
+        drop(r, p);
+}
+
+static int check_rst(const xact *a, sbuf *err) { return xa_check_flag(a, "rstack", err); }
+
+static void run_rst(const xact *a, gpkt *p, xrun *r)
+{
+    if (p->l4 != LAYER_TCP) {
+        xa_cutoff(r);
+        pass(r, p);
+        return;
+    }
+    if (xa_payload_ok(r, "known")) {
+        if (xa_replay_first(r)) {
+            gpkt *d = dis_copy(p);
+            pkt_set_payload(d, NULL, 0);
+            d->tcpflags = (uint16_t)(XTH_RST | (xa_has(a, "rstack") ? XTH_ACK : 0));
+            xa_fooling(r, d, &r->fool, 0);
+            xa_ipid(r, d, r->opt.ipid < 0 ? XIPID_NONE : r->opt.ipid, r->opt.ipid_conn);
+            xa_log(r, "rst");
+            xa_send_ipfrag(r, d, &r->opt);
+            pkt_free(d);
+        } else {
+            xa_log(r, "not acting on further replay pieces");
+        }
+    }
+    pass(r, p);
+}
+
 /* ---- the table -------------------------------------------------------------------- */
 
 #define STD_ALL (XS_FOOL | XS_RECON | XS_SEND | XS_IPID | XS_FRAG | XS_PAYLOAD)
@@ -908,6 +1154,20 @@ static const char *const k_hostfake[] = {"host", "midhost", "nofake1", "nofake2"
 static const char *const k_faked[] = {"pos",  "nofake1", "nofake2", "nofake3", "nofake4", "pattern", "seqovl",
                                       "seqovl_pattern", "blob", "optional", "nodrop", NULL};
 
+static const char *const k_synacksplit[] = {"mode", NULL};
+static const char *const k_wsize[] = {"wsize", "scale", NULL};
+static const char *const k_wssize[] = {"wsize", "scale", "forced_cutoff", NULL};
+static const char *const k_syndata[] = {"blob", "tlsmod", NULL};
+static const char *const k_rst[] = {"rstack", NULL};
+
+#define STD_RAW (XS_RECON | XS_SEND | XS_FRAG)
+
+const xa_kind xa_synacksplit = {"xsynacksplit", 1, 0, STD_RAW, k_synacksplit, check_synacksplit, run_synacksplit};
+const xa_kind xa_synack = {"xsynack", 1, 0, STD_RAW, NULL, NULL, run_synack};
+const xa_kind xa_wsize = {"xwsize", 1, 1, 0, k_wsize, check_wsize, run_wsize};
+const xa_kind xa_wssize = {"xwssize", 1, 1, 0, k_wssize, check_wssize, run_wssize};
+const xa_kind xa_syndata = {"xsyndata", 1, 0, XS_FOOL | STD_RAW, k_syndata, check_syndata, run_syndata};
+const xa_kind xa_rst = {"xrst", 1, 0, STD_ALL, k_rst, check_rst, run_rst};
 const xa_kind xa_send = {"xsend", 1, 0, XS_FOOL | XS_RECON | XS_SEND | XS_IPID | XS_FRAG, k_send, check_send,
                          run_send};
 const xa_kind xa_mod = {"xmod", 1, 1, XS_FOOL | XS_IPID, NULL, NULL, run_mod};

@@ -215,7 +215,8 @@ TEST(xact_parse)
     CHECK(strstr(parse_err("[TCP:flags:PA]-xfake{blob=x;ipid=inc}-| \\/"), "bad ipid"));
     CHECK(strstr(parse_err("[TCP:flags:PA]-xfake{blob=x;repeats=1001}-| \\/"), "bad repeats"));
     CHECK(strstr(parse_err("[TCP:flags:PA]-xfake{blob=x;ifout=0123456789abcdef}-| \\/"), "bad ifout"));
-    CHECK(strstr(parse_err("[TCP:flags:PA]-xfake{blob=x;payload=nosuch}-| \\/"), "unknown payload"));
+    CHECK(strstr(parse_err("[TCP:flags:PA]-xfake{blob=x;payload=no-such}-| \\/"), "bad payload name"));
+    CHECK(strstr(parse_err("[TCP:flags:PA]-xfake{blob=x;payload=a,,b}-| \\/"), "bad payload list"));
     CHECK(strstr(parse_err("[TCP:flags:PA]-xfake{blob=x;tlsmod=bogus}-| \\/"), "invalid tls mod list"));
     CHECK(strstr(parse_err("[TCP:flags:PA]-xfake{blob=0x123}-| \\/"), "bad hex"));
     CHECK(strstr(parse_err("[TCP:flags:PA]-xfake{blob=1abc}-| \\/"), "bad blob name"));
