@@ -7,9 +7,12 @@
 #  include <net/if.h>
 #endif
 
+#include "blob.h"
 #include "engine_int.h"
 #include "l7.h"
 #include "plat.h"
+#include "rawsend.h"
+#include "xact.h"
 #include "xl7.h"
 #include "xtrig.h"
 
@@ -21,6 +24,7 @@ const char *const ext_features[] = {
 #endif
     "ext_ctrack", /* X3: conntrack, FLOW: and META: triggers */
     "ext_l7",     /* X4: L7 recognition, reassembly, L7: triggers */
+    "ext_xact",   /* X5: x-actions (xfake, xsplit, ...), blobs */
     0,
 };
 
@@ -78,7 +82,28 @@ int ext_activate(const args_t *a, const char *cmd)
     if (disable_list(a, "ext-payload-disable", cmd, &g_l7.payload_disable) < 0 ||
         disable_list(a, "ext-reasm-disable", cmd, &g_l7.reasm_disable) < 0)
         return -1;
+    blob_reset();
+    {
+        int idx = 0;
+        const char *b;
+        while ((b = arg_next(a, "ext-blob", &idx))) {
+            sbuf err;
+            sb_init(&err);
+            if (blob_opt(b, &err) < 0) {
+                fprintf(stderr, "geneva %s: bad --ext-blob: %s\n", cmd, err.data);
+                sb_free(&err);
+                blob_free_all();
+                return -1;
+            }
+            sb_free(&err);
+        }
+    }
+#ifdef __linux__
+    rawsend_set_flags(RAWSEND_EXT | (arg_has(a, "ext-bind-fix4") ? RAWSEND_BIND4 : 0) |
+                      (arg_has(a, "ext-bind-fix6") ? RAWSEND_BIND6 : 0));
+#endif
     strategy_set_xtrig(&xtrig_ops);
+    strategy_set_xact(&xact_ops);
     g_active = 1;
     return 0;
 }
@@ -86,6 +111,11 @@ int ext_activate(const args_t *a, const char *cmd)
 void ext_deactivate(void)
 {
     strategy_set_xtrig(NULL);
+    strategy_set_xact(NULL);
+#ifdef __linux__
+    rawsend_set_flags(0);
+#endif
+    blob_free_all();
     g_active = 0;
 }
 
@@ -119,6 +149,7 @@ static void xw_clear(ct_flow *f, void *ud)
     eng_worker *w = ud;
     xworker *x = w->x;
     xl7_clear(f, x && !x->closed ? xw_pass : NULL, w);
+    xact_flow_clear(f);
 }
 
 static int xw_open(eng_worker *w, sbuf *err)
@@ -315,6 +346,7 @@ static void xo_clear(ct_flow *f, void *ud)
 {
     xoffline *x = ud;
     xl7_clear(f, x->fn ? xo_pass : NULL, x);
+    xact_flow_clear(f);
 }
 
 void *xoff_packet(xoffline *x, const strategy *st, const gpkt *p, strat_dir dir, uint64_t now_ms,

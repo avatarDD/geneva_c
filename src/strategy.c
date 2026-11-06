@@ -129,8 +129,10 @@ static void free_parts(char **parts, size_t n)
 /* ---- triggers ------------------------------------------------------------ */
 
 static const strat_xtrig *g_xtrig;
+static const strat_xact *g_xact;
 
 void strategy_set_xtrig(const strat_xtrig *ops) { g_xtrig = ops; }
+void strategy_set_xact(const strat_xact *ops) { g_xact = ops; }
 
 static volatile int g_serial;
 
@@ -278,10 +280,23 @@ gas:
 static const char *const act_names[] = {"tamper", "duplicate", "fragment", "drop", "sleep", "trace"};
 static const char *const tamper_names[] = {"replace", "corrupt", "add", "compress"};
 
-static int act_is_branching(act_type t) { return t == ACT_DUPLICATE || t == ACT_FRAGMENT; }
-static int act_is_terminal(act_type t) { return t == ACT_DROP || t == ACT_TRACE; }
-/* Only tamper and drop may run on inbound packets (Action.applies()). */
+int action_kids(const action *a)
+{
+    switch (a->type) {
+    case ACT_DUPLICATE:
+    case ACT_FRAGMENT: return 2;
+    case ACT_DROP:
+    case ACT_TRACE: return 0;
+    case ACT_X: return a->xkids;
+    default: return 1;
+    }
+}
+static int act_is_branching(const action *a) { return action_kids(a) == 2; }
+static int act_is_terminal(const action *a) { return action_kids(a) == 0; }
+/* Only tamper and drop may run on inbound packets (Action.applies()); an
+ * x-action decides for itself when it is parsed. */
 static int act_allowed_in(act_type t) { return t == ACT_TAMPER || t == ACT_DROP; }
+static const char *act_name(const action *a) { return a->type == ACT_X ? g_xact->name(a->x) : act_names[a->type]; }
 
 void action_free(action *a)
 {
@@ -289,6 +304,8 @@ void action_free(action *a)
         return;
     action_free(a->left);
     action_free(a->right);
+    if (a->x && g_xact)
+        g_xact->free(a->x);
     free(a->proto_str);
     free(a->field);
     gval_free(&a->value);
@@ -444,6 +461,27 @@ static action *action_parse(const char *text, strat_dir dir, sbuf *err)
     for (t = 0; t < (int)ARRAY_LEN(act_names); t++)
         if (str_ieq(name, act_names[t]))
             break;
+    if (t == (int)ARRAY_LEN(act_names) && g_xact) {
+        /* an x-action: its parameters are kept as written, up to the
+         * closing brace */
+        size_t tl = strlen(text);
+        if (brace && (tl < 2 || text[tl - 1] != '}')) {
+            sb_printf(err, "malformed action parameters \"%s\"", text);
+            goto fail;
+        }
+        if (brace)
+            data = xstrndup(brace + 1, tl - (size_t)(brace - text) - 2);
+        rc = g_xact->parse(name, data, dir, &a->x, &a->xkids, err);
+        free(data);
+        data = NULL;
+        if (rc < 0)
+            goto fail;
+        if (rc > 0) {
+            a->type = ACT_X;
+            free(name);
+            return a;
+        }
+    }
     if (t == (int)ARRAY_LEN(act_names)) {
         sb_printf(err, "unknown action \"%s\"", name);
         goto fail;
@@ -504,6 +542,10 @@ fail:
 
 void action_print(const action *a, sbuf *out)
 {
+    if (a->type == ACT_X) {
+        g_xact->print(a->x, out);
+        return;
+    }
     sb_puts(out, act_names[a->type]);
     switch (a->type) {
     case ACT_TAMPER:
@@ -551,7 +593,18 @@ static int tree_do_parse(const char *s, strat_dir dir, int depth, action **node,
         sb_puts(err, "action tree is nested too deeply");
         return -1;
     }
-    paren = strchr(s, '(');
+    /* with x-actions, "(" and "," inside "{...}" belong to parameters */
+    paren = NULL;
+    for (const char *c = s, *b = NULL; *c; c++) {
+        if (g_xact && *c == '{' && !b)
+            b = c;
+        else if (b && *c == '}')
+            b = NULL;
+        else if (!b && *c == '(') {
+            paren = c;
+            break;
+        }
+    }
     if (!paren) {
         act_str = xstrdup(s);
     } else {
@@ -560,7 +613,14 @@ static int tree_do_parse(const char *s, strat_dir dir, int depth, action **node,
         const char *rest = paren, *c;
         int d = 0, commas = 0;
         size_t rl = strlen(rest);
+        int inb = 0;
         for (c = rest; *c; c++) {
+            if (g_xact && (*c == '{' || (inb && *c == '}'))) {
+                inb = *c == '{';
+                continue;
+            }
+            if (inb)
+                continue;
             if (*c == '(')
                 d++;
             if (*c == ',')
@@ -583,12 +643,12 @@ static int tree_do_parse(const char *s, strat_dir dir, int depth, action **node,
     a = action_parse(act_str, dir, err);
     if (!a)
         goto out;
-    if (!act_is_branching(a->type) && right && *right) {
-        sb_printf(err, "%s cannot have a right subtree", act_names[a->type]);
+    if (!act_is_branching(a) && right && *right) {
+        sb_printf(err, "%s cannot have a right subtree", act_name(a));
         goto fail;
     }
-    if (act_is_terminal(a->type) && ((left && *left) || (right && *right))) {
-        sb_printf(err, "terminal action %s cannot have children", act_names[a->type]);
+    if (act_is_terminal(a) && ((left && *left) || (right && *right))) {
+        sb_printf(err, "terminal action %s cannot have children", act_name(a));
         goto fail;
     }
     if (left && *left && tree_do_parse(left, dir, depth + 1, &a->left, err) < 0)
@@ -866,11 +926,11 @@ static void pretty_node(const action *a, const char *name, const char *prefix, i
         return;
     if (a->left)
         kid_act[nk] = a->left, kids[nk++] = "";
-    else if (!act_is_terminal(a->type))
+    else if (!act_is_terminal(a))
         kids[nk++] = " ===> ";
     if (a->right)
         kid_act[nk] = a->right, kids[nk++] = "";
-    else if (!act_is_terminal(a->type) && act_is_branching(a->type))
+    else if (!act_is_terminal(a) && act_is_branching(a))
         kids[nk++] = " ===> ";
     sb_init(&child_prefix);
     if (!is_root)
@@ -935,7 +995,7 @@ static void action_json(const action *a, jw *w)
     sb_init(&s);
     action_print(a, &s);
     jw_obj(w);
-    jw_kstr(w, "action", act_names[a->type]);
+    jw_kstr(w, "action", act_name(a));
     jw_kstr(w, "str", s.data);
     switch (a->type) {
     case ACT_TAMPER:
@@ -1279,9 +1339,10 @@ static void run_trace(action *a, gpkt *p, pktlist *out)
     pkt_free(p);
 }
 
-static void do_run(action *a, gpkt *p, pktlist *out)
+static void do_run(action *a, gpkt *p, strat_xenv *env)
 {
     gpkt *l = NULL, *r = NULL;
+    pktlist *out = env->out;
     if (!a) {
         pkt_free(p); /* an empty tree yields nothing */
         return;
@@ -1312,19 +1373,37 @@ static void do_run(action *a, gpkt *p, pktlist *out)
     case ACT_TRACE:
         run_trace(a, p, out);
         break;
+    case ACT_X: {
+        action *up = env->a;
+        env->a = a;
+        g_xact->run(a->x, p, env);
+        env->a = up;
+        break;
+    }
     }
     if (l) {
         if (a->left)
-            do_run(a->left, l, out);
+            do_run(a->left, l, env);
         else
             pktlist_push(out, l);
     }
     if (r) {
         if (a->right)
-            do_run(a->right, r, out);
+            do_run(a->right, r, env);
         else
             pktlist_push(out, r);
     }
+}
+
+void strat_xchild(strat_xenv *env, int which, gpkt *p)
+{
+    action *a = env->a, *kid = which ? a->right : a->left;
+    if (!kid) {
+        pktlist_push(env->out, p);
+        return;
+    }
+    do_run(kid, p, env);
+    env->a = a;
 }
 
 int strategy_apply(strategy *s, gpkt *pkt, strat_dir dir, pktlist *out) { return strategy_apply_x(s, pkt, dir, out, NULL); }
@@ -1340,7 +1419,18 @@ int strategy_apply_x(strategy *s, gpkt *pkt, strat_dir dir, pktlist *out, void *
         fired++;
         f[i]->fired++;
         /* each tree starts from a fresh copy of the original packet */
-        do_run(f[i]->root, fresh_copy(pkt), out);
+        strat_xenv env = {out, xctx, dir, i, NULL};
+        size_t from = out->n, k = from;
+        do_run(f[i]->root, fresh_copy(pkt), &env);
+        /* a packet an x-action dropped went on through the tree, as later
+         * functions of zapret2 still see a dropped packet; it is no result */
+        for (size_t j = from; j < out->n; j++) {
+            if (out->v[j]->xdrop)
+                pkt_free(out->v[j]);
+            else
+                out->v[k++] = out->v[j];
+        }
+        out->n = k;
     }
     if (fired)
         pkt_free(pkt);

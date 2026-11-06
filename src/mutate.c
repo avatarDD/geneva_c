@@ -7,8 +7,8 @@
 
 /* ---- helpers ------------------------------------------------------------- */
 
-static int is_branching(act_type t) { return t == ACT_DUPLICATE || t == ACT_FRAGMENT; }
-static int is_terminal(act_type t) { return t == ACT_DROP || t == ACT_TRACE; }
+static int is_branching(const action *a) { return action_kids(a) == 2; }
+static int is_terminal(const action *a) { return action_kids(a) == 0; }
 
 /* Slots (pointers to the pointers that hold each node) in preorder, like
  * iterating an ActionTree. The root slot comes first. */
@@ -321,10 +321,10 @@ static size_t free_slots(action *root)
     collect(&root, &s);
     for (size_t i = 0; i < s.n; i++) {
         action *a = *s.v[i];
-        if (is_terminal(a->type))
+        if (is_terminal(a))
             continue;
         n += !a->left;
-        n += !a->right && is_branching(a->type);
+        n += !a->right && is_branching(a);
     }
     return n;
 }
@@ -349,11 +349,11 @@ static int tree_add(atree *t, action *a)
         collect(&t->root, &s);
         for (size_t i = 0; i < s.n; i++) {
             action *p = *s.v[i];
-            if (!p->left && !is_terminal(p->type) && rng_real() < 1.0 / (double)n) {
+            if (!p->left && !is_terminal(p) && rng_real() < 1.0 / (double)n) {
                 p->left = a;
                 return 1;
             }
-            if (!p->right && !is_terminal(p->type) && is_branching(p->type) &&
+            if (!p->right && !is_terminal(p) && is_branching(p) &&
                 rng_real() < 1.0 / (double)n) {
                 p->right = a;
                 return 1;

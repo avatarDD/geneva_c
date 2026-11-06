@@ -53,6 +53,21 @@
   `tests/fuzz/l7_diff.sh`. QUIC Initial расшифровывается во всех версиях,
   что знает zapret2 (v1, v2, черновики с 11, mvfst, Q050, T050, T051).
   Фича `ext_l7`. Подробно — `docs/EXT.md`.
+- X5a: x-действия по функциям zapret2 (`lua/zapret-antidpi.lua`):
+  `xfake`, `xsplit`, `xdisorder` (и `legacy`), `xtcpseg`, `xhostfake`,
+  `xfakedsplit`, `xfakeddisorder`, `xsend`, `xmod` — синтаксис
+  `имя{ключ=значение;...}` с одним поддеревом. Общие аргументы zapret2:
+  TTL и autottl, seq/ack/ts, MD5, флаги TCP, заголовки расширения IPv6,
+  `badsum`, `repeats`, `fwmark`, `ifout`, режимы IP ID, `ipfrag2`, фильтр
+  `payload`; сегментация по MSS потока; на собранном ClientHello — целое
+  сообщение на первом куске. `tls_mod` (`rnd`, `rndsni`, `sni=`, `dupsid`,
+  `padencap`) и `genhost`. Встроенные блобы `fake_default_tls`,
+  `fake_default_http`, `fake_default_quic`, `fake_quic_initial` собирает
+  сама geneva; `--ext-blob` для своих; фейки BGP, ISAKMP, RDP, Bitcoin из
+  zapret2 — в `files/fake/` (MIT). Отправка: метка `fwmark`, интерфейс
+  `--ext-bind-fix4/6`, `SO_PRIORITY 6`, `IP_FREEBIND`; сделанные пакеты и
+  вердикт уходят в порядке zapret2. Фича `ext_xact`. Подробно —
+  `docs/EXT.md`.
 
 ## v1.2.0
 

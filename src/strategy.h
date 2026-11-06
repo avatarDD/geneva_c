@@ -30,6 +30,7 @@ typedef enum {
     ACT_DROP,
     ACT_SLEEP,
     ACT_TRACE,
+    ACT_X, /* an x-action of the extensions (strat_xact) */
 } act_type;
 
 typedef enum {
@@ -66,6 +67,11 @@ struct action {
     int ran;
 
     uint64_t runs; /* times this action ran */
+
+    /* ACT_X: the extensions' own action (strat_xact) and how many subtrees
+     * it takes (0, 1 or 2) */
+    void *x;
+    int xkids;
 };
 
 typedef struct {
@@ -127,6 +133,39 @@ typedef struct {
 
 /* NULL unregisters. */
 void strategy_set_xtrig(const strat_xtrig *ops);
+
+/* x-actions of the extensions (docs/EXT_ROADMAP.md, 5.1): "xfake{blob=...;
+ * ttl=3}" and the like, with named parameters separated by ";". They exist
+ * only once --ext registers them; while they do, the tree parser skips
+ * commas inside "{...}", which x-parameters use for lists. An x-action
+ * makes its own packets (fakes, parts) and either hands the packet on to a
+ * subtree, possibly changed, or absorbs it. */
+typedef struct {
+    pktlist *out;    /* the results */
+    void *xctx;      /* as given to strategy_apply_x() */
+    strat_dir dir;
+    size_t tree;     /* the tree of the forest that runs */
+    action *a;       /* the x-action running */
+} strat_xenv;
+
+typedef struct {
+    /* Returns 1 with *x and *kids set when name is an x-action (or -1 with
+     * err), 0 when it is not one. params: the text between the braces as
+     * written (NULL without braces). */
+    int (*parse)(const char *name, const char *params, strat_dir dir, void **x, int *kids, sbuf *err);
+    /* "xfake{blob=fake_default_tls;ttl=3}", as parsed */
+    void (*print)(const void *x, sbuf *out);
+    const char *(*name)(const void *x);
+    void (*free)(void *x);
+    /* Runs p (owned): an x-action ends with strat_xchild() for p (or for
+     * packets made from it), or frees it. */
+    void (*run)(void *x, gpkt *p, strat_xenv *env);
+} strat_xact;
+
+void strategy_set_xact(const strat_xact *ops);
+/* For x-actions: p goes into subtree which (0: left, 1: right); without
+ * that subtree it is a result. */
+void strat_xchild(strat_xenv *env, int which, gpkt *p);
 /* Gives s a new serial (after a change of its trees). */
 void strategy_new_serial(strategy *s);
 
@@ -156,6 +195,8 @@ void action_free(action *a); /* with its subtrees */
 void tree_free(atree *t);
 void trigger_print(const trigger *t, sbuf *out);
 void action_print(const action *a, sbuf *out);
+/* Subtrees an action takes: 0 (drop, trace), 2 (duplicate, fragment), 1. */
+int action_kids(const action *a);
 
 /* Runs one packet through the forest of the given direction, like Geneva's
  * Strategy.act_on_packet(). Takes ownership of pkt; the resulting packets

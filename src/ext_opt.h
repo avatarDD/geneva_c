@@ -40,7 +40,12 @@
      EXT_HELP("payload types not to recognize (L7:payload), e.g. dht,stun, or all")},                    \
     {"ext-reasm-disable", 0, 1, "LIST",                                                                       \
      EXT_HELP("do not reassemble a ClientHello split over packets: tls_client_hello, quic_initial or all")},   \
-    {"ext-reasm-max", 0, 1, "BYTES", EXT_HELP("the longest ClientHello reassembled (16384)")}
+    {"ext-reasm-max", 0, 1, "BYTES", EXT_HELP("the longest ClientHello reassembled (16384)")},               \
+    {"ext-blob", 0, 1, "NAME:0xHEX|NAME:[+OFS]@FILE",                                                        \
+     EXT_HELP("a blob for the x-actions (blob=NAME); built in: fake_default_tls, fake_default_http, "         \
+              "fake_default_quic, fake_quic_initial; repeatable")},                                           \
+    {"ext-bind-fix4", 0, 0, NULL, EXT_HELP("send x-action packets through the packet's interface (IPv4)")},     \
+    {"ext-bind-fix6", 0, 0, NULL, EXT_HELP("the same for IPv6")}
 
 /* After args_parse: takes --ext and checks that no --ext-* option comes
  * without it. Prints "geneva CMD: ..." and returns -1 on a usage error

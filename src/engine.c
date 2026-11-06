@@ -156,10 +156,13 @@ static void give_verdict(eng_worker *w, const void *pctx, int accept, const uint
         w->c.verdict_errors++;
 }
 
-static void inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t len)
+static void inject_x(eng_worker *w, const void *pctx, const uint8_t *data, size_t len, uint32_t mark,
+                     const char *ifout)
 {
     engine *e = w->e;
-    if (e->be->inject(w, pctx, data, len) < 0) {
+    int r = (mark || (ifout && *ifout)) && e->be->inject_x ? e->be->inject_x(w, pctx, data, len, mark, ifout)
+                                                           : e->be->inject(w, pctx, data, len);
+    if (r < 0) {
         w->c.send_errors++;
         if (w->c.send_errors <= 10 || log_enabled(LOG_DEBUG))
             LOGW("engine", "sending %zu bytes failed", len);
@@ -169,13 +172,18 @@ static void inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t 
     record(w, data, len);
 }
 
+static void inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t len)
+{
+    inject_x(w, pctx, data, len, 0, NULL);
+}
+
 static void release(eng_worker *w, delayed *d)
 {
     if (d->verdict) {
         give_verdict(w, d->pctx, 1, d->data, d->len);
         record(w, d->data, d->len);
     } else {
-        inject(w, d->pctx, d->data, d->len);
+        inject_x(w, d->pctx, d->data, d->len, d->xmark, d->xifout);
     }
     free(d->data);
 }
@@ -190,8 +198,10 @@ static void run_timers(eng_worker *w, int all)
     }
 }
 
-/* Queues a packet for later, or releases it now when too many wait. */
-static void delay(eng_worker *w, uint8_t *data, size_t len, double secs, int verdict, const void *pctx)
+/* Queues a packet for later, or releases it now when too many wait. x: the
+ * x-action's packet it is, or NULL. */
+static void delay_x(eng_worker *w, uint8_t *data, size_t len, double secs, int verdict, const void *pctx,
+                    const gpkt *x)
 {
     engine *e = w->e;
     delayed d;
@@ -199,6 +209,10 @@ static void delay(eng_worker *w, uint8_t *data, size_t len, double secs, int ver
     d.data = data;
     d.len = len;
     d.verdict = verdict;
+    if (x) {
+        d.xmark = x->xmark;
+        memcpy(d.xifout, x->xifout, sizeof(d.xifout));
+    }
     memcpy(d.pctx, pctx, e->be->pctx_len);
     if (w->ndl >= (size_t)e->o->max_delayed) {
         LOGW("engine", "too many delayed packets (%zu), sending one now", w->ndl);
@@ -208,6 +222,11 @@ static void delay(eng_worker *w, uint8_t *data, size_t len, double secs, int ver
     d.due = plat_now_ms() + (uint64_t)(secs * 1000.0 + 0.5);
     w->c.delayed++;
     dl_push(w, &d);
+}
+
+static void delay(eng_worker *w, uint8_t *data, size_t len, double secs, int verdict, const void *pctx)
+{
+    delay_x(w, data, len, secs, verdict, pctx, NULL);
 }
 
 /* ---- packets ------------------------------------------------------------- */
@@ -453,6 +472,57 @@ void engine_replay(eng_worker *w, strategy *st, const uint8_t *data, size_t len,
     run(w, st, w->slot, p, dir, data, len, pctx);
 }
 
+/* The results of a strategy with x-actions (--ext): everything goes in the
+ * order of the list, as nfqws2 sends it. The packets an x-action made are
+ * injected; the first other one (not delayed, else the first other) rides
+ * on the captured packet's verdict at its place in the list, and without
+ * such a packet the captured one is dropped (nfqws2's VERDICT_DROP). */
+static void send_x(eng_worker *w, pktlist *out, const uint8_t *data, size_t len, const void *pctx)
+{
+    size_t vi = out->n;
+    for (size_t i = 0; i < out->n && vi == out->n; i++)
+        if (!out->v[i]->xgen && out->v[i]->sleep <= 0)
+            vi = i;
+    for (size_t i = 0; i < out->n && vi == out->n; i++)
+        if (!out->v[i]->xgen)
+            vi = i;
+    if (vi == out->n) {
+        w->c.dropped++;
+        give_verdict(w, pctx, 0, NULL, 0);
+    }
+    for (size_t i = 0; i < out->n; i++) {
+        gpkt *r = out->v[i];
+        size_t blen;
+        uint8_t *b = pkt_bytes(r, &blen);
+        if (!blen) {
+            w->c.send_errors++;
+            LOGW("engine", "cannot build a result packet");
+            free(b);
+            if (i == vi)
+                give_verdict(w, pctx, 0, NULL, 0);
+            continue;
+        }
+        if (i == vi) {
+            int same = blen == len && !memcmp(b, data, blen);
+            if (!same)
+                w->c.modified++;
+            if (r->sleep > 0) {
+                delay(w, b, blen, r->sleep, 1, pctx);
+                continue;
+            }
+            w->c.accepted++;
+            give_verdict(w, pctx, 1, same ? NULL : b, blen);
+            record(w, b, blen);
+        } else if (r->sleep > 0) {
+            delay_x(w, b, blen, r->sleep, 0, pctx, r);
+            continue;
+        } else {
+            inject_x(w, pctx, b, blen, r->xmark, r->xifout);
+        }
+        free(b);
+    }
+}
+
 /* Runs p through st and sends what comes out: the first result rides on
  * the captured packet's verdict, the others are injected. */
 static void run(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir dir, const uint8_t *data,
@@ -480,6 +550,14 @@ static void run(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir di
     }
     if (sl && dir == DIR_OUT)
         sl->overhead += out.n - 1;
+    if (dir == DIR_OUT) {
+        for (size_t i = 0; i < out.n; i++)
+            if (out.v[i]->xgen) {
+                send_x(w, &out, data, len, pctx);
+                pktlist_free(&out);
+                return;
+            }
+    }
     if (dir == DIR_IN) {
         /* Geneva's in-path: only the first result goes on, without delay */
         while (out.n > 1)

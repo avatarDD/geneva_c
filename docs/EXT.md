@@ -30,6 +30,7 @@ geneva run --ext -s '...'
 | X2 | разбор TLS ClientHello и QUIC Initial (с расшифровкой), криптография; лабораторные цензоры 12–20 | `docs/CENSOR.md` |
 | X3 | conntrack, позиции и диапазоны zapret2, триггеры `FLOW:` и `META:`, отсечка деревьев на поток | ниже |
 | X4 | распознавание L7 как в zapret2, сборка ClientHello из нескольких пакетов, имя хоста, триггеры `L7:`, маркеры позиций | ниже |
+| X5a | x-действия по функциям zapret2: `xfake`, `xsplit`, `xdisorder`, `xtcpseg`, `xhostfake`, `xfakedsplit`, `xfakeddisorder`, `xsend`, `xmod`; общие аргументы (fooling, ipfrag, repeats…), блобы, `tls_mod` | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
 
@@ -210,10 +211,128 @@ zapret2 (`nfq2/protocol.c` v1.0.7) говорит о каждом файле
 дифференциальный фаззинг: мутации этих файлов идут в код zapret2 и в код
 geneva, и вывод должен совпасть (перед выпуском этапа — час, под ASan).
 
+## x-действия (X5a)
+
+С `--ext` в дереве Geneva можно писать действия, повторяющие функции
+`lua/zapret-antidpi.lua` zapret2 с их параметрами и поведением. Без
+`--ext` таких действий нет («unknown action»).
+
+```
+[TCP:flags:PA]-xfake{blob=fake_default_tls;ttl=3;md5}(xdisorder{pos=1,midsld},)-| \/
+[TCP:flags:PA]-xhostfake{ttl=auto:-2:3-20;host=google.com}-| \/
+[UDP:dport:443]-xfake{blob=fake_quic_initial;repeats=3;ip_ttl=4}-| \/
+\/ [TCP:flags:SA]-xmod{ttl=5}-|
+```
+
+**Синтаксис.** `имя{ключ=значение;ключ;...}`: параметры через `;`,
+флаг — ключ без значения, списки внутри значения — через `,` (запятая в
+`{}` не делит поддеревья). Значение может начинаться с префикса, как в
+`apply_arg_prefix` zapret2: `#имя` — длина блоба, `%имя` — его байты,
+`\` — буквальные `#` или `%`. Ключи — имена дорожной карты (`ttl`, `seq`,
+`md5`…) или zapret2 (`ip_ttl`, `tcp_seq`, `tcp_md5`, `tcp_flags_set`,
+`tcp_ts_up`, `ip_id`…). У каждого x-действия одно поддерево: туда идёт
+пакет, когда действие его пропускает (VERDICT_PASS) или «отбрасывает»
+(VERDICT_DROP: пакет помечен и идёт дальше по дереву, как в цепочке
+zapret2 следующие функции видят отброшенный пакет, но результатом не
+становится). Пакеты, которые действие сделало (фейки, части), уходят
+сразу, в порядке, в каком их сделал zapret2.
+
+**Действия.**
+
+| Действие | Функция zapret2 | Свои параметры |
+|---|---|---|
+| `xfake` | `fake` | `blob` (обязателен), `optional`, `tlsmod=rnd,rndsni,sni=ИМЯ,dupsid,padencap,none` (`sni=%блоб` тоже) |
+| `xsplit` | `multisplit` | `pos` (`2`), `seqovl=N`, `seqovl_pattern`, `blob`, `optional`, `nodrop` |
+| `xdisorder` | `multidisorder`, `multidisorder_legacy` | `pos` (`2`), `seqovl=маркер`, `seqovl_pattern`, `blob`, `optional`, `nodrop`, `legacy` |
+| `xtcpseg` | `tcpseg` | `pos=от,до` (обязателен), `seqovl`, `seqovl_pattern`, `blob`, `optional` |
+| `xhostfake` | `hostfakesplit` | `host=шаблон`, `midhost`, `nofake1`, `nofake2`, `disorder_after`, `blob`, `optional`, `nodrop` |
+| `xfakedsplit` | `fakedsplit` | `pos` (`2`), `pattern`, `seqovl=N`, `seqovl_pattern`, `nofake1`…`nofake4`, `blob`, `optional`, `nodrop` |
+| `xfakeddisorder` | `fakeddisorder` | то же, `seqovl=маркер` |
+| `xsend` | `send` | `delay=мс` (0–3600000) |
+| `xmod` | `pktmod` | — (только fooling и `ipid`; можно во входящем лесу) |
+
+Позиции — маркеры X4 (`host`, `midsld`, `sniext+1`, `-1`…).
+
+**Общие аргументы** («standard args» zapret2; у `xmod` только fooling и
+`ipid`, у `xsend` всё, кроме `payload`, у `xhostfake`, `xfakedsplit`,
+`xfakeddisorder` всё, кроме ipfrag):
+
+| Аргумент | Что |
+|---|---|
+| `ttl=N` или `ttl=auto:Δ:MIN-MAX` | TTL/hop limit (IPv4 и IPv6); `auto` — autottl zapret2 по TTL ответа сервера (`ip_autottl=Δ,MIN-MAX`, `ip6_autottl`, `ip_ttl`, `ip6_ttl` — отдельно) |
+| `seq=±N`, `ack=±N`, `ts=±N` | прибавить к seq, ack, TCP timestamp |
+| `md5[=HEX16]` | опция TCP MD5 (19), случайная или заданная |
+| `flags+=СПИСОК`, `flags-=СПИСОК` | поставить, снять флаги TCP (`FIN,SYN,RST,PSH,ACK,URG,ECE,CWR`) |
+| `tsup`, `nopdel` | timestamp первой опцией; убрать NOP |
+| `ip6ext=hopbyhop,hopbyhop2,destopt,destopt2,routing,ah` | заголовки расширения IPv6 (`:HEX` — свои данные, 6+8N или 6+4N байт для AH); `ip6_hopbyhop[=HEX]`… — то же по отдельности |
+| `badsum` | испортить контрольную сумму L4 |
+| `repeats=N` | каждый сделанный пакет N раз (1) |
+| `fwmark=N`, `ifout=ИМЯ` | метка и интерфейс отправки (по умолчанию — метка и интерфейс исходного пакета) |
+| `ipid=seq\|rnd\|zero\|none`, `ipid_conn` | IP ID: подряд от исходного (по умолчанию), случайный, ноль, как есть; `ipid_conn` — счётчик на поток |
+| `ipfrag[=ipfrag2]`, `ipfrag_pos_tcp=32`, `ipfrag_pos_udp=8`, `ipfrag_pos_icmp=8`, `ipfrag_pos=32`, `ipfrag_disorder`, `ipfrag_next=N` | IP-фрагментация сделанных пакетов (`ipfrag2` zapret2; в IPv6 заголовок фрагмента после hop-by-hop, routing и первого destopt) |
+| `payload=СПИСОК` | на каких payload действовать (по умолчанию `known`, у `xsend`/`xmod` — всегда) |
+
+Части длиннее MSS потока (меньшее из MSS сторон, 1220 без conntrack)
+минус IP- и TCP-опции уходят несколькими сегментами, URG — по сегменту
+с указателем. На собранном ClientHello (X4) действие работает с целым
+сообщением на первом куске, остальные куски отбрасываются, если сообщение
+уже отправлено (`replay_drop` zapret2).
+
+**Блобы.** Встроенные — свои, не из zapret2 (решение 11.3):
+
+| Имя | Что |
+|---|---|
+| `fake_default_tls` | TLS 1.3 ClientHello для www.iana.org, 680 байт, с padding в конце (его растит `tlsmod=padencap`) |
+| `fake_default_http` | `GET /` для www.iana.org |
+| `fake_default_quic` | 620 байт: `0x40` и нули, как в zapret2 |
+| `fake_quic_initial` | зашифрованный QUIC v1 Initial для www.iana.org, 1200 байт (только в сборке с криптографией) |
+
+Свои — опцией `--ext-blob ИМЯ:0xHEX` (до 16 КБ) или
+`--ext-blob ИМЯ:[+СМЕЩЕНИЕ]@ФАЙЛ` (до 1 МБ), повторяемой. Фейки BGP,
+ISAKMP, RDP и Bitcoin из zapret2 лежат в `files/fake/` с лицензией MIT.
+В параметре вместо имени можно написать байты: `blob=0x1603`.
+
+**Отправка.** Сделанные пакеты идут через raw-сокет с меткой движка
+(`--mark`) и меткой `fwmark`, `SO_PRIORITY 6` и `IP_FREEBIND` (Linux).
+`--ext-bind-fix4`, `--ext-bind-fix6` — отправлять через интерфейс
+исходного пакета (`SO_BINDTODEVICE`, как `--bind-fix4/6` nfqws2). Пакет,
+на котором сработала стратегия, уходит вердиктом на своём месте среди
+сделанных; если его отбросили, вердикт — drop, и все пакеты уходят
+raw-сокетом. На Windows метки и интерфейса нет.
+
+`apply --ext -v` показывает сделанные пакеты:
+
+```
+#10 out TCP ... len=45 ... GET / HTTP/1.1\x0d\x0aHost: Blocked.Example.ORG... -> 5 packet(s)
+    -> TCP ... seq=501 len=22 ttl=64 GET / HTTP/1.1\x0d\x0aHost: 
+    -> TCP ... seq=523 len=19 ttl=2 ge64wtg.example.net
+    -> TCP ... seq=523 len=19 ttl=64 Blocked.Example.ORG
+    -> TCP ... seq=523 len=19 ttl=2 ge64wtg.example.net
+    -> TCP ... seq=542 len=4 ttl=64 \x0d\x0a\x0d\x0a
+```
+
+Отличия от zapret2 (`docs/EXT_ROADMAP.md`, 3.4):
+
+- Нет `dir`: направление задаёт лес (`\/` делит исходящий и входящий).
+  Во входящем лесу из x-действий можно только `xmod`; остальные там —
+  ошибка разбора. Это и `xsend`, хотя `send` zapret2 по умолчанию
+  работает в обе стороны: копий входящих пакетов движок не отправляет.
+- Значения проверяются при разборе: неизвестный ключ, `ttl=300`,
+  `md5=0x01`, плохой маркер, два одинаковых ключа (`ttl` и `ip_ttl` —
+  разные ключи, `seq` и `tcp_seq` — один) — ошибка стратегии, а не
+  ошибка Lua на первом пакете или молчаливый `nil`. Значения с префиксом
+  `#`/`%` проверяются на пакете: плохое — действие пропускает пакет и
+  пишет предупреждение.
+- `xhostfake` не берёт `ipfrag`: в коде `hostfakesplit` v1.0.7 опции
+  частей хоста задают пустой `ipfrag`, хотя комментарий обещает
+  фрагментацию настоящего хоста.
+- `tlsmod` работает только на TCP: на UDP у zapret2 нет `reasm_data`.
+
 ## Код zapret2
 
-Распознавание L7, маркеры, сборка и conntrack (`src/ext/l7.c`,
-`markers.c`, `xl7.c`, `ctrack.c`) перенесены из zapret2
+Распознавание L7, маркеры, сборка, conntrack и x-действия
+(`src/ext/l7.c`, `markers.c`, `xl7.c`, `ctrack.c`, `xact.c`, `xact_tcp.c`,
+`tls.c` — `tls_mod`, `genhost`) перенесены из zapret2
 (https://github.com/bol-van/zapret2) и распространяются на условиях его
 лицензии:
 

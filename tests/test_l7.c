@@ -706,7 +706,7 @@ static int e_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t
 }
 
 static const backend ebe = {
-    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, e_verdict, e_inject, 0, NULL, NULL, NULL,
+    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, e_verdict, e_inject, 0, NULL, NULL, NULL, NULL,
 };
 
 static int ext_on(const char *opt, const char *val)

@@ -51,7 +51,12 @@ static void usage(FILE *f)
 #if GENEVA_EXT
     fprintf(f, "\nExtensions (with --ext):\n"
                "  --ext after a command turns on the extensions beyond Geneva:\n"
-               "  censor models 12-20 (geneva censor --ext --list). See docs/EXT.md.\n");
+               "  censor models 12-20 (geneva censor --ext --list); triggers FLOW:,\n"
+               "  META: and L7: ([L7:host:example.com]-drop-|); x-actions after zapret2's\n"
+               "  functions, NAME{key=value;...}: xfake xsplit xdisorder xtcpseg xhostfake\n"
+               "  xfakedsplit xfakeddisorder xsend xmod, e.g.\n"
+               "  [TCP:flags:PA]-xfake{blob=fake_default_tls;ttl=3}(xdisorder{pos=1,midsld},)-| \\/\n"
+               "  See docs/EXT.md.\n");
 #endif
 }
 
