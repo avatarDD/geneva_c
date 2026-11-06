@@ -55,7 +55,9 @@ int args_parse(args_t *a, int argc, char **argv, const optdef *defs, char *err, 
                 snprintf(err, (size_t)errlen, "unknown option --%.*s", (int)n, name);
                 return -1;
             }
-            if (!d->has_arg) {
+            if (d->has_arg == 2) {
+                add_opt(a, d, eq ? eq + 1 : NULL); /* optional: only as --name=VALUE */
+            } else if (!d->has_arg) {
                 if (eq) {
                     snprintf(err, (size_t)errlen, "option --%s takes no value", d->name);
                     return -1;
@@ -77,7 +79,7 @@ int args_parse(args_t *a, int argc, char **argv, const optdef *defs, char *err, 
             snprintf(err, (size_t)errlen, "unknown option %s", arg);
             return -1;
         }
-        if (!d->has_arg) {
+        if (d->has_arg != 1) {
             if (arg[2]) {
                 snprintf(err, (size_t)errlen, "unknown option %s", arg);
                 return -1;
@@ -176,7 +178,9 @@ int arg_dbl(const args_t *a, const char *name, double def, double lo, double hi,
 static void help_row(const optdef *d, const char *help)
 {
     char left[64];
-    if (d->shortopt)
+    if (d->has_arg == 2)
+        snprintf(left, sizeof(left), "    --%s[=%s]", d->name, d->meta ? d->meta : "VAL");
+    else if (d->shortopt)
         snprintf(left, sizeof(left), "-%c, --%s%s%s", d->shortopt, d->name, d->has_arg ? " " : "",
                  d->has_arg ? (d->meta ? d->meta : "VAL") : "");
     else

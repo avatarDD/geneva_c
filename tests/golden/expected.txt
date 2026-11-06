@@ -3099,3 +3099,7 @@ $ $G check '[TCP:flags:PA]-xsplit-| \/'
 geneva check: unknown action "xsplit"
   in: [TCP:flags:PA]-xsplit-| \/
 [exit 3]
+### profile-without-ext
+$ $G apply --filter-tcp 443 -s '\/' -i $D/l7.pcap
+geneva apply: --filter-tcp needs --ext
+[exit 2]

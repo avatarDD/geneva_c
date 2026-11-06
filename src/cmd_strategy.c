@@ -149,10 +149,15 @@ static void describe(gpkt *p, sbuf *out)
     pkt_describe(p, out);
 }
 
-static int load_strategy_text(const args_t *a, char **text)
+static int load_strategy_text(const args_t *all, char **text)
 {
+    args_t a0 = ext_cmd_args(all), *a = &a0; /* the later -s/-f are other profiles' */
     const char *s = arg_str(a, "strategy", NULL), *f = arg_str(a, "strategy-file", NULL);
     size_t len;
+#if GENEVA_EXT
+    if (!s && !f && ext_profiles())
+        s = "\\/"; /* profiles only: the command's strategy does nothing */
+#endif
     if (!!s == !!f) {
         fprintf(stderr, "geneva apply: give exactly one of --strategy and --strategy-file\n");
         return EXIT_USAGE;
@@ -197,7 +202,7 @@ typedef struct {
 /* Runs p through the strategy (unless run is 0: it passes as it is), with
  * xctx for the extensions, writes the results and frees p. what: the
  * packet's label in --verbose ("pass", "out", "in", "out piece 1/2"). */
-static void apply_pkt(apply_ctx *ac, gpkt *p, strat_dir dir, int run, void *xctx, const char *what)
+static void apply_pkt(apply_ctx *ac, strategy *st, gpkt *p, strat_dir dir, int run, void *xctx, const char *what)
 {
     pktlist out = {0};
     int fired = 0;
@@ -211,7 +216,7 @@ static void apply_pkt(apply_ctx *ac, gpkt *p, strat_dir dir, int run, void *xctx
     if (ac->verbose)
         describe(p, ac->line);
     if (run > 0) {
-        fired = strategy_apply_x(ac->st, p, dir, &out, xctx);
+        fired = strategy_apply_x(st, p, dir, &out, xctx);
         /* inbound packets cannot branch: the engine accepts the first
          * result (possibly modified) or drops the packet */
         if (dir == DIR_IN)
@@ -258,14 +263,14 @@ static void apply_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir
     if (!p)
         return;
     if (!xctx) {
-        apply_pkt(ac, p, dir, -1, NULL, "pass");
+        apply_pkt(ac, ac->st, p, dir, -1, NULL, "pass");
         return;
     }
     if (pieces)
         snprintf(what, sizeof(what), "%s piece %u/%u", dir == DIR_OUT ? "out" : "in", piece, pieces);
     else
         snprintf(what, sizeof(what), "%s released", dir == DIR_OUT ? "out" : "in");
-    apply_pkt(ac, p, dir, 1, xctx, what);
+    apply_pkt(ac, xoff_strategy(xctx), p, dir, xoff_strategy(xctx) ? 1 : 0, xctx, what);
 }
 #endif
 
@@ -284,6 +289,7 @@ int cmd_apply(int argc, char **argv)
         {"verbose", 'v', 0, NULL, "log every packet and its result to stderr"},
         EXT_OPT,
         EXT_CTRACK_OPTS,
+        EXT_PROFILE_OPTS,
         {"ext-posdebug", 0, 0, NULL, EXT_HELP("print zapret2's posdebug line of every packet to stderr")},
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
@@ -392,6 +398,7 @@ int cmd_apply(int argc, char **argv)
         strat_dir dir = def_dir;
         int pass = 0, run = 1;
         void *xctx = NULL;
+        strategy *pst = st;
         ac.n_in = ++n_in;
         ac.ts_ns = rec.ts_ns;
         p = rec.ip ? pkt_parse(rec.ip, rec.ip_len) : NULL;
@@ -412,14 +419,14 @@ int cmd_apply(int argc, char **argv)
                 pass = 1;
         }
         if (pass) {
-            apply_pkt(&ac, p, dir, -1, NULL, "pass");
+            apply_pkt(&ac, st, p, dir, -1, NULL, "pass");
             continue;
         }
 #if GENEVA_EXT
         if (xo) {
             int v;
             uint64_t replays = ac.n_replays;
-            xctx = xoff_packet(xo, st, p, dir, rec.ts_ns / 1000000, rec.ip, rec.ip_len, apply_replay, &ac, &v);
+            xctx = xoff_packet(xo, &pst, p, dir, rec.ts_ns / 1000000, rec.ip, rec.ip_len, apply_replay, &ac, &v);
             if (v == XOFF_HOLD) {
                 /* (when it completed a reassembly, it was the last piece) */
                 if (verbose && replays == ac.n_replays) {
@@ -434,7 +441,7 @@ int cmd_apply(int argc, char **argv)
                 run = 0;
         }
 #endif
-        apply_pkt(&ac, p, dir, run, xctx, dir == DIR_OUT ? "out" : "in");
+        apply_pkt(&ac, pst, p, dir, run, xctx, dir == DIR_OUT ? "out" : "in");
     }
 #if GENEVA_EXT
     xoff_end(xo, st, apply_replay, &ac);

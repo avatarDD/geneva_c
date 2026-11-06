@@ -61,11 +61,34 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw,
                         cmd, run_only[i]);
                 return -1;
             }
-    } else if (!arg_has(a, "server-port") || ports_parse(arg_str(a, "server-port", ""), &c->ports) < 0) {
+    } else if (arg_has(a, "server-port")) {
+        if (ports_parse(arg_str(a, "server-port", ""), &c->ports) < 0) {
+            fprintf(stderr, "geneva %s: bad --server-port (like 443 or 80,443 or 8000-8100)\n", cmd);
+            return -1;
+        }
+#if GENEVA_EXT
+    } else if (ext_profiles()) {
+        /* the ports of the profiles' --filter-tcp/--filter-udp, below */
+#endif
+    } else {
         fprintf(stderr, "geneva %s: need --server-port PORTS (like 443 or 80,443 or 8000-8100)\n", cmd);
         return -1;
     }
     c->server_side = arg_has(a, "server-side");
+#if GENEVA_EXT
+    if (!eval && ext_profiles()) {
+        /* what the profiles take: ICMP, IP protocols, without -p the ports */
+        sbuf perr;
+        int r;
+        sb_init(&perr);
+        r = ext_profile_capture(c, !arg_has(a, "server-port"), &perr);
+        if (r < 0)
+            fprintf(stderr, "geneva %s: %s\n", cmd, perr.data);
+        sb_free(&perr);
+        if (r < 0)
+            return -1;
+    }
+#endif
     if ((s = arg_str(a, "proto", NULL)) != NULL) {
         c->tcp = c->udp = 0;
         if (!strcmp(s, "tcp"))
@@ -208,10 +231,11 @@ int cmd_run(int argc, char **argv)
         {"quiet", 0, 0, NULL, "no log on stderr"},
         EXT_OPT,
         EXT_CTRACK_OPTS,
+        EXT_PROFILE_OPTS,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
-    args_t a;
+    args_t a, a0;
     char err[128];
     engine_opts o;
     char *filter_owned = NULL;
@@ -243,14 +267,28 @@ int cmd_run(int argc, char **argv)
         fprintf(stderr, "geneva run: unexpected argument \"%s\"\n", a.pos[0]);
         goto done;
     }
-    o.strategy = arg_str(&a, "strategy", NULL);
-    o.strategy_file = arg_str(&a, "strategy-file", NULL);
+    a0 = ext_cmd_args(&a); /* the later -s/-f are other profiles' */
+    o.strategy = arg_str(&a0, "strategy", NULL);
+    o.strategy_file = arg_str(&a0, "strategy-file", NULL);
+#if GENEVA_EXT
+    if (!o.strategy && !o.strategy_file && ext_profiles())
+        o.strategy = "\\/"; /* profiles only: the command's strategy does nothing */
+#endif
     if (!!o.strategy == !!o.strategy_file) {
         fprintf(stderr, "geneva run: give exactly one of --strategy and --strategy-file\n");
         goto done;
     }
     if (parse_fw(&a, "run", &o.fw, &o.apply_fw, &filter_owned, 0) < 0 || parse_logging(&a, "run") < 0)
         goto done;
+#if GENEVA_EXT
+    if (ext_profiles()) {
+        sbuf l;
+        sb_init(&l);
+        ext_profile_list(&l);
+        LOGI("profile", "%zu profile(s): %s", ext_profiles(), l.data);
+        sb_free(&l);
+    }
+#endif
     o.pcap = arg_str(&a, "pcap", NULL);
     o.control = arg_str(&a, "control", NULL);
     o.control_token = arg_str(&a, "control-token", getenv("GENEVA_CONTROL_TOKEN"));
@@ -283,6 +321,7 @@ int cmd_fw(int argc, char **argv)
         {"probe", 0, 1, "KIND", "with --local-ports: dns, exec and external probes add UDP"},
         {"log-level", 'l', 1, "LEVEL", "debug shows every command"},
         EXT_OPT,
+        EXT_PROFILE_OPTS,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };

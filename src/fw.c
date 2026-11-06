@@ -173,6 +173,13 @@ static void gen_ipt_queue(const fw_config *c, fwlist *l, int v6, const char *cha
             ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s %s-j NFQUEUE --queue-num %u%s", chain, ifm,
                 protos[p], m[i], cb, c->queue, bypass);
     }
+    /* --ext profiles: ICMP and other IP protocols, whatever the ports */
+    if (c->icmp)
+        ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s -j NFQUEUE --queue-num %u%s", chain, ifm,
+            v6 ? "ipv6-icmp" : "icmp", c->queue, bypass);
+    for (int i = 0; i < c->nipp; i++)
+        ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %u -j NFQUEUE --queue-num %u%s", chain, ifm, c->ipp[i], c->queue,
+            bypass);
     ipt(l, K_REQ, v6, "-t mangle -I %s -j %s", outdir ? "POSTROUTING" : "PREROUTING", chain);
 }
 
@@ -277,6 +284,22 @@ static void nft_queue_chain(const fw_config *c, sbuf *s, int outdir)
         if (c->first > 0)
             sb_printf(s, "ct %s packets 1-%d ", outdir ? "original" : "reply", c->first);
         sb_printf(s, "queue num %u%s\n", c->queue, c->bypass ? " bypass" : "");
+    }
+    /* --ext profiles: ICMP and other IP protocols, whatever the ports */
+    for (int k = 0; k < 2; k++) {
+        if (k ? !c->nipp : !c->icmp)
+            continue;
+        sb_puts(s, "\t\t");
+        if (c->ipv4 != c->ipv6)
+            sb_printf(s, "meta nfproto %s ", c->ipv4 ? "ipv4" : "ipv6");
+        if (c->iface)
+            sb_printf(s, "%s \"%s\" ", outdir ? "oifname" : "iifname", c->iface);
+        sb_puts(s, "meta l4proto { ");
+        if (!k)
+            sb_puts(s, "icmp, ipv6-icmp");
+        for (int i = 0; k && i < c->nipp; i++)
+            sb_printf(s, "%s%u", i ? ", " : "", c->ipp[i]);
+        sb_printf(s, " } queue num %u%s\n", c->queue, c->bypass ? " bypass" : "");
     }
     sb_puts(s, "\t}\n");
 }
@@ -390,6 +413,11 @@ static void wd_ports(const fw_config *c, sbuf *out, const char *field)
                           field, c->ports.hi[i]);
         }
     }
+    /* --ext profiles: ICMP and other IP protocols, whatever the ports */
+    if (c->icmp)
+        sb_printf(out, "%sicmp or icmpv6", nproto++ ? " or " : "");
+    for (int i = 0; i < c->nipp; i++)
+        sb_printf(out, "%sip.Protocol == %u or ipv6.NextHdr == %u", nproto++ ? " or " : "", c->ipp[i], c->ipp[i]);
     sb_putc(out, ')');
 }
 
@@ -550,11 +578,11 @@ static int wd_built(const fw_config *c, sbuf *out, sbuf *err)
         sb_puts(err, "forwarded traffic is only captured on Linux");
         return -1;
     }
-    if (!c->tcp && !c->udp) {
+    if (!c->tcp && !c->udp && !c->icmp && !c->nipp) {
         sb_puts(err, "no protocol to capture");
         return -1;
     }
-    if (!c->ports.n) {
+    if (!c->ports.n && !c->icmp && !c->nipp) {
         sb_puts(err, "no ports to capture");
         return -1;
     }

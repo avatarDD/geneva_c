@@ -7,14 +7,14 @@
 typedef struct {
     const char *name; /* without leading "--"; NULL terminates the table */
     char shortopt;    /* 0 if none */
-    int has_arg;      /* 0 = flag, 1 = takes a value */
+    int has_arg;      /* 0 = flag, 1 = takes a value, 2 = an optional one (--name=VALUE only) */
     const char *meta; /* value placeholder for help, e.g. "PORT" */
     const char *help; /* NULL: the option works but --help does not list it */
 } optdef;
 
 typedef struct {
     const optdef *def;
-    const char *value; /* NULL for flags */
+    const char *value; /* NULL for flags (and an optional value not given) */
 } optval;
 
 typedef struct {

@@ -47,6 +47,28 @@
     {"ext-bind-fix4", 0, 0, NULL, EXT_HELP("send x-action packets through the packet's interface (IPv4)")},     \
     {"ext-bind-fix6", 0, 0, NULL, EXT_HELP("the same for IPv6")}
 
+/* The profiles (docs/EXT.md, src/ext/profile.h) for run and apply: zapret2's
+ * names, so not under "ext-"; they too need --ext. */
+#define EXT_PROFILE_OPTS                                                                                       \
+    {"new", 0, 2, "NAME", EXT_HELP("start the next profile (its own -s/-f and filters)")},                    \
+    {"name", 0, 1, "NAME", EXT_HELP("the name of this profile")},                                            \
+    {"skip", 0, 0, NULL, EXT_HELP("leave this profile out")},                                                \
+    {"template", 0, 2, "NAME", EXT_HELP("this profile is a template for --import, not a profile")},          \
+    {"import", 0, 1, "NAME", EXT_HELP("copy the filters and the strategy of template NAME")},               \
+    {"filter-l3", 0, 1, "ipv4,ipv6", EXT_HELP("the profile takes these IP versions")},                       \
+    {"filter-tcp", 0, 1, "[~]P[-P],..|*", EXT_HELP("the profile takes TCP to these server ports")},          \
+    {"filter-udp", 0, 1, "[~]P[-P],..|*", EXT_HELP("the profile takes UDP to these server ports")},          \
+    {"filter-icmp", 0, 1, "T[:C],..|*", EXT_HELP("the profile takes ICMP of these types[:codes]")},         \
+    {"filter-ipp", 0, 1, "PROTO,..|*", EXT_HELP("the profile takes these other IP protocols")},             \
+    {"filter-l7", 0, 1, "LIST", EXT_HELP("the profile takes flows of these L7 protocols (tls,quic,http,...)")}, \
+    {"filter-mark", 0, 1, "MARK[/MASK]", EXT_HELP("the profile takes packets with this fwmark")},           \
+    {"ext-profile", 0, 1, "FILE", EXT_HELP("profiles from FILE ([profile NAME] sections; after those of the "  \
+                                           "command line); repeatable")}
+
+/* The options of the command itself: those before the first --new (the
+ * later ones are other profiles'), for -s and -f. A view into a. */
+args_t ext_cmd_args(const args_t *a);
+
 /* After args_parse: takes --ext and checks that no --ext-* option comes
  * without it. Prints "geneva CMD: ..." and returns -1 on a usage error
  * (exit code 2), 0 otherwise. */

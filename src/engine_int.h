@@ -119,10 +119,12 @@ struct ext_hooks {
      * packet go on) and when no strategy applies. Returns 0 to go on with
      * the strategy, 1 when the hook gave the verdict itself through
      * engine_verdict()/engine_inject(), which count and record like the
-     * strategy path does. p stays the engine's and is freed by it. st is
-     * the strategy that will run (NULL: none). The hook may set w->xctx for
-     * the triggers of the extensions; the engine clears it afterwards. */
-    int (*packet)(eng_worker *w, strategy *st, gpkt *p, strat_dir dir, const uint8_t *data, size_t len,
+     * strategy path does. p stays the engine's and is freed by it. *st is
+     * the strategy that will run (NULL: none); the hook may put another one
+     * there (that of the packet's profile, NULL: the packet passes). The
+     * hook may set w->xctx for the triggers of the extensions; the engine
+     * clears it afterwards. */
+    int (*packet)(eng_worker *w, strategy **st, gpkt *p, strat_dir dir, const uint8_t *data, size_t len,
                   const void *pctx);
     /* The capture is about to close (engine_run_timers with all): give
      * every packet whose verdict the hook kept its verdict now. */

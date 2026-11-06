@@ -463,7 +463,12 @@ xdiff() {
     kill $NPID 2>/dev/null
     wait $NPID 2>/dev/null
     ip netns exec "$NC" sh -c 'iptables -t mangle -D OUTPUT -j ZT; iptables -t mangle -F ZT; iptables -t mangle -X ZT'
-    ip netns exec "$NC" "$GENEVA" run --ext -s "$strat" -p 80,443 --log-file "$WORK/run.log" --quiet &
+    # a strategy, or geneva's options when it starts with "--" (profiles)
+    case $strat in
+    --*) gargs=$strat ;;
+    *) gargs="-s '$strat' -p 80,443" ;;
+    esac
+    eval "ip netns exec \"\$NC\" \"\$GENEVA\" run --ext $gargs --log-file \"\$WORK/run.log\" --quiet &"
     NPID=$!
     sleep 1.5
     cap_start g
@@ -513,6 +518,12 @@ if [ -n "${NFQWS2_DIR:-}" ] && { on nfqws2 || on diff; }; then
     xdiff stopif "$HR" '[TCP:flags:PA]-xfake{blob=0x41;ttl=1}(xstop{iff=cond_payload_str;pattern=GET}(xsplit{pos=3},),)-| \/' \
         $H --lua-desync=fake:blob=0x41:ip_ttl=1 --lua-desync=stopif:iff=cond_payload_str:pattern=GET \
         --lua-desync=multisplit:pos=3
+    # profiles (stage X6a): an HTTP and a TLS request, each with its own
+    # profile; geneva takes the ports from the profiles (no -p)
+    xdiff profiles "$HR; $TR" "--filter-tcp 80 --filter-l7 http -s '[TCP:flags:PA]-xsplit{pos=method+2}-| \\/' \
+--new=tls --filter-tcp 443 --filter-l7 tls -s '[TCP:flags:PA]-xdisorder{pos=1,midsld}-| \\/'" \
+        --filter-tcp=80 --filter-l7=http --payload=http_req --lua-desync=multisplit:pos=method+2 \
+        --new --filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=multidisorder:pos=1,midsld
 fi
 
 # Position parity (stage X3): nfqws2 runs zapret2's posdebug on every packet
