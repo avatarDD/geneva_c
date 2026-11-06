@@ -275,6 +275,11 @@ gas:
     return 0;
 }
 
+int trigger_match(trigger *t, const gpkt *p, void *xctx, strat_dir dir)
+{
+    return trigger_applies(t, p, xctx, dir, SIZE_MAX);
+}
+
 /* ---- actions ------------------------------------------------------------- */
 
 static const char *const act_names[] = {"tamper", "duplicate", "fragment", "drop", "sleep", "trace"};
@@ -1415,6 +1420,8 @@ int strategy_apply_x(strategy *s, gpkt *pkt, strat_dir dir, pktlist *out, void *
     int fired = 0;
     void *dyn = NULL;
     for (size_t i = 0; i < n; i++) {
+        if (g_xtrig && g_xtrig->cut && g_xtrig->cut(xctx, dir, i))
+            continue;
         if (!trigger_applies(&f[i]->trig, pkt, xctx, dir, i))
             continue;
         fired++;

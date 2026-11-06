@@ -79,6 +79,15 @@
   видны следующим действиям и деревьям этого пакета. Отсечка экземпляра
   на потоке (`instance_cutoff`) для `xwsize`, `xwssize`, `xsynack`,
   `xsynacksplit`, `xsyndata`. В `payload=` — любые имена (как в Lua).
+- X5c: комбинаторы — оркестраторы zapret2 как x-действия с поддеревьями:
+  `xwhen{iff;neg}(тогда,иначе)` (`condition`, `per_instance_condition`),
+  `xstop{iff;neg}` (`stopif`), `xrepeat{repeats;iff;neg;stop;clear}(тело,остаток)`
+  (`repeater`), `xcutoff{dir}` (`instance_cutoff`: отсечка дерева или леса на
+  потоке). Условия zapret2 `cond_true`, `cond_false`, `cond_random`
+  (`percent`), `cond_payload_str` (`pattern`), `cond_tcp_has_ts` и любые
+  триггерные выражения (`FLOW:n:<5`, `L7:payload:http_req`, `TCP:flags:PA`).
+  e2e: x-действия обходят цензоры 14, 15, 18, 19, 20; одинаковые с nfqws2
+  v1.0.6 пакеты на проводе для 13 функций и оркестраторов.
 
 ## v1.2.0
 

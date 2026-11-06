@@ -58,9 +58,15 @@ static void usage(FILE *f)
                "  xwsize xwssize; xhttp{domcase;hostcase=hoSt;methodeol;unixeol}; xudplen\n"
                "  xdhtdn; xtlsclone (a changed copy of the ClientHello as a blob for the\n"
                "  actions after it); xtag (an own payload label); xlog (event ext_pkt);\n"
-               "  xpcap{file=...}, e.g.\n"
+               "  xpcap{file=...}; combinators after zapret2's orchestrators:\n"
+               "  xwhen{iff=COND;neg}(then,else), xstop{iff=COND}(rest),\n"
+               "  xrepeat{repeats=N;iff=COND;stop}(body,rest), xcutoff{dir=in|out|both};\n"
+               "  COND is cond_random (percent=P), cond_payload_str (pattern=TEXT),\n"
+               "  cond_tcp_has_ts, cond_true, cond_false or a trigger such as FLOW:n:<5\n"
+               "  or L7:payload:http_req, e.g.\n"
                "  [TCP:flags:PA]-xfake{blob=fake_default_tls;ttl=3}(xdisorder{pos=1,midsld},)-| \\/\n"
                "  [TCP:flags:PA]-xtlsclone{blob=c;sni_first=a.example}(xfake{blob=c;ttl=3},)-| \\/\n"
+               "  [TCP:flags:PA]-xwhen{iff=FLOW:n:<3}(xrepeat{repeats=2}(xfake{blob=0x41;ttl=1},),)-| \\/\n"
                "  See docs/EXT.md.\n");
 #endif
 }

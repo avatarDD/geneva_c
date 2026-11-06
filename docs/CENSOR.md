@@ -199,6 +199,24 @@ nfqws2 у клиента с эталонной стратегией против
 | 19 | то же, `--lua-desync=multisplit:pos=9` (слово разрезано) |
 | 20 | то же, `--lua-desync=send:ipfrag:ipfrag_pos_tcp=24 --lua-desync=drop` |
 
+Раздел `xact` (без zapret2) проходит те же цензоры x-действиями geneva
+(`geneva eval --ext` у клиента; `x14` … `x20` — один цензор): эталонные
+строки, записанные как x-действия, и они же с комбинаторами (`docs/EXT.md`):
+
+| Цензор | Стратегия geneva |
+|---|---|
+| 14 | `[TCP:flags:PA]-xsplit{pos=1}-\| \/`; `[TCP:dport:443]-xwhen{iff=L7:payload:tls_client_hello}(xsplit{pos=1},)-\| \/` |
+| 15 | `[TCP:flags:PA]-xdisorder{pos=1,midsld}-\| \/`; то же внутри `xrepeat{repeats=1}(xcutoff,…)` |
+| 18 | `[TCP:flags:PA]-xsplit{pos=method+2}-\| \/` |
+| 19 | `[TCP:flags:PA]-xsplit{pos=9}-\| \/`; то же под `xstop{iff=cond_payload_str;pattern=ultrasurf;neg}` |
+| 20 | `[TCP:flags:PA]-xsend{ipfrag;ipfrag_pos_tcp=24}(drop,)-\| \/`; то же под `xwhen{iff=L7:payload:http_req}` |
+
+Раздел `diff` (с `NFQWS2_DIR`) запускает одну десинхронизацию в nfqws2 и
+в geneva на одном запросе без цензора и сравнивает пакеты клиента на
+проводе (позиции, длины, флаги, TTL, содержимое): `multisplit`,
+`multidisorder`, `fake`, `fakedsplit`, `fakeddisorder`, `seqovl`,
+`tcpseg`, `send:ipfrag`, `repeater`, `condition`, `stopif`.
+
 Цензоры 12, 13 и 17 обходом не проверяются: заморозку и полисер расширения
 должны распознавать, а блокировку по адресу стратегия не обходит. В CI
 (`censors-ext`) берётся релиз zapret2 v1.0.6 с проверкой SHA-256, тем же,
@@ -207,4 +225,6 @@ nfqws2 у клиента с эталонной стратегией против
 ```
 sudo tests/e2e/censors_x.sh build/geneva                 # цензоры 12–20
 sudo NFQWS2_DIR=/opt/zapret2/zapret2-v1.0.6 tests/e2e/censors_x.sh build/geneva nfqws2
+sudo tests/e2e/censors_x.sh build/geneva xact             # x-действия против 14, 15, 18–20
+sudo NFQWS2_DIR=/opt/zapret2/zapret2-v1.0.6 tests/e2e/censors_x.sh build/geneva diff
 ```

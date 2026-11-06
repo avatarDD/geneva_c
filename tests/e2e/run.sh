@@ -286,6 +286,18 @@ for FW in $FIREWALLS; do
     stop_case
     check "an ext_pkt event" 'grep -q "\"ev\":\"ext_pkt\".*\"msg\":\"seen\"" "$WORK/ev.jsonl"'
     check "an RST with a bad checksum" '[ $(grep "Flags \[R\]" "$WORK/cap.txt" | grep -c "incorrect") -ge 1 ]'
+
+    # combinators (stage X5c): three RSTs on the first data packet, then the
+    # tree is cut off for the flow; a condition on the payload
+    start_case "xrepeat + xcutoff" "$FW" '[TCP:flags:PA]-xrepeat{repeats=3}(xrst{payload=all;badsum},xcutoff)-| \/' 10.77.0.2 --ext
+    exchange_ch && ok "exchange works" || bad "exchange failed"
+    stop_case
+    check "three RSTs, on the first packet only" '[ $(grep "Flags \[R\]" "$WORK/cap.txt" | grep -c "incorrect") -eq 3 ]'
+
+    start_case "xwhen on the payload" "$FW" '[TCP:flags:PA]-xwhen{iff=cond_payload_str;pattern=geneva}(xrst{payload=all;badsum},xrst{payload=all;badsum;repeats=2})-| \/' 10.77.0.2 --ext
+    exchange && ok "exchange works" || bad "exchange failed"
+    stop_case
+    check "one RST from the then branch" '[ $(grep "Flags \[R\]" "$WORK/cap.txt" | grep -c "incorrect") -eq 1 ]'
     fi
 
     start_case "SIGHUP reload" "$FW" '\/'
