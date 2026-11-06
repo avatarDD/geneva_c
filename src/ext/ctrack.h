@@ -78,6 +78,11 @@ struct ct_flow {
     /* the x-actions' per-flow state (src/ext/xact.c), freed through
      * ct_config.clear */
     void *xa;
+    /* its profile (src/ext/profile.c): the index, -1 for none; looked for
+     * xprof_done times (0: not yet), the last time with the L7 protocol
+     * xprof_l7 */
+    int16_t xprof;
+    uint8_t xprof_done, xprof_l7;
 
     /* table links */
     ct_flow *hnext, *lprev, *lnext;

@@ -36,6 +36,7 @@ void suite_l7(void);
 void suite_xact(void);
 void suite_xact5b(void);
 void suite_xcomb(void);
+void suite_profile(void);
 
 int main(void)
 {
@@ -59,6 +60,7 @@ int main(void)
     suite_xact();
     suite_xact5b();
     suite_xcomb();
+    suite_profile();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }

@@ -39,7 +39,7 @@
 typedef struct {
     ct_flow *f;     /* NULL: no flow */
     int reverse;    /* the packet comes from the flow's server */
-    const strategy *st; /* the strategy running: cut bits are about it */
+    strategy *st;   /* the strategy running (NULL: none): cut bits are about it */
     const char *ifin, *ifout; /* NULL: unknown */
     uint32_t mark;
     int has_meta;

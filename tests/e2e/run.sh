@@ -298,6 +298,17 @@ for FW in $FIREWALLS; do
     exchange && ok "exchange works" || bad "exchange failed"
     stop_case
     check "one RST from the then branch" '[ $(grep "Flags \[R\]" "$WORK/cap.txt" | grep -c "incorrect") -eq 1 ]'
+
+    # profiles (stage X6a): the TLS flow gets profile 1 once its ClientHello
+    # is seen, the plain one stays with profile 2
+    printf '%s\n' '[TCP:flags:PA]-tamper{TCP:window:replace:9}-| \/' > "$WORK/strategy2"
+    start_case "profiles by L7" "$FW" '[TCP:flags:PA]-tamper{TCP:window:replace:7}-| \/' 10.77.0.2 \
+        "--ext --filter-l7 tls --new=rest --filter-tcp $PORT -f $WORK/strategy2"
+    exchange_ch && ok "TLS exchange works" || bad "TLS exchange failed"
+    exchange && ok "plain exchange works" || bad "plain exchange failed"
+    stop_case
+    check "the ClientHello with profile 1" '[ $(grep "Flags \[P.\]" "$WORK/cap.txt" | grep -c "win 7,") -ge 2 ]'
+    check "the plain data with profile 2" '[ $(grep "Flags \[P.\]" "$WORK/cap.txt" | grep -c "win 9,") -eq 1 ]'
     fi
 
     start_case "SIGHUP reload" "$FW" '\/'

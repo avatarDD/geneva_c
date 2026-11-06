@@ -173,7 +173,7 @@ static void hk_close(eng_worker *w)
     w->x = NULL;
 }
 
-static int hk_packet(eng_worker *w, strategy *st, gpkt *p, strat_dir dir, const uint8_t *data, size_t len, const void *pctx)
+static int hk_packet(eng_worker *w, strategy **st, gpkt *p, strat_dir dir, const uint8_t *data, size_t len, const void *pctx)
 {
     (void)st;
     CHECK(w->x != NULL);

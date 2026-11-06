@@ -10,6 +10,32 @@
  * stages pass the switch on in their own option structs. */
 static int g_ext;
 
+/* the options of EXT_PROFILE_OPTS without the "ext-" prefix */
+static const char *const ext_only[] = {"new",        "name",       "skip",        "template",   "import",
+                                       "filter-l3",  "filter-tcp", "filter-udp",  "filter-icmp", "filter-ipp",
+                                       "filter-l7",  "filter-mark"};
+
+static int is_ext_only(const char *n)
+{
+    if (!strncmp(n, "ext-", 4))
+        return 1;
+    for (size_t i = 0; i < sizeof(ext_only) / sizeof(*ext_only); i++)
+        if (!strcmp(n, ext_only[i]))
+            return 1;
+    return 0;
+}
+
+args_t ext_cmd_args(const args_t *a)
+{
+    args_t v = *a;
+    for (int i = 0; i < a->nopts; i++)
+        if (!strcmp(a->opts[i].def->name, "new")) {
+            v.nopts = i;
+            break;
+        }
+    return v;
+}
+
 int ext_parse_args(const args_t *a, const char *cmd)
 {
     int on = arg_has(a, "ext");
@@ -19,7 +45,7 @@ int ext_parse_args(const args_t *a, const char *cmd)
     }
     for (int i = 0; i < a->nopts; i++) {
         const char *n = a->opts[i].def->name;
-        if (!on && !strncmp(n, "ext-", 4)) {
+        if (!on && is_ext_only(n)) {
             fprintf(stderr, "geneva %s: --%s needs --ext\n", cmd, n);
             return -1;
         }

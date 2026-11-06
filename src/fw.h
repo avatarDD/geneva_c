@@ -25,6 +25,9 @@ typedef struct {
     uint32_t mark;
     portset ports;
     int tcp, udp;
+    int icmp;        /* --ext profiles: also ICMP and ICMPv6, both directions */
+    uint8_t ipp[16]; /* --ext profiles: also these IP protocols */
+    int nipp;
     int server_side; /* out = from our ports, in = to them */
     int ipv4, ipv6;
     int out, in;     /* directions to queue */

@@ -112,6 +112,46 @@ static void test_nft(void)
     sb_free(&s);
 }
 
+/* --ext profiles: ICMP and other IP protocols besides the ports */
+static void test_protocols(void)
+{
+    fw_config c;
+    sbuf s, e;
+    t_current = "fw protocols";
+    sb_init(&s);
+    sb_init(&e);
+    fw_config_default(&c);
+    ports_parse("443", &c.ports);
+    c.icmp = 1;
+    c.ipp[0] = 47, c.ipp[1] = 50, c.nipp = 2;
+    fw_script(&c, FW_IPTABLES, 1, &s);
+    CHECK_INT(count(s.data, "iptables -t mangle -A GENEVA_310_OUT -p icmp -j NFQUEUE --queue-num 310 --queue-bypass\n"), 1);
+    CHECK_INT(count(s.data, "ip6tables -t mangle -A GENEVA_310_IN -p ipv6-icmp -j NFQUEUE"), 1);
+    CHECK_INT(count(s.data, "-A GENEVA_310_IN -p 47 -j NFQUEUE"), 2);
+    CHECK_INT(count(s.data, "-p 50 -j NFQUEUE"), 4);
+    sb_reset(&s);
+    c.iface = "wan";
+    fw_script(&c, FW_NFT, 1, &s);
+    CHECK_INT(count(s.data, "oifname \"wan\" meta l4proto { icmp, ipv6-icmp } queue num 310 bypass\n"), 1);
+    CHECK_INT(count(s.data, "iifname \"wan\" meta l4proto { 47, 50 } queue num 310 bypass\n"), 1);
+    sb_reset(&s);
+    c.iface = NULL;
+    c.in = 0;
+    c.nipp = 1;
+    CHECK_INT(fw_windivert_filter(&c, &s, &e), 0);
+    CHECK_STR(s.data, "!loopback and ((outbound and (tcp.DstPort == 443 or icmp or icmpv6 or ip.Protocol == 47 or "
+                      "ipv6.NextHdr == 47)))");
+    /* only ICMP */
+    sb_reset(&s);
+    c.ports.n = 0;
+    c.tcp = 0;
+    c.nipp = 0;
+    CHECK_INT(fw_windivert_filter(&c, &s, &e), 0);
+    CHECK_STR(s.data, "!loopback and ((outbound and (icmp or icmpv6)))");
+    sb_free(&s);
+    sb_free(&e);
+}
+
 /* Router mode (geneva censor): forwarded packets of both directions. */
 static void test_forward(void)
 {
@@ -283,6 +323,7 @@ void suite_fw(void)
     test_nft();
     test_forward();
     test_windivert();
+    test_protocols();
 #ifdef __linux__
     test_exec();
 #endif

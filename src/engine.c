@@ -439,7 +439,7 @@ static void packet(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir
     int took;
 
     w->slot = sl;
-    took = e->o->ext && e->o->ext->packet && e->o->ext->packet(w, st, p, dir, data, len, pctx);
+    took = e->o->ext && e->o->ext->packet && e->o->ext->packet(w, &st, p, dir, data, len, pctx);
     w->slot = NULL;
     if (took) {
         w->xctx = NULL;
