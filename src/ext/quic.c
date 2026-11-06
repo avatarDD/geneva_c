@@ -111,6 +111,15 @@ long quic_initial_decrypt(const uint8_t *p, size_t n, quic_initial *h, uint8_t *
     (void)p, (void)n, (void)h, (void)out, (void)cap;
     return -1;
 }
+
+size_t quic_initial_build(uint32_t version, const uint8_t *dcid, size_t dcid_len, const uint8_t *scid,
+                          size_t scid_len, uint16_t pn, const uint8_t *frames, size_t flen, size_t total, uint8_t *out,
+                          size_t cap)
+{
+    (void)version, (void)dcid, (void)dcid_len, (void)scid, (void)scid_len, (void)pn, (void)frames, (void)flen;
+    (void)total, (void)out, (void)cap;
+    return 0;
+}
 #else
 long quic_initial_decrypt(const uint8_t *p, size_t n, quic_initial *h, uint8_t *out, size_t cap)
 {
@@ -155,6 +164,75 @@ long quic_initial_decrypt(const uint8_t *p, size_t n, quic_initial *h, uint8_t *
     gcm_init(&g, key, 16);
     if (gcm_decrypt(&g, nonce, hdr, hlen, p + hlen, out, clen, p + hlen + clen) == 0)
         rc = (long)clen;
+out:
+    secure_zero(initial, sizeof(initial));
+    secure_zero(client, sizeof(client));
+    secure_zero(key, sizeof(key));
+    secure_zero(iv, sizeof(iv));
+    secure_zero(hp, sizeof(hp));
+    secure_zero(&g, sizeof(g));
+    secure_zero(&hpc, sizeof(hpc));
+    return rc;
+}
+#endif
+
+#if GENEVA_EXT_CRYPTO
+size_t quic_initial_build(uint32_t version, const uint8_t *dcid, size_t dcid_len, const uint8_t *scid,
+                          size_t scid_len, uint16_t pn, const uint8_t *frames, size_t flen, size_t total, uint8_t *out,
+                          size_t cap)
+{
+    vparams vp;
+    uint8_t initial[32], client[32], key[16], iv[12], hp[16], mask[16], nonce[12], tag[16];
+    aes_ctx hpc;
+    gcm_ctx g;
+    size_t n = 0, hlen, plen;
+    size_t rc = 0;
+
+    if ((version != QUIC_V1 && version != QUIC_V2) || params(version, &vp) < 0 || dcid_len > 20 ||
+        scid_len > 20 || total > cap || total > 0x3fff)
+        return 0;
+    hlen = 1 + 4 + 1 + dcid_len + 1 + scid_len + 1 + 2 + 2;
+    if (hlen + flen + 16 > total || hlen + 2 + 16 > total)
+        return 0;
+    out[n++] = (uint8_t)(0xc0 | vp.initial_type << 4 | 1); /* a 2-byte packet number */
+    out[n++] = (uint8_t)(version >> 24);
+    out[n++] = (uint8_t)(version >> 16);
+    out[n++] = (uint8_t)(version >> 8);
+    out[n++] = (uint8_t)version;
+    out[n++] = (uint8_t)dcid_len;
+    memcpy(out + n, dcid, dcid_len);
+    n += dcid_len;
+    out[n++] = (uint8_t)scid_len;
+    memcpy(out + n, scid, scid_len);
+    n += scid_len;
+    out[n++] = 0; /* no token */
+    plen = total - hlen + 2; /* packet number, payload and tag */
+    out[n++] = (uint8_t)(0x40 | plen >> 8);
+    out[n++] = (uint8_t)plen;
+    out[n++] = (uint8_t)(pn >> 8);
+    out[n++] = (uint8_t)pn;
+    /* the frames, then PADDING (0x00) up to the size */
+    memcpy(out + n, frames, flen);
+    memset(out + n + flen, 0, total - 16 - n - flen);
+    hkdf_extract(vp.salt, 20, dcid, dcid_len, initial);
+    if (hkdf_expand_label(initial, "client in", NULL, 0, client, 32) < 0 ||
+        hkdf_expand_label(client, vp.key, NULL, 0, key, 16) < 0 ||
+        hkdf_expand_label(client, vp.iv, NULL, 0, iv, 12) < 0 ||
+        hkdf_expand_label(client, vp.hp, NULL, 0, hp, 16) < 0)
+        goto out;
+    memcpy(nonce, iv, 12);
+    nonce[10] ^= (uint8_t)(pn >> 8);
+    nonce[11] ^= (uint8_t)pn;
+    gcm_init(&g, key, 16);
+    gcm_encrypt(&g, nonce, out, hlen, out + hlen, out + hlen, total - 16 - hlen, tag);
+    memcpy(out + total - 16, tag, 16);
+    /* header protection: the sample starts 4 bytes after the packet number */
+    aes_init(&hpc, hp, 16);
+    aes_encrypt_block(&hpc, out + hlen - 2 + 4, mask);
+    out[0] ^= mask[0] & 0x0f;
+    out[hlen - 2] ^= mask[1];
+    out[hlen - 1] ^= mask[2];
+    rc = total;
 out:
     secure_zero(initial, sizeof(initial));
     secure_zero(client, sizeof(client));

@@ -73,6 +73,11 @@ typedef struct {
     /* The mark and the interface indexes (0: unknown) of a captured packet;
      * NULL when the backend has none. */
     void (*meta)(const void *pctx, uint32_t *mark, uint32_t *ifin, uint32_t *ifout);
+    /* inject() for a packet of an x-action (--ext): mark is added to the
+     * engine's own mark, ifout ("" or NULL: any) is the interface to bind
+     * to. NULL: inject() is used. */
+    int (*inject_x)(eng_worker *w, const void *pctx, const uint8_t *data, size_t len, uint32_t mark,
+                    const char *ifout);
 } backend;
 
 /* A packet waiting for its sleep to end. */
@@ -83,6 +88,8 @@ typedef struct {
     size_t len;
     int verdict; /* releases the held packet, else an injection */
     uint8_t pctx[PCTX_MAX];
+    uint32_t xmark; /* an x-action's packet: gpkt.xmark, gpkt.xifout */
+    char xifout[16];
 } delayed;
 
 /* The counters of a worker; engine_counters() sums them over the list, so a

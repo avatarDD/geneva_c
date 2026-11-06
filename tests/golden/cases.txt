@@ -84,3 +84,15 @@ apply-ext-l7-posdebug|extonly|$G apply --ext --ext-posdebug -s '\/' -i $D/l7.pca
 apply-ext-reasm-disable|extonly|$G apply --ext --ext-reasm-disable all -s '[L7:host:example.com]-drop-| [L7:host:rutracker.org]-drop-| \/' -i $D/l7.pcap -p 443 -v
 apply-ext-payload-disable|extonly|$G apply --ext --ext-payload-disable quic_initial,http_req -s '[L7:payload:unknown]-drop-| \/' -i $D/l7.pcap -p 80,443 --json
 apply-ext-reasm-bad|extonly|$G apply --ext --ext-reasm-max 100 -s '\/' -i $D/l7.pcap
+check-ext-xact|extonly|$G check --ext '[TCP:flags:PA]-xfake{blob=fake_default_tls;tlsmod=rnd,dupsid;ttl=auto:-2:3-20;repeats=2}(xdisorder{pos=1,midsld;seqovl=1},)-| [UDP:dport:443]-xfake{blob=fake_default_quic;ip_ttl=2}-| \/ [TCP:flags:SA]-xmod{ttl=5}-|'
+check-ext-xact-pretty|extonly|$G check --ext --pretty '[TCP:flags:PA]-xsplit{pos=2;nodrop}(xmod{ttl=1},)-| \/'
+check-ext-xact-bad|extonly|$G check --ext '[TCP:flags:PA]-xfake{ttl=3}-| \/'
+check-ext-xact-inbound|extonly|$G check --ext '\/ [TCP:flags:SA]-xsplit-|'
+xact-without-ext||$G check '[TCP:flags:PA]-xsplit-| \/'
+apply-ext-xact-tls|extonly|$G apply --ext --rng-seed 7 -s '[TCP:flags:PA]-xfake{blob=fake_default_tls;ttl=3;md5;payload=tls_client_hello}(xdisorder{pos=1,midsld},)-| [UDP:dport:443]-xfake{blob=fake_default_quic;ip_ttl=2}-| \/' -i $D/l7.pcap -p 443 -v -o $T/out.pcap && cksum < $T/out.pcap
+apply-ext-xact-http|extonly|$G apply --ext --rng-seed 7 -s '[TCP:flags:PA]-xhostfake{ttl=2;host=example.net}-| \/' -i $D/l7.pcap -p 80 -v -o $T/out.pcap && cksum < $T/out.pcap
+apply-ext-xact-faked|extonly|$G apply --ext --rng-seed 7 -s '[TCP:flags:PA]-xfakedsplit{pos=host+1;ttl=2;badsum}-| \/' -i $D/l7.pcap -p 80 -v -o $T/out.pcap && cksum < $T/out.pcap
+apply-ext-xact-ipfrag|extonly|$G apply --ext --rng-seed 7 -s '[TCP:flags:PA]-xsend{ipfrag;ipfrag_pos_tcp=24;ttl=9}-| \/' -i $D/l7.pcap -p 80 -v -o $T/out.pcap && cksum < $T/out.pcap
+apply-ext-blob|extonly|$G apply --ext --rng-seed 7 --ext-blob rdp:@$D/../../files/fake/rdp.bin --ext-blob hx:0x0102 -s '[TCP:flags:PA]-xfake{blob=rdp;payload=all}(xfake{blob=hx;payload=all},)-| \/' -i $D/l7.pcap -p 80 -v
+apply-ext-blob-bad|extonly|$G apply --ext --ext-blob 'bad name:0x01' -s '\/' -i $D/l7.pcap
+apply-ext-blob-dup|extonly|$G apply --ext --ext-blob fake_default_tls:0x01 -s '\/' -i $D/l7.pcap

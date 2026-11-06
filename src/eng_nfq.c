@@ -48,6 +48,18 @@ static int nfq_be_inject(eng_worker *w, const void *pctx, const uint8_t *data, s
     return 0;
 }
 
+static int nfq_be_inject_x(eng_worker *w, const void *pctx, const uint8_t *data, size_t len, uint32_t mark,
+                           const char *ifout)
+{
+    nfq_state *s = w->e->bs;
+    (void)pctx;
+    if (rawsend_send_x(s->rs, data, len, mark, ifout) < 0) {
+        LOGD("engine", "raw send: %s", strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
 static void nfq_be_meta(const void *pctx, uint32_t *mark, uint32_t *ifin, uint32_t *ifout)
 {
     nfq_pctx c;
@@ -194,6 +206,7 @@ const backend nfq_backend = {
     NULL, /* no capture filter: rules */
     NULL,
     nfq_be_meta,
+    nfq_be_inject_x,
 };
 
 #endif

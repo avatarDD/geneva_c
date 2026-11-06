@@ -43,6 +43,9 @@ typedef struct {
     uint32_t mark;
     int has_meta;
     const xl7_view *l7; /* NULL: not looked at */
+    /* per packet, for the x-actions: zapret2's desync.ip_id ("ipid=seq") */
+    uint16_t ipid;
+    int has_ipid;
 } xpkt_ctx;
 
 extern const strat_xtrig xtrig_ops;

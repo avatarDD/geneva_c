@@ -75,6 +75,9 @@ struct ct_flow {
     uint8_t l7proto;
     char *host;
     void *xr;
+    /* the x-actions' per-flow state (src/ext/xact.c), freed through
+     * ct_config.clear */
+    void *xa;
 
     /* table links */
     ct_flow *hnext, *lprev, *lnext;

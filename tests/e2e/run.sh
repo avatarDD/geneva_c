@@ -253,6 +253,23 @@ for FW in $FIREWALLS; do
     check "no piece knows the host (the SNI is in the second)" '[ $(cnt "win 7,") -eq 0 ]'
     fi
 
+    # x-actions of --ext (stage X5a): a fake with a bad checksum the server
+    # ignores, then the reassembled hello in parts from the last to the first;
+    # parts in IP fragments
+    if "$GENEVA" version --json | grep -q '"ext_xact"'; then
+    start_case "xfake + xdisorder over a split ClientHello" "$FW" '[TCP:flags:PA]-xfake{blob=fake_default_tls;badsum;repeats=2}(xdisorder{pos=1,midsld},)-| \/' 10.77.0.2 --ext
+    exchange_ch && ok "exchange works" || bad "exchange failed"
+    stop_case
+    check "two fakes of 680 bytes with a bad checksum" '[ $(grep -A1 "incorrect" "$WORK/cap.txt" | grep -Ec "length 680(:|$)") -ge 2 ] || [ $(grep "incorrect" "$WORK/cap.txt" | grep -Ec "length 680(:|$)") -ge 2 ]'
+    check "the 1-byte first part" '[ $(grep "10.77.0.1.* > 10.77.0.2.$PORT: Flags \[P.\]" "$WORK/cap.txt" | grep -Ec "length 1(:|$)") -ge 1 ]'
+    check "no piece went as it was" '[ $(grep "10.77.0.1.* > 10.77.0.2.$PORT: Flags \[P.\]" "$WORK/cap.txt" | grep -Ec "length (1000|825)(:|$)") -eq 0 ]'
+
+    start_case "xsplit in IP fragments" "$FW" '[TCP:flags:PA]-xsplit{pos=5;payload=all;ipfrag;ipfrag_pos_tcp=16}-| \/' 10.77.0.2 --ext
+    exchange && ok "exchange works" || bad "exchange failed"
+    stop_case
+    check "IP fragments on the wire" '[ $(cnt "flags \[+") -ge 2 ]'
+    fi
+
     start_case "SIGHUP reload" "$FW" '\/'
     printf '%s\n' '[TCP:flags:S]-tamper{TCP:window:replace:7}-| \/' > "$WORK/strategy"
     kill -HUP $ENG; sleep 0.3

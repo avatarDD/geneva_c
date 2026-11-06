@@ -33,6 +33,7 @@ void suite_crypto(void);
 void suite_censor_x(void);
 void suite_ctrack(void);
 void suite_l7(void);
+void suite_xact(void);
 
 int main(void)
 {
@@ -53,6 +54,7 @@ int main(void)
     suite_censor_x();
     suite_ctrack();
     suite_l7();
+    suite_xact();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }

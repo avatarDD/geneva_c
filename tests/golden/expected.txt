@@ -3094,3 +3094,8 @@ $ $G check '[FLOW:n:1-3]-drop-| \/'
 geneva check: unknown protocol "FLOW" in trigger
   in: [FLOW:n:1-3]-drop-| \/
 [exit 3]
+### xact-without-ext
+$ $G check '[TCP:flags:PA]-xsplit-| \/'
+geneva check: unknown action "xsplit"
+  in: [TCP:flags:PA]-xsplit-| \/
+[exit 3]

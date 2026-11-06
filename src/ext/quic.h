@@ -41,4 +41,13 @@ long quic_initial_decrypt(const uint8_t *p, size_t n, quic_initial *h, uint8_t *
  * and CONNECTION_CLOSE are skipped. */
 int quic_crypto_stream(const uint8_t *f, size_t n, uint8_t *out, size_t cap, size_t *len);
 
+/* Builds a client Initial of version (v1 or v2) in out: a long header with
+ * the given connection ids, no token, a 2-byte packet number pn, then the
+ * frames padded with PADDING to a datagram of total bytes, protected as
+ * RFC 9001 says. Returns the length, or 0 when it does not fit (or in an
+ * EXT_CRYPTO=0 build). */
+size_t quic_initial_build(uint32_t version, const uint8_t *dcid, size_t dcid_len, const uint8_t *scid,
+                          size_t scid_len, uint16_t pn, const uint8_t *frames, size_t flen, size_t total, uint8_t *out,
+                          size_t cap);
+
 #endif

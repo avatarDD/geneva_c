@@ -533,6 +533,7 @@ const backend windivert_backend = {
     wd_be_filter,
     wd_be_set_filter,
     NULL, /* meta: not yet */
+    NULL, /* inject_x: no marks or interfaces, x-action packets go through inject */
 };
 
 #endif

@@ -29,4 +29,27 @@ int tls_hs_sni(const uint8_t *p, size_t n, char *out, size_t cap, size_t *msg_le
  * records is read too. */
 int tls_rec_sni(const uint8_t *p, size_t n, char *out, size_t cap, uint8_t *hs, size_t hs_cap);
 
+/* ---- tls_mod (J3) and genhost (J5) ---------------------------------------- */
+
+enum { TLSMOD_RND = 1, TLSMOD_RNDSNI = 2, TLSMOD_SNI = 4, TLSMOD_DUPSID = 8, TLSMOD_PADENCAP = 16 };
+
+typedef struct {
+    unsigned mod;
+    char sni[256];
+} tls_modspec;
+
+/* zapret2's TLSMod_parse_list: "rnd,rndsni,sni=NAME,dupsid,padencap,none".
+ * Returns 0 or -1. */
+int tls_mod_parse(const char *list, tls_modspec *m);
+/* zapret2's TLSMod on the fake ClientHello record in fake (*len bytes, cap
+ * the buffer: room for a longer SNI and the padding). payload, when not
+ * NULL, is the client's own ClientHello (dupsid copies its session id,
+ * padencap makes the fake's lengths cover it). Returns 0, or -1 when the
+ * fake cannot take the mods (then it is not to be used as changed). */
+int tls_mod_apply(const tls_modspec *m, const uint8_t *payload, size_t plen, uint8_t *fake, size_t *len, size_t cap);
+
+/* zapret2's genhost: a random host name of len characters, ending in
+ * template when there is one ("h82aj.google.com"); out holds len + 1. */
+void tls_genhost(size_t len, const char *tmpl, char *out);
+
 #endif
