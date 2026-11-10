@@ -150,7 +150,8 @@ $ $G ctl --help
 Usage: geneva ctl [options] COMMAND [key=value...]
 Talks to "geneva run --control ADDR". Commands: status, stats, reset_stats,
 set_strategy strategy=..., reload, pause, resume, log_level level=...,
-subscribe, stop, ping, version. Prints the JSON answer; exit code 1 if
+subscribe, stop, ping, version, reload_lists (run --ext: re-read the
+--hostlist/--ipset files). Prints the JSON answer; exit code 1 if
 it is not ok.
 
 Options:

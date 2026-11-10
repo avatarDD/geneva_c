@@ -20,10 +20,18 @@
  *   --filter-ipp PROTO,...|*          (IP protocols other than TCP, UDP, ICMP)
  *   --filter-l7 PROTO,...             (tls, quic, http, known, unknown, ...)
  *   --filter-mark MARK[/MASK]
+ *   --hostlist FILE, --hostlist-domains NAME,...       (the host name)
+ *   --hostlist-exclude FILE, --hostlist-exclude-domains NAME,...
+ *   --ipset FILE, --ipset-ip CIDR,...                  (the server's address)
+ *   --ipset-exclude FILE, --ipset-exclude-ip CIDR,...
  *
  * As in zapret2, a profile with any of the tcp, udp, icmp or ipp filters
  * takes none of the protocols it names no filter for; one with none of them
- * takes every packet. The first profile that matches gets the packet; when
+ * takes every packet. A profile with host lists takes a packet only once
+ * its host name is known and passes them (lists.h, zapret2's dp_match);
+ * one with IP sets only for a server address they pass. Exclude lists come
+ * first; include lists that are all empty pass everything. The first
+ * profile that matches gets the packet; when
  * none does, the packet passes untouched. A tracked flow keeps its profile;
  * it is looked for again once the flow's L7 protocol is known (and, from
  * X6b, its host name), so a flow changes its profile at most twice. An ICMP
@@ -37,6 +45,7 @@
 
 #include "args.h"
 #include "ctrack.h"
+#include "lists.h"
 #include "pkt.h"
 #include "ports.h"
 #include "strategy.h"
@@ -78,6 +87,10 @@ typedef struct {
     strategy *st;
     int cmd; /* profile 0 of the command line: its strategy is the command's */
     int tpl_text; /* text is a template's: the profile's own -s replaces it */
+    /* host lists and IP sets, include and exclude; the fixed lists of
+     * --hostlist-domains, ... (one of each per profile, zapret2's anon_*) */
+    xlistref hl, hl_ex, ips, ips_ex;
+    xlist *fixed[4];
 } xprofile;
 
 typedef struct {
@@ -93,6 +106,9 @@ typedef struct {
     uint8_t icmp_type, icmp_code;
     int l7;            /* L7_*: L7_UNKNOWN when not known */
     uint32_t mark;
+    const uint8_t *ip; /* the server's address (4 or 16 bytes) */
+    const char *host;  /* the host name (lower case, no port), NULL when not known */
+    int host_ip;       /* the host name is an IP address: no subdomains */
 } xmatch;
 
 /* Does a command line use profiles (any profile option)? */
@@ -107,7 +123,8 @@ int xprof_build(const args_t *a, int has_cmd_st, xprofiles *out, sbuf *err);
 void xprof_free(xprofiles *ps);
 
 /* The first profile that takes m (its index), -1 when none does.
- * any_l7: as if the L7 filters took every protocol. */
+ * any_l7: as if the L7 filters and the host lists took any protocol and
+ * host still unknown (could the profile take the flow later?). */
 int xprof_find(const xprofiles *ps, const xmatch *m, int any_l7);
 int xprof_match(const xprofile *p, const xmatch *m, int any_l7);
 

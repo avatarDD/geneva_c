@@ -103,6 +103,7 @@ long»), и соединение закрывается. Подписчику с
 | `reload` | — | перечитать `--strategy-file` |
 | `set_filter` | `filter` | (Windows) заменить фильтр WinDivert на лету (`docs/ENGINE.md`); ответ — итоговый `filter`. Некомпилируемое выражение: `ok:false`, `error`, `pos`, прежний фильтр остаётся. На Linux `ok:false`, `error: "windows only"` |
 | `reload_filter` | — | (Windows) перечитать `--filter-file` и установить, как `set_filter`; без `--filter-file` — `ok:false`. На Linux `ok:false`, `error: "windows only"` |
+| `reload_lists` | — | (`--ext`) перечитать файлы `--hostlist*`, `--ipset*` всех профилей (`docs/EXT.md`); ответ — `files`, сколько перечитано. Без `--ext` — `unknown command`. SIGHUP делает то же |
 | `pause` / `resume` | — | на паузе пакеты проходят без изменений, правила остаются |
 | `log_level` | `level` (необязателен) | установить / узнать уровень: `error`, `warn`, `info`, `debug`, `trace` |
 | `stop` | — | корректный выход со снятием правил (`exit` с `reason: control`) |

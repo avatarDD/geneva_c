@@ -201,6 +201,10 @@ static void prof_free(xprofile *p)
     free(p->text);
     free(p->src);
     strategy_free(p->st);
+    xlistref_free(&p->hl);
+    xlistref_free(&p->hl_ex);
+    xlistref_free(&p->ips);
+    xlistref_free(&p->ips_ex);
     free(p);
 }
 
@@ -254,6 +258,10 @@ static void prof_import(xprofile *to, const xprofile *from)
     APPEND(to->udp, to->nudp, from->udp, from->nudp);
     APPEND(to->icf, to->nicf, from->icf, from->nicf);
     APPEND(to->ipp, to->nipp, from->ipp, from->nipp);
+    xlistref_copy(&to->hl, &from->hl);
+    xlistref_copy(&to->hl_ex, &from->hl_ex);
+    xlistref_copy(&to->ips, &from->ips);
+    xlistref_copy(&to->ips_ex, &from->ips_ex);
     if (from->text && !to->text && !to->cmd) {
         to->text = xstrdup(from->text);
         to->src = xstrdup(from->src);
@@ -261,9 +269,69 @@ static void prof_import(xprofile *to, const xprofile *from)
     }
 }
 
+/* --hostlist, --ipset and their -exclude, -domains, -ip forms */
+static const struct {
+    const char *name;
+    int ip, ex, fixed;
+} list_opts[] = {
+    {"hostlist", 0, 0, 0},       {"hostlist-domains", 0, 0, 1}, {"hostlist-exclude", 0, 1, 0},
+    {"hostlist-exclude-domains", 0, 1, 1}, {"ipset", 1, 0, 0},   {"ipset-ip", 1, 0, 1},
+    {"ipset-exclude", 1, 1, 0},  {"ipset-exclude-ip", 1, 1, 1},
+};
+
+static int list_opt(xprofile *p, int k, const char *value, sbuf *err)
+{
+    int ip = list_opts[k].ip, ex = list_opts[k].ex;
+    xlistref *r = ip ? (ex ? &p->ips_ex : &p->ips) : (ex ? &p->hl_ex : &p->hl);
+    if (!list_opts[k].fixed) {
+        xlist *l = xlist_file(value, ip, err);
+        if (!l)
+            return -1;
+        if (xlistref_add(r, l) < 0) {
+            sb_printf(err, "--%s %s is already in this profile", list_opts[k].name, value);
+            return -1;
+        }
+        return 0;
+    }
+    {
+        xlist **fx = &p->fixed[ip * 2 + ex];
+        const char *s = value;
+        if (!*fx) {
+            *fx = xlist_fixed(ip);
+            xlistref_add(r, *fx);
+        }
+        for (;;) { /* parse_domain_list, parse_ip_list: empty items skipped */
+            const char *e = strchr(s, ',');
+            size_t l = e ? (size_t)(e - s) : strlen(s);
+            if (l) {
+                char *it = xstrndup(s, l);
+                if (ip) {
+                    if (xips_add_str(&(*fx)->ips, it) < 0) {
+                        sb_printf(err, "bad --%s item %s (an IPv4 or IPv6 address or subnet)", list_opts[k].name, it);
+                        free(it);
+                        return -1;
+                    }
+                } else {
+                    xhs_parse(&(*fx)->hs, it, l);
+                }
+                free(it);
+            }
+            if (!e)
+                break;
+            s = e + 1;
+        }
+        if (ip)
+            xips_finish(&(*fx)->ips);
+    }
+    return 0;
+}
+
 int xprof_opt(xprofile *p, const char *name, const char *value, const xprofiles *templates, sbuf *err)
 {
     int r = 0;
+    for (size_t k = 0; k < ARRAY_LEN(list_opts); k++)
+        if (!strcmp(name, list_opts[k].name))
+            return list_opt(p, (int)k, value, err) < 0 ? -1 : 1;
     if (!strcmp(name, "filter-l3")) {
         const char *s = value;
         for (;;) {
@@ -368,7 +436,8 @@ static int prof_strategy(xprofile *p, int file, const char *value, sbuf *err)
 
 static int has_filters(const xprofile *p)
 {
-    return p->b_l3 || p->b_l7 || p->ntcp || p->nudp || p->nicf || p->nipp || p->mark_mask || p->name || p->text;
+    return p->b_l3 || p->b_l7 || p->ntcp || p->nudp || p->nicf || p->nipp || p->mark_mask || p->name || p->text ||
+           p->hl.n || p->hl_ex.n || p->ips.n || p->ips_ex.n;
 }
 
 /* what is being built: the profiles, the templates, the one in hand */
@@ -432,13 +501,17 @@ static int option(builder *b, const char *name, const char *value)
     }
     if (!strcmp(name, "strategy") || !strcmp(name, "strategy-file"))
         return prof_strategy(b->cur, name[8] == '-', value, b->err) < 0 ? -1 : 1;
+    if (b->skip && (str_starts(name, "hostlist") || str_starts(name, "ipset")))
+        return 1; /* zapret2 does not load the lists of a skipped profile */
     r = xprof_opt(b->cur, name, value ? value : "", &b->tpl, b->err);
     return r;
 }
 
 static const char *const prof_opts[] = {"new",       "skip",       "name",        "template",   "import",
                                          "filter-l3", "filter-tcp", "filter-udp",  "filter-icmp", "filter-ipp",
-                                         "filter-l7", "filter-mark", "ext-profile"};
+                                         "filter-l7", "filter-mark", "ext-profile", "hostlist",  "hostlist-domains",
+                                         "hostlist-exclude", "hostlist-exclude-domains", "ipset", "ipset-ip",
+                                         "ipset-exclude", "ipset-exclude-ip"};
 
 int xprof_wanted(const args_t *a)
 {
@@ -717,14 +790,8 @@ LIST_MATCH(icf_list, xicf, icf_match(type, code, &v[i]))
 LIST_MATCH(ipp_list, xipp, ipp_match(proto, &v[i]))
 #undef MATCH_ARGS
 
-int xprof_match(const xprofile *p, const xmatch *m, int any_l7)
+static int l4_match(const xprofile *p, const xmatch *m)
 {
-    if ((m->mark & p->mark_mask) != p->mark)
-        return 0;
-    if ((m->ver == 4 && !p->ipv4) || (m->ver == 6 && !p->ipv6))
-        return 0;
-    if (!any_l7 && !l7_proto_match(m->l7, p->l7))
-        return 0;
     switch (m->proto) {
     case 6: return pf_list(p->tcp, p->ntcp, m->port);
     case 17: return pf_list(p->udp, p->nudp, m->port);
@@ -732,6 +799,33 @@ int xprof_match(const xprofile *p, const xmatch *m, int any_l7)
     case 58: return icf_list(p->icf, p->nicf, m->icmp_type, m->icmp_code);
     default: return ipp_list(p->ipp, p->nipp, (uint8_t)m->proto);
     }
+}
+
+/* dp_match */
+int xprof_match(const xprofile *p, const xmatch *m, int any_l7)
+{
+    int hl_empty;
+    if ((m->mark & p->mark_mask) != p->mark)
+        return 0;
+    if ((m->ver == 4 && !p->ipv4) || (m->ver == 6 && !p->ipv6))
+        return 0;
+    if (!any_l7 && !l7_proto_match(m->l7, p->l7))
+        return 0;
+    if (!l4_match(p, m))
+        return 0;
+    if (!xlistref_ok(&p->hl) || !xlistref_ok(&p->hl_ex))
+        return 0; /* a list that failed to load */
+    hl_empty = xlistref_empty(&p->hl) && xlistref_empty(&p->hl_ex);
+    if (!m->host && !hl_empty && !any_l7)
+        return 0; /* host lists, and no host name yet */
+    if (p->ips.n || p->ips_ex.n) {
+        if (!xlistref_ok(&p->ips) || !xlistref_ok(&p->ips_ex) || !m->ip ||
+            !xlists_ip(&p->ips, &p->ips_ex, m->ver, m->ip))
+            return 0;
+    }
+    if (hl_empty || !m->host)
+        return 1;
+    return xlists_host(&p->hl, &p->hl_ex, m->host, m->host_ip, NULL);
 }
 
 int xprof_find(const xprofiles *ps, const xmatch *m, int any_l7)

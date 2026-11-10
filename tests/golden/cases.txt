@@ -111,3 +111,5 @@ apply-ext-profile-file|extonly|$G apply --ext --ext-profile $D/profiles.ini -i $
 apply-ext-profile-bad|extonly|$G apply --ext -s '\/' --new --filter-udp 70000 -i $D/l7.pcap; $G apply --ext --new --import web -i $D/l7.pcap; $G apply --ext --new=a -s '\/' -s '\/' -i $D/l7.pcap
 fw-ext-profiles|extonly|$G fw print --ext --firewall nft --filter-tcp 80,443 --new --filter-udp 443 --new --filter-icmp 3 --filter-ipp 47
 fw-ext-profiles-every-port|extonly|$G fw print --ext --filter-tcp 80 --new=rest
+apply-ext-lists|extonly|$G apply --ext --hostlist-domains example.org --filter-tcp 80 -s '[TCP:flags:PA]-tamper{TCP:urgptr:replace:9}-| \/' --new=ips --ipset-ip 93.184.215.0/24,2a00::/16 --ipset-exclude-ip 93.184.215.99 -s '[TCP:flags:PA]-tamper{TCP:window:replace:7}-| \/' --new=gz --hostlist ../data/lists/hosts.txt.gz -s '\/' -i $D/l7.pcap -p 80,443 -v -o $T/out.pcap 2>/dev/null && cksum < $T/out.pcap
+apply-ext-lists-bad|extonly|$G apply --ext --hostlist no-such-list -s '\/' -i $D/l7.pcap; $G apply --ext --ipset-ip 1.2.3.4/33 -s '\/' -i $D/l7.pcap; $G apply --ext --ipset ok.txt --ipset ./ok.txt -s '\/' -i $D/l7.pcap 2>&1 | grep -v ' lists: '

@@ -62,6 +62,16 @@
     {"filter-ipp", 0, 1, "PROTO,..|*", EXT_HELP("the profile takes these other IP protocols")},             \
     {"filter-l7", 0, 1, "LIST", EXT_HELP("the profile takes flows of these L7 protocols (tls,quic,http,...)")}, \
     {"filter-mark", 0, 1, "MARK[/MASK]", EXT_HELP("the profile takes packets with this fwmark")},           \
+    {"hostlist", 0, 1, "FILE", EXT_HELP("the profile takes hosts of FILE and their subdomains (^NAME: no subdomains, "    \
+                                        "!NAME: never; gzip ok; re-read on change); repeatable")},      \
+    {"hostlist-domains", 0, 1, "NAME,..", EXT_HELP("the same with the names given here")},                 \
+    {"hostlist-exclude", 0, 1, "FILE", EXT_HELP("the profile does not take hosts of FILE")},                \
+    {"hostlist-exclude-domains", 0, 1, "NAME,..", EXT_HELP("the same with the names given here")},         \
+    {"ipset", 0, 1, "FILE", EXT_HELP("the profile takes servers of FILE (IPv4/IPv6 addresses and subnets; " \
+                                     "gzip ok; re-read on change); repeatable")},                            \
+    {"ipset-ip", 0, 1, "CIDR,..", EXT_HELP("the same with the subnets given here")},                       \
+    {"ipset-exclude", 0, 1, "FILE", EXT_HELP("the profile does not take servers of FILE")},                 \
+    {"ipset-exclude-ip", 0, 1, "CIDR,..", EXT_HELP("the same with the subnets given here")},               \
     {"ext-profile", 0, 1, "FILE", EXT_HELP("profiles from FILE ([profile NAME] sections; after those of the "  \
                                            "command line); repeatable")}
 

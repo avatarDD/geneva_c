@@ -13,7 +13,9 @@ static int g_ext;
 /* the options of EXT_PROFILE_OPTS without the "ext-" prefix */
 static const char *const ext_only[] = {"new",        "name",       "skip",        "template",   "import",
                                        "filter-l3",  "filter-tcp", "filter-udp",  "filter-icmp", "filter-ipp",
-                                       "filter-l7",  "filter-mark"};
+                                       "filter-l7",  "filter-mark", "hostlist",   "hostlist-domains",
+                                       "hostlist-exclude", "hostlist-exclude-domains", "ipset", "ipset-ip",
+                                       "ipset-exclude", "ipset-exclude-ip"};
 
 static int is_ext_only(const char *n)
 {

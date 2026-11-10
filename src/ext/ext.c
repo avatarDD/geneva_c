@@ -10,7 +10,9 @@
 #include "blob.h"
 #include "engine_int.h"
 #include "l7.h"
+#include "lists.h"
 #include "ext_opt.h"
+#include "json.h"
 #include "log.h"
 #include "plat.h"
 #include "profile.h"
@@ -29,6 +31,7 @@ const char *const ext_features[] = {
     "ext_l7",     /* X4: L7 recognition, reassembly, L7: triggers */
     "ext_xact",   /* X5: x-actions (xfake, xsplit, ...), blobs */
     "ext_profile", /* X6: profiles, --filter-*, --ext-profile */
+    "ext_lists",   /* X6b: --hostlist*, --ipset*, gzip, reload_lists */
     0,
 };
 
@@ -169,23 +172,32 @@ void ext_deactivate(void)
 
 /* ---- profiles ---------------------------------------------------------------- */
 
-/* p may be NULL for a packet of flow f (a replay) */
-static void match_of(xmatch *m, const gpkt *p, const ct_flow *f, strat_dir dir, int l7, uint32_t mark)
+/* p may be NULL for a packet of flow f (a replay). host: the host name as
+ * the L7 found it (NULL: not known); hbuf holds it without its port. */
+static void match_of(xmatch *m, const gpkt *p, const ct_flow *f, strat_dir dir, int l7, const char *host,
+                     uint32_t mark, char *hbuf, size_t hcap)
 {
+    int out_server = (dir == DIR_OUT) != g_server_side; /* the packet goes to the server */
     memset(m, 0, sizeof(*m));
     m->mark = mark;
     m->l7 = l7 ? l7 : L7_UNKNOWN;
+    if (host && *host) {
+        m->host_ip = xhost_norm(host, hbuf, hcap);
+        m->host = hbuf;
+    }
     if (!p) {
         m->ver = f->ver;
         m->proto = f->proto;
         m->port = f->sport;
+        m->ip = f->srv;
         return;
     }
     m->ver = p->ipver;
     m->proto = p->l4proto;
+    m->ip = f ? f->srv : out_server ? p->dst : p->src;
     if (p->l4 == LAYER_TCP || p->l4 == LAYER_UDP) {
         /* the server's port (zapret2's sdport) */
-        m->port = f ? f->sport : (dir == DIR_OUT) != g_server_side ? p->dport : p->sport;
+        m->port = f ? f->sport : out_server ? p->dport : p->sport;
     } else if ((p->l4proto == 1 || p->l4proto == 58) && p->payload_len >= 2) {
         m->icmp_type = p->payload[0];
         m->icmp_code = p->payload[1];
@@ -207,14 +219,17 @@ static void log_prof(const char *what, int i, const ct_flow *f)
 }
 
 /* The profile of p (dp_find with dp_rediscovery): its index, -1 for none.
- * A flow keeps its profile and looks again once its L7 protocol is known;
- * an ICMP error goes with its flow's profile when it has one. p is NULL
- * for a replayed packet of flow f. */
-static int pick(const gpkt *p, ct_flow *f, strat_dir dir, int l7, uint32_t mark)
+ * A flow keeps its profile and looks again once its L7 protocol is known
+ * and once its host name is; an ICMP error goes with its flow's profile
+ * when it has one. p is NULL for a replayed packet of flow f. */
+static int pick(const gpkt *p, ct_flow *f, strat_dir dir, int l7, const char *host, uint32_t mark)
 {
     xmatch m;
-    int i;
+    char hb[XL7_HOST_MAX];
+    int i, new_l7, new_host;
     l7 = l7 ? l7 : L7_UNKNOWN;
+    if (host && !*host)
+        host = NULL;
     if (!p && !f)
         return -1;
     if (f && p && p->l4 != LAYER_TCP && p->l4 != LAYER_UDP) {
@@ -223,20 +238,24 @@ static int pick(const gpkt *p, ct_flow *f, strat_dir dir, int l7, uint32_t mark)
         f = NULL;
     }
     if (!f) {
-        match_of(&m, p, NULL, dir, l7, mark);
+        match_of(&m, p, NULL, dir, l7, host, mark, hb, sizeof(hb));
         return xprof_find(&g_prof, &m, 0);
     }
-    if (f->xprof_done && !(f->xprof_l7 == L7_UNKNOWN && l7 != L7_UNKNOWN))
+    new_l7 = f->xprof_l7 == L7_UNKNOWN && l7 != L7_UNKNOWN;
+    new_host = !f->xprof_host && host;
+    if (f->xprof_done && !new_l7 && !new_host)
         return f->xprof;
-    match_of(&m, p, f, dir, l7, mark);
+    match_of(&m, p, f, dir, l7, host, mark, hb, sizeof(hb));
     i = xprof_find(&g_prof, &m, 0);
     if (!f->xprof_done)
         log_prof("new", i, f);
     else if (i != f->xprof)
-        log_prof("L7 known, changed", i, f);
+        log_prof(new_host ? "host known, changed" : "L7 known, changed", i, f);
     f->xprof = (int16_t)i;
     f->xprof_l7 = (uint8_t)l7;
-    f->xprof_done++;
+    f->xprof_host = host != NULL;
+    if (f->xprof_done < 255)
+        f->xprof_done++;
     return i;
 }
 
@@ -374,7 +393,7 @@ static void xw_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, c
     meta(u->w->x, u->w, pctx, &c);
     c.l7 = v;
     if (g_prof.n)
-        st = prof_st(pick(NULL, c.f, dir, v->l7, c.mark), u->st);
+        st = prof_st(pick(NULL, c.f, dir, v->l7, v->host, c.mark), u->st);
     c.st = st;
     engine_replay(u->w, st, raw, len, dir, pctx, &c);
 }
@@ -384,7 +403,8 @@ static void xw_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, c
 static int maybe_st(const gpkt *p, const ct_flow *f, strat_dir dir, uint32_t mark, strategy *cmd)
 {
     xmatch m;
-    match_of(&m, p, f, dir, L7_UNKNOWN, mark);
+    char hb[XL7_HOST_MAX];
+    match_of(&m, p, f, dir, L7_UNKNOWN, NULL, mark, hb, sizeof(hb));
     for (size_t i = 0; i < g_prof.n; i++)
         if (xprof_match(g_prof.v[i], &m, 1) && prof_st((int)i, cmd))
             return 1;
@@ -403,8 +423,10 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
     meta(x, w, pctx, c);
     if (x->ct)
         c->f = ctrack_feed(x->ct, p, plat_now_ms(), &c->reverse);
-    if (g_prof.n)
-        st = prof_st(pick(p, c->f, dir, c->f ? c->f->l7proto : 0, c->mark), cmd);
+    if (g_prof.n) {
+        xlists_reload(plat_now_ms(), 0);
+        st = prof_st(pick(p, c->f, dir, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, c->mark), cmd);
+    }
     c->st = st;
     /* every tree is behind this flow: it passes by the strategy */
     bypass = st && c->f && !w->e->paused && xtrig_all_cut(st, dir, c->f);
@@ -420,7 +442,7 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
         return 1;
     }
     if (g_prof.n) {
-        strategy *st2 = prof_st(pick(p, c->f, dir, x->view.l7, c->mark), cmd);
+        strategy *st2 = prof_st(pick(p, c->f, dir, x->view.l7, x->view.host, c->mark), cmd);
         if (st2 != st) {
             st = c->st = st2;
             bypass = st && c->f && !w->e->paused && xtrig_all_cut(st, dir, c->f);
@@ -436,7 +458,21 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
     return 0;
 }
 
-static const ext_hooks hooks = {xw_open, xw_close, xw_packet, xw_flush};
+/* "reload_lists": every list file read again */
+static int xw_control(const char *cmd, const json_val *req, jw *w, sbuf *err)
+{
+    int n;
+    (void)req, (void)err;
+    if (strcmp(cmd, "reload_lists"))
+        return 0;
+    n = xlists_reload(plat_now_ms(), 1);
+    LOGI("lists", "%d list file(s) read again", n);
+    if (w)
+        jw_kint(w, "files", n);
+    return 1;
+}
+
+static const ext_hooks hooks = {xw_open, xw_close, xw_packet, xw_flush, xw_control};
 
 const ext_hooks *ext_engine_hooks(void) { return g_active ? &hooks : NULL; }
 
@@ -494,7 +530,7 @@ static void xo_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, c
     (void)pctx;
     c.l7 = v;
     if (g_prof.n)
-        c.st = prof_st(pick(NULL, c.f, dir, v->l7, 0), u->cmd);
+        c.st = prof_st(pick(NULL, c.f, dir, v->l7, v->host, 0), u->cmd);
     u->fn(u->ud, raw, len, dir, v->piece, v->pieces, &c);
 }
 
@@ -526,7 +562,7 @@ void *xoff_packet(xoffline *x, strategy **stp, const gpkt *p, strat_dir dir, uin
     if (x->ct)
         c->f = ctrack_feed(x->ct, p, now_ms ? now_ms : 1, &c->reverse);
     if (g_prof.n)
-        st = prof_st(pick(p, c->f, dir, c->f ? c->f->l7proto : 0, 0), cmd);
+        st = prof_st(pick(p, c->f, dir, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, 0), cmd);
     c->st = st;
     bypass = st && c->f && xtrig_all_cut(st, dir, c->f);
     hold = !bypass && (st || (g_prof.n && !(c->f && c->f->l7proto) && maybe_st(p, c->f, dir, 0, cmd)));
@@ -540,7 +576,7 @@ void *xoff_packet(xoffline *x, strategy **stp, const gpkt *p, strat_dir dir, uin
         return NULL;
     }
     if (g_prof.n) {
-        strategy *st2 = prof_st(pick(p, c->f, dir, x->view.l7, 0), cmd);
+        strategy *st2 = prof_st(pick(p, c->f, dir, x->view.l7, x->view.host, 0), cmd);
         if (st2 != st) {
             st = c->st = st2;
             bypass = st && c->f && xtrig_all_cut(st, dir, c->f);

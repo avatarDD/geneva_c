@@ -129,6 +129,10 @@ struct ext_hooks {
     /* The capture is about to close (engine_run_timers with all): give
      * every packet whose verdict the hook kept its verdict now. */
     void (*flush)(eng_worker *w);
+    /* A control command the engine does not know (w: the reply), and
+     * "reload_lists" on SIGHUP (w NULL). Returns 1 when it was the
+     * extensions', 0 when not, -1 with err when it failed. */
+    int (*control)(const char *cmd, const json_val *req, jw *w, sbuf *err);
 };
 
 struct eng_worker {
