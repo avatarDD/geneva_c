@@ -423,8 +423,12 @@ typedef struct {
  * on as it is (v is NULL) */
 static void xw_pass(void *ud, const uint8_t *raw, size_t len, strat_dir dir, const void *pctx, const xl7_view *v)
 {
+    eng_worker *w = ud;
     (void)dir, (void)v;
-    engine_verdict(ud, pctx, 1, raw, len, 0);
+    w->vdata = raw; /* a detached context sends these */
+    w->vlen = len;
+    engine_verdict(w, pctx, 1, raw, len, 0);
+    w->vdata = NULL;
 }
 
 static void xw_clear(ct_flow *f, void *ud)
@@ -580,6 +584,8 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
     xw_rst_ud ru;
     strategy *cmd = *stp, *st = cmd;
     uint64_t now = plat_now_ms();
+    uint8_t kept[PCTX_MAX];
+    const void *kp;
     int bypass, hold, r, i = -1, has;
     memset(c, 0, sizeof(*c));
     meta(x, w, pctx, c);
@@ -602,7 +608,11 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
     u.w = w;
     u.st = cmd;
     u.base = c;
-    r = xl7_packet(x->l7, c->f, c->reverse, p, dir, data, len, pctx, w->e->be->pctx_len, hold, xw_replay, &u,
+    /* what is held keeps a detached context: the captured packet goes now
+     * and is sent anew later; only outgoing ones (an incoming packet sent
+     * through a raw socket would not arrive as it came: --server-side) */
+    kp = hold && dir == DIR_OUT ? engine_detach(w, pctx, kept) : pctx;
+    r = xl7_packet(x->l7, c->f, c->reverse, p, dir, data, len, kp, w->e->be->pctx_len, hold, xw_replay, &u,
                    &x->view);
     if (has && g_prof.n) {
         ru.w = w;
@@ -610,7 +620,7 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
         flow_autolist(1, p, c->f, c->reverse, r == XL7_HOLD ? L7P_UNKNOWN : x->view.l7p, now, xw_rst, &ru);
     }
     if (r == XL7_HOLD) {
-        engine_hold(w);
+        engine_held(w, pctx, kp);
         return 1;
     }
     if (has && x->view.l7p == L7P_DNS_RESPONSE && p->l4 == LAYER_UDP)

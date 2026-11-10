@@ -43,7 +43,7 @@ static int fake_inject(eng_worker *w, const void *pctx, const uint8_t *data, siz
 }
 
 static const backend fake_backend = {
-    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, fake_verdict, fake_inject, 0, NULL, NULL, NULL, NULL,
+    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, fake_verdict, fake_inject, 0, NULL, NULL, NULL, NULL, NULL,
 };
 
 static void load_base(void)

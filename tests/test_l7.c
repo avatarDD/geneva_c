@@ -681,14 +681,27 @@ TEST(l7_triggers)
 /* ---- the engine: hold, replay ------------------------------------------------------ */
 
 typedef struct {
-    int accepts, drops, injects;
-    size_t inj_len[8];
+    int accepts, drops, injects, resends;
+    size_t inj_len[8], resend_len[8];
 } elog_t;
 static elog_t elog;
 
 static int e_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len)
 {
-    (void)w, (void)pctx, (void)data, (void)len;
+    uint32_t id;
+    (void)w;
+    memcpy(&id, pctx, sizeof(id));
+    if (id & 0x80000000u) {
+        /* detached: an accept sends the bytes anew, a drop does nothing */
+        if (accept && data) {
+            if (elog.resends < 8)
+                elog.resend_len[elog.resends] = len;
+            elog.resends++;
+        } else if (accept) {
+            elog.drops += 100; /* no bytes to send: wrong */
+        }
+        return 0;
+    }
     if (accept)
         elog.accepts++;
     else
@@ -705,8 +718,20 @@ static int e_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t
     return 0;
 }
 
+static void e_detach(const void *pctx, void *out)
+{
+    uint32_t id;
+    memcpy(&id, pctx, sizeof(id));
+    id |= 0x80000000u;
+    memcpy(out, &id, sizeof(id));
+}
+
 static const backend ebe = {
-    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, e_verdict, e_inject, 0, NULL, NULL, NULL, NULL,
+    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, e_verdict, e_inject, 0, NULL, NULL, NULL, NULL, NULL,
+};
+/* NFQUEUE-like: held packets are dropped at once and sent anew */
+static const backend ebe_d = {
+    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, e_verdict, e_inject, 0, NULL, NULL, NULL, NULL, e_detach,
 };
 
 static int ext_on(const char *opt, const char *val)
@@ -730,6 +755,76 @@ static void eng_pkt(engine *e, int c2s, unsigned flags, uint32_t seq, uint32_t a
     uint32_t id = 1;
     size_t n = mkraw(b, c2s, 0, flags, seq, ack, win, d, dl);
     engine_packet(&e->w[0], b, n, c2s ? DIR_OUT : DIR_IN, &id);
+}
+
+/* a client's packet that comes in */
+static void eng_pkt_in(engine *e, unsigned flags, uint32_t seq, uint32_t ack, uint16_t win, const uint8_t *d,
+                       size_t dl)
+{
+    uint8_t b[2100];
+    uint32_t id = 1;
+    size_t n = mkraw(b, 1, 0, flags, seq, ack, win, d, dl);
+    engine_packet(&e->w[0], b, n, DIR_IN, &id);
+}
+
+TEST(l7_engine_detach)
+{
+    engine e;
+    engine_opts o;
+    sbuf err;
+    size_t n;
+    uint8_t *ch = load("tests/data/ext/tls_clienthello_chromium_mlkem.bin", &n);
+    if (!ch)
+        return;
+    CHECK_INT(ext_on(NULL, NULL), 0);
+    sb_init(&err);
+    engine_opts_default(&o);
+    o.ext = ext_engine_hooks();
+    memset(&e, 0, sizeof(e));
+    e.o = &o;
+    e.be = &ebe_d;
+    plat_mutex_init(&e.lock);
+    e.st = strategy_parse("[L7:host:example.com]-duplicate-| \\/", &err);
+    CHECK(e.st != NULL);
+    CHECK_INT(engine_workers_init(&e, 1, &err), 0);
+    memset(&elog, 0, sizeof(elog));
+    eng_pkt(&e, 1, S, 1000, 0, 64000, NULL, 0);
+    eng_pkt(&e, 0, S | A, 5000, 1001, 65535, NULL, 0);
+    eng_pkt(&e, 1, A, 1001, 5001, 64000, NULL, 0);
+    /* held: the captured packet is dropped now */
+    eng_pkt(&e, 1, P | A, 1001, 5001, 64000, ch, 1000);
+    CHECK_INT(elog.drops, 1);
+    CHECK_INT(e.w[0].c.held, 1);
+    /* the second piece completes the hello: both go anew, each with its copy */
+    eng_pkt(&e, 1, P | A, 2001, 5001, 64000, ch + 1000, n - 1000);
+    CHECK_INT(elog.drops, 2);
+    CHECK_INT(elog.resends, 2);
+    CHECK_INT((int)elog.resend_len[0], (int)(40 + 1000));
+    CHECK_INT((int)elog.resend_len[1], (int)(40 + n - 1000));
+    CHECK_INT(elog.injects, 2);
+    CHECK_INT(elog.accepts, 3);
+    /* a client from outside (--server-side): its packet stays held, not
+     * dropped, and goes on its own verdict when the flow starts over */
+    eng_pkt_in(&e, S, 7000, 0, 64000, NULL, 0);
+    eng_pkt(&e, 0, S | A, 5000, 7001, 65535, NULL, 0);
+    eng_pkt_in(&e, P | A, 7001, 5001, 64000, ch, 1000);
+    CHECK_INT(e.w[0].c.held, 3);
+    CHECK_INT(elog.drops, 2);
+    CHECK_INT(elog.resends, 2);
+    /* the capture closes: a held packet is sent as it was */
+    eng_pkt(&e, 1, S, 9000, 0, 64000, NULL, 0);
+    eng_pkt(&e, 0, S | A, 5000, 9001, 65535, NULL, 0);
+    eng_pkt(&e, 1, P | A, 9001, 5001, 64000, ch, 1000);
+    CHECK_INT(elog.drops, 3);
+    engine_run_timers(&e, 1);
+    engine_workers_free(&e);
+    CHECK_INT(elog.resends, 3);
+    CHECK_INT((int)elog.resend_len[2], (int)(40 + 1000));
+    strategy_free(e.st);
+    plat_mutex_destroy(&e.lock);
+    sb_free(&err);
+    ext_reset();
+    free(ch);
 }
 
 TEST(l7_engine)
@@ -813,6 +908,7 @@ void suite_l7(void)
 #  endif
     RUN(l7_triggers);
     RUN(l7_engine);
+    RUN(l7_engine_detach);
 }
 
 #else
