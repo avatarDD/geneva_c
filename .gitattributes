@@ -1,3 +1,4 @@
 # Test payloads are bytes, never text to convert
 *.bin binary
 *.pcap binary
+tests/data/lists/* binary

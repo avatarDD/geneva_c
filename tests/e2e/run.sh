@@ -309,6 +309,22 @@ for FW in $FIREWALLS; do
     stop_case
     check "the ClientHello with profile 1" '[ $(grep "Flags \[P.\]" "$WORK/cap.txt" | grep -c "win 7,") -ge 2 ]'
     check "the plain data with profile 2" '[ $(grep "Flags \[P.\]" "$WORK/cap.txt" | grep -c "win 9,") -eq 1 ]'
+
+    # host lists (stage X6b): the ClientHello names example.com, in the
+    # list (gzip, a subdomain entry and a parent): profile 1; the list
+    # changed and SIGHUP: profile 2
+    printf '# hosts\nwww.example.com\n^com\n' | gzip > "$WORK/hosts.gz"
+    start_case "profiles by host list" "$FW" '[TCP:flags:PA]-tamper{TCP:window:replace:7}-| \/' 10.77.0.2 \
+        "--ext --hostlist-domains example.com --hostlist-exclude $WORK/hosts.gz --new=rest --filter-tcp $PORT -f $WORK/strategy2 --control unix:$WORK/ctl.sock"
+    exchange_ch && ok "TLS exchange works" || bad "TLS exchange failed"
+    printf 'example.com\n' | gzip > "$WORK/hosts.gz"
+    kill -HUP $ENG; sleep 0.3
+    exchange_ch && ok "TLS exchange works after SIGHUP" || bad "TLS exchange failed after SIGHUP"
+    check "ctl reload_lists" 'ip netns exec $NC $GENEVA ctl -c unix:$WORK/ctl.sock reload_lists | grep -q "\"files\":1"'
+    stop_case
+    check "the first ClientHello with profile 1" '[ $(grep "Flags \[P.\]" "$WORK/cap.txt" | grep -c "win 7,") -ge 2 ]'
+    check "the second with profile 2 (excluded)" '[ $(grep "Flags \[P.\]" "$WORK/cap.txt" | grep -c "win 9,") -ge 2 ]'
+    check "the list was read again" 'grep -q "loaded 1 hosts" "$WORK/eng.log"'
     fi
 
     start_case "SIGHUP reload" "$FW" '\/'

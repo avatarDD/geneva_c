@@ -148,6 +148,15 @@ Extensions (with --ext):
       --filter-ipp PROTO,..|*    the profile takes these other IP protocols
       --filter-l7 LIST           the profile takes flows of these L7 protocols (tls,quic,http,...)
       --filter-mark MARK[/MASK]  the profile takes packets with this fwmark
+      --hostlist FILE            the profile takes hosts of FILE and their subdomains (^NAME: no subdomains, !NAME: never; gzip ok; re-read on change); repeatable
+      --hostlist-domains NAME,.. the same with the names given here
+      --hostlist-exclude FILE    the profile does not take hosts of FILE
+      --hostlist-exclude-domains NAME,..
+                                 the same with the names given here
+      --ipset FILE               the profile takes servers of FILE (IPv4/IPv6 addresses and subnets; gzip ok; re-read on change); repeatable
+      --ipset-ip CIDR,..         the same with the subnets given here
+      --ipset-exclude FILE       the profile does not take servers of FILE
+      --ipset-exclude-ip CIDR,.. the same with the subnets given here
       --ext-profile FILE         profiles from FILE ([profile NAME] sections; after those of the command line); repeatable
 [exit 0]
 ### censor-ext-list
@@ -818,3 +827,13 @@ EOF
 $ $G fw print --ext --filter-tcp 80 --new=rest
 geneva fw: profile 2 (rest) takes every port: give -p (and --proto)
 [exit 2]
+### apply-ext-lists
+$ $G apply --ext --hostlist-domains example.org --filter-tcp 80 -s '[TCP:flags:PA]-tamper{TCP:urgptr:replace:9}-| \/' --new=ips --ipset-ip 93.184.215.0/24,2a00::/16 --ipset-exclude-ip 93.184.215.99 -s '[TCP:flags:PA]-tamper{TCP:window:replace:7}-| \/' --new=gz --hostlist ../data/lists/hosts.txt.gz -s '\/' -i $D/l7.pcap -p 80,443 -v -o $T/out.pcap 2>/dev/null && cksum < $T/out.pcap
+2992150796 6443
+[exit 0]
+### apply-ext-lists-bad
+$ $G apply --ext --hostlist no-such-list -s '\/' -i $D/l7.pcap; $G apply --ext --ipset-ip 1.2.3.4/33 -s '\/' -i $D/l7.pcap; $G apply --ext --ipset ok.txt --ipset ./ok.txt -s '\/' -i $D/l7.pcap 2>&1 | grep -v ' lists: '
+geneva apply: profile 1: cannot access no-such-list: No such file or directory
+geneva apply: profile 1: bad --ipset-ip item 1.2.3.4/33 (an IPv4 or IPv6 address or subnet)
+geneva apply: profile 1: --ipset ./ok.txt is already in this profile
+[exit 0]

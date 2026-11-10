@@ -524,6 +524,14 @@ if [ -n "${NFQWS2_DIR:-}" ] && { on nfqws2 || on diff; }; then
 --new=tls --filter-tcp 443 --filter-l7 tls -s '[TCP:flags:PA]-xdisorder{pos=1,midsld}-| \\/'" \
         --filter-tcp=80 --filter-l7=http --payload=http_req --lua-desync=multisplit:pos=method+2 \
         --new --filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=multidisorder:pos=1,midsld
+    # lists (stage X6b): TLS by the host name (a parent domain, an exclude),
+    # HTTP by the server's subnet (its Host is the address)
+    xdiff lists "$HR; $TR; https other.example" "--filter-tcp 443 --hostlist-domains example \
+--hostlist-exclude-domains other.example -s '[TCP:flags:PA]-xdisorder{pos=1,midsld}-| \\/' \
+--new=ip --filter-tcp 80 --ipset-ip 10.81.2.0/24 -s '[TCP:flags:PA]-xsplit{pos=method+2}-| \\/'" \
+        --filter-tcp=443 --hostlist-domains=example --hostlist-exclude-domains=other.example \
+        --payload=tls_client_hello --lua-desync=multidisorder:pos=1,midsld \
+        --new --filter-tcp=80 --ipset-ip=10.81.2.0/24 --payload=http_req --lua-desync=multisplit:pos=method+2
 fi
 
 # Position parity (stage X3): nfqws2 runs zapret2's posdebug on every packet

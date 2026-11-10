@@ -80,9 +80,9 @@ struct ct_flow {
     void *xa;
     /* its profile (src/ext/profile.c): the index, -1 for none; looked for
      * xprof_done times (0: not yet), the last time with the L7 protocol
-     * xprof_l7 */
+     * xprof_l7 and (xprof_host) the host name */
     int16_t xprof;
-    uint8_t xprof_done, xprof_l7;
+    uint8_t xprof_done, xprof_l7, xprof_host;
 
     /* table links */
     ct_flow *hnext, *lprev, *lnext;

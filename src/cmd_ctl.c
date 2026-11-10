@@ -92,7 +92,8 @@ int cmd_ctl(int argc, char **argv)
         args_help("Usage: geneva ctl [options] COMMAND [key=value...]\n"
                   "Talks to \"geneva run --control ADDR\". Commands: status, stats, reset_stats,\n"
                   "set_strategy strategy=..., reload, pause, resume, log_level level=...,\n"
-                  "subscribe, stop, ping, version. Prints the JSON answer; exit code 1 if\n"
+                  "subscribe, stop, ping, version, reload_lists (run --ext: re-read the\n"
+                  "--hostlist/--ipset files). Prints the JSON answer; exit code 1 if\n"
                   "it is not ok.",
                   defs);
         rc = EXIT_OK;
