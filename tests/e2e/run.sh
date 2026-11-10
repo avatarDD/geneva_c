@@ -46,17 +46,21 @@ def serve(fam, addr):
     s.bind((addr, int(sys.argv[1]))); s.listen(16)
     while True:
         c, _ = s.accept()
-        c.settimeout(5)
-        data = b""
-        try:
-            while not data.endswith(b"\n"):
-                d = c.recv(4096)
-                if not d: break
-                data += d
-            c.sendall(b"echo:" + data)
-        except Exception:
-            pass
-        c.close()
+        # a thread per connection: one a censor cut off waits for its
+        # timeout without holding up the next
+        threading.Thread(target=handle, args=(c,), daemon=True).start()
+def handle(c):
+    c.settimeout(5)
+    data = b""
+    try:
+        while not data.endswith(b"\n"):
+            d = c.recv(4096)
+            if not d: break
+            data += d
+        c.sendall(b"echo:" + data)
+    except Exception:
+        pass
+    c.close()
 if socket.has_ipv6:
     try: socket.socket(socket.AF_INET6).close(); threading.Thread(target=serve, args=(socket.AF_INET6, "::"), daemon=True).start()
     except OSError: pass
@@ -325,6 +329,39 @@ for FW in $FIREWALLS; do
     check "the first ClientHello with profile 1" '[ $(grep "Flags \[P.\]" "$WORK/cap.txt" | grep -c "win 7,") -ge 2 ]'
     check "the second with profile 2 (excluded)" '[ $(grep "Flags \[P.\]" "$WORK/cap.txt" | grep -c "win 9,") -ge 2 ]'
     check "the list was read again" 'grep -q "loaded 1 hosts" "$WORK/eng.log"'
+    fi
+
+    # the autolist (stage X6c): a censor resets the ClientHello naming
+    # example.com; two failures add it, then the strategy runs for it. A
+    # censor that drops it: the retransmissions are the failure, and the
+    # client gets a RST at once
+    if "$GENEVA" version --json | grep -q '"ext_autolist"' &&
+        ip netns exec "$NS" iptables -I INPUT -p tcp --dport $PORT -m string --string example.com --algo bm \
+            -j REJECT --reject-with tcp-reset 2>/dev/null; then
+    rm -f "$WORK/auto.txt" "$WORK/auto.log"
+    start_case "autolist" "$FW" '[TCP:flags:PA]-tamper{TCP:window:replace:7}-| \/' 10.77.0.2 \
+        "--ext --filter-tcp $PORT --hostlist-auto $WORK/auto.txt --hostlist-auto-fail-threshold 2 --hostlist-auto-debug $WORK/auto.log"
+    exchange_ch && bad "the censor let the first through" || ok "the censor resets the first"
+    check "one failure is not enough" '[ ! -s "$WORK/auto.txt" ]'
+    exchange_ch && bad "the censor let the second through" || ok "the censor resets the second"
+    check "example.com is in the autolist" 'grep -qx example.com "$WORK/auto.txt"'
+    exchange_ch
+    stop_case
+    check "then the strategy runs for it" '[ $(grep "Flags \[P.\]" "$WORK/cap.txt" | grep -c "win 7,") -ge 1 ]'
+    check "the debug log" 'grep -q "example.com : profile 1 (noname) : client 10.77.0.1:[0-9]* : proto tls : rseq 1 : incoming RST" "$WORK/auto.log" && grep -q "adding to $WORK/auto.txt" "$WORK/auto.log"'
+    ip netns exec "$NS" iptables -D INPUT -p tcp --dport $PORT -m string --string example.com --algo bm \
+        -j REJECT --reject-with tcp-reset
+    ip netns exec "$NS" iptables -I INPUT -p tcp --dport $PORT -m string --string example.com --algo bm -j DROP
+    rm -f "$WORK/auto.txt" "$WORK/auto.log"
+    start_case "autolist by retransmissions" "$FW" '[TCP:flags:PA]-tamper{TCP:window:replace:7}-| \/' 10.77.0.2 \
+        "--ext --filter-tcp $PORT --hostlist-auto $WORK/auto.txt --hostlist-auto-fail-threshold 1 --hostlist-auto-debug $WORK/auto.log"
+    t0=$(date +%s)
+    exchange_ch && bad "the censor let it through" || ok "the exchange fails"
+    t1=$(date +%s)
+    stop_case
+    check "the client got a RST before its timeout ($((t1 - t0)) s)" '[ $((t1 - t0)) -lt 7 ]'
+    check "retransmissions are the failure" 'grep -q "retrans threshold reached" "$WORK/auto.log" && grep -qx example.com "$WORK/auto.txt"'
+    ip netns exec "$NS" iptables -D INPUT -p tcp --dport $PORT -m string --string example.com --algo bm -j DROP
     fi
 
     start_case "SIGHUP reload" "$FW" '\/'

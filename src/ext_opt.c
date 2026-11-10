@@ -17,9 +17,11 @@ static const char *const ext_only[] = {"new",        "name",       "skip",      
                                        "hostlist-exclude", "hostlist-exclude-domains", "ipset", "ipset-ip",
                                        "ipset-exclude", "ipset-exclude-ip"};
 
+/* and the autolist's: every "hostlist-auto*" */
+
 static int is_ext_only(const char *n)
 {
-    if (!strncmp(n, "ext-", 4))
+    if (!strncmp(n, "ext-", 4) || !strncmp(n, "hostlist-auto", 13))
         return 1;
     for (size_t i = 0; i < sizeof(ext_only) / sizeof(*ext_only); i++)
         if (!strcmp(n, ext_only[i]))

@@ -24,6 +24,7 @@
  *   --hostlist-exclude FILE, --hostlist-exclude-domains NAME,...
  *   --ipset FILE, --ipset-ip CIDR,...                  (the server's address)
  *   --ipset-exclude FILE, --ipset-exclude-ip CIDR,...
+ *   --hostlist-auto FILE, --hostlist-auto-fail-threshold N, ...  (autolist.h)
  *
  * As in zapret2, a profile with any of the tcp, udp, icmp or ipp filters
  * takes none of the protocols it names no filter for; one with none of them
@@ -91,6 +92,15 @@ typedef struct {
      * --hostlist-domains, ... (one of each per profile, zapret2's anon_*) */
     xlistref hl, hl_ex, ips, ips_ex;
     xlist *fixed[4];
+    /* --hostlist-auto: the autolist (also in hl), its parameters (set: the
+     * ones given, for --import) and the fail counters per host */
+    xlist *ahl;
+    int ah_fail_threshold, ah_fail_time, ah_retrans_threshold, ah_retrans_reset, ah_udp_out, ah_udp_in;
+    uint32_t ah_retrans_maxseq, ah_incoming_maxseq;
+    unsigned ah_set;
+    struct xahfail *fails;
+    size_t nfails;
+    uint64_t fails_purged;
 } xprofile;
 
 typedef struct {
@@ -110,6 +120,12 @@ typedef struct {
     const char *host;  /* the host name (lower case, no port), NULL when not known */
     int host_ip;       /* the host name is an IP address: no subdomains */
 } xmatch;
+
+/* A profile with an autolist takes a flow once its host name is known,
+ * whether the host is in its lists or not; the strategy then runs only for
+ * a host that passes them (xprof_hosts). */
+int xprof_hosts(const xprofile *p, const char *host, int host_ip, int *excluded);
+int xprof_hostlists_empty(const xprofile *p);
 
 /* Does a command line use profiles (any profile option)? */
 int xprof_wanted(const args_t *a);

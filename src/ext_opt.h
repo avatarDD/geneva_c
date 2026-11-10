@@ -72,6 +72,28 @@
     {"ipset-ip", 0, 1, "CIDR,..", EXT_HELP("the same with the subnets given here")},                       \
     {"ipset-exclude", 0, 1, "FILE", EXT_HELP("the profile does not take servers of FILE")},                 \
     {"ipset-exclude-ip", 0, 1, "CIDR,..", EXT_HELP("the same with the subnets given here")},               \
+    {"hostlist-auto", 0, 1, "FILE",                                                                            \
+     EXT_HELP("autolist: a host of this profile that fails without the strategy is added to FILE (created "   \
+              "when missing; it is a --hostlist of the profile too)")},                                        \
+    {"hostlist-auto-fail-threshold", 0, 1, "N", EXT_HELP("failures that add a host (3; 1..20)")},             \
+    {"hostlist-auto-fail-time", 0, 1, "SEC", EXT_HELP("... within SEC seconds (60)")},                        \
+    {"hostlist-auto-retrans-threshold", 0, 1, "N",                                                            \
+     EXT_HELP("TCP: N retransmissions of the client's request are a failure (3; 2..10)")},                   \
+    {"hostlist-auto-retrans-maxseq", 0, 1, "BYTES",                                                           \
+     EXT_HELP("... counted within the client's first BYTES; past them the site works (32768)")},             \
+    {"hostlist-auto-retrans-reset", 0, 2, "0|1",                                                              \
+     EXT_HELP("send the client a RST after a retransmission failure (1)")},                                  \
+    {"hostlist-auto-incoming-maxseq", 0, 1, "BYTES",                                                          \
+     EXT_HELP("TCP: a RST or an HTTP redirect to another domain within the server's first BYTES is a "        \
+              "failure, data past them a success (4096; 0: off)")},                                          \
+    {"hostlist-auto-udp-out", 0, 1, "N",                                                                      \
+     EXT_HELP("UDP: N packets out with at most --hostlist-auto-udp-in back are a failure (4; 0: off)")},     \
+    {"hostlist-auto-udp-in", 0, 1, "N", EXT_HELP("... and more than N back a success (1)")},                  \
+    {"hostlist-auto-debug", 0, 1, "FILE", EXT_HELP("log every autolist decision to FILE")},                    \
+    {"ext-ipcache-lifetime", 0, 1, "SEC",                                                                     \
+     EXT_HELP("how long the IP cache keeps an address's host name and TTL (7200; 0: for ever)")},             \
+    {"ext-ipcache-hostname", 0, 2, "0|1",                                                                     \
+     EXT_HELP("cache host names by address (from DNS answers and flows) for the next flows' profile search")}, \
     {"ext-profile", 0, 1, "FILE", EXT_HELP("profiles from FILE ([profile NAME] sections; after those of the "  \
                                            "command line); repeatable")}
 

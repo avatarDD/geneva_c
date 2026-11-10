@@ -133,6 +133,8 @@ static int load(xlist *l, sbuf *err)
         if (bad)
             LOGW("lists", "%s: %zu bad ip or subnet (the first: %s)", l->name, bad, first_bad);
     }
+    if (l->autolist && !l->hs.n)
+        xhs_add(&l->hs, "@&()", 4, 0); /* NonEmptyHostlist */
     l->mtime = mt;
     l->mtime_ns = ns;
     l->size = sz;
@@ -179,6 +181,48 @@ xlist *xlist_file(const char *path, int ip, sbuf *err)
     }
     reg(l);
     return l;
+}
+
+xlist *xlist_auto(const char *path, sbuf *err)
+{
+    FILE *f = fopen(path, "ab");
+    uint8_t m[2] = {0, 0};
+    xlist *l;
+    if (!f) {
+        sb_printf(err, "cannot create %s: %s", path, strerror(errno));
+        return NULL;
+    }
+    fclose(f);
+    if ((f = fopen(path, "rb"))) {
+        size_t got = fread(m, 1, 2, f);
+        fclose(f);
+        if (xinf_is_gzip(m, got)) {
+            sb_printf(err, "%s: an autolist cannot be in gzip", path);
+            return NULL;
+        }
+    }
+    if (!(l = xlist_file(path, 0, err)))
+        return NULL;
+    if (!l->autolist) {
+        l->autolist = 1;
+        if (!l->hs.n)
+            xhs_add(&l->hs, "@&()", 4, 0);
+    }
+    return l;
+}
+
+int xlist_append(xlist *l, const char *host)
+{
+    FILE *f;
+    int ok;
+    xhs_add(&l->hs, host, strlen(host), 0);
+    if (!l->path || !(f = fopen(l->path, "a")))
+        return -1;
+    ok = fprintf(f, "%s\n", host) > 0;
+    ok &= fclose(f) == 0;
+    /* what we wrote is what is loaded: no reload for it */
+    sig(l->path, &l->mtime, &l->mtime_ns, &l->size);
+    return ok ? 0 : -1;
 }
 
 xlist *xlist_fixed(int ip)
@@ -263,9 +307,13 @@ int xlists_host(const xlistref *inc, const xlistref *exc, const char *host, int 
         }
     if (xlistref_empty(inc))
         return 1; /* zapret2: every include list empty, the check passes */
-    for (size_t i = 0; i < inc->n; i++)
-        if (xhs_search(&inc->v[i]->hs, host, no_subdom, NULL))
+    for (size_t i = 0; i < inc->n; i++) {
+        int ex;
+        if (xhs_search(&inc->v[i]->hs, host, no_subdom, &ex))
             return 1;
+        if (ex && inc->v[i]->autolist && excluded)
+            *excluded = 1; /* in an autolist "!" is an exclusion */
+    }
     return 0;
 }
 

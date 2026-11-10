@@ -92,8 +92,9 @@ jobs:
       # X2 (lab censors 12-20, TLS/QUIC reading, AES-GCM/HKDF): about 16 KB
       # X3 (conntrack, ranges, FLOW:/META: triggers): about 8 KB more
       # X5a (x-actions, blobs, tls_mod, the sending path): about 48 KB more
-      - run: tools/ext_size.sh 147456 CC=musl-gcc CFLAGS="-Werror"
-      - run: tools/ext_size.sh 143360 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
+      # X6c (autolist, ipcache): about 16 KB more
+      - run: tools/ext_size.sh 167936 CC=musl-gcc CFLAGS="-Werror"
+      - run: tools/ext_size.sh 159744 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
       - run: ls -la build/geneva && file build/geneva
 
   windows-cross:
