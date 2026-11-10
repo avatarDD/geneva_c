@@ -90,6 +90,15 @@ done
 ok() { echo "  ok   $1"; }
 bad() { fails=$((fails + 1)); echo "  FAIL $1"; [ -n "${2:-}" ] && sed 's/^/       /' "$2" | tail -30; }
 
+# sockets: what is left on the service ports (a stray RST or FIN turns
+# censor 6 off), for a failure's report
+sockets() {
+    for n in "$NC" "$NS"; do
+        echo "       sockets in $n:"
+        ip netns exec "$n" ss -tanoi '( sport = :80 or dport = :80 )' 2>&1 | sed 's/^/         /' | tail -20
+    done
+}
+
 # start_censor NAME [options]: runs it on the router and waits until it is ready
 start_censor() {
     : > "$WORK/cen.jsonl"
@@ -258,7 +267,7 @@ EOS
     for c in ${SERVER_CENSORS:-1 2 3 5 6 7}; do
         start_censor "$c" || continue
         f=$(sev)
-        positive "${f:-0}" && bad "censor $c: not blocked through the agent ($f)" "$WORK/cen.log" ||
+        positive "${f:-0}" && { bad "censor $c: not blocked through the agent ($f)" "$WORK/cen.log"; sockets; } ||
             ok "censor $c blocks the agent ($f)"
         while IFS='|' read -r list strategy; do
             echo " $list " | grep -q " $c " || continue

@@ -611,6 +611,9 @@ static int check6(censor *c, const view *v)
     if (!v->tcp)
         return NO;
     if (FLAGS_ARE(v, F_RST) || FLAGS_ARE(v, F_RST | F_ACK) || FLAGS_ARE(v, F_FIN)) {
+        if (c->state != T_NONE)
+            LOGD("censor", "6: stops watching on flags 0x%02x, port %u -> %u", (unsigned)v->flags,
+                 (unsigned)v->sport, (unsigned)v->dport);
         c->state = T_NONE;
         return NO;
     }
