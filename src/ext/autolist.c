@@ -23,7 +23,7 @@ int xah_debug_log(const char *path)
     g_debug = NULL;
     if (!path)
         return 0;
-    if (!(f = fopen(path, "a")))
+    if (!(f = fopen(path, "ab")))
         return -1;
     fclose(f);
     g_debug = xstrdup(path);
@@ -38,7 +38,7 @@ static void debug(const char *fmt, ...)
     va_list ap;
     time_t now;
     struct tm t;
-    if (!g_debug || !(f = fopen(g_debug, "a")))
+    if (!g_debug || !(f = fopen(g_debug, "ab")))
         return;
     time(&now);
 #ifdef _WIN32

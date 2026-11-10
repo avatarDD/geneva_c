@@ -216,7 +216,7 @@ int xlist_append(xlist *l, const char *host)
     FILE *f;
     int ok;
     xhs_add(&l->hs, host, strlen(host), 0);
-    if (!l->path || !(f = fopen(l->path, "a")))
+    if (!l->path || !(f = fopen(l->path, "ab") /* "\n" lines on Windows too */))
         return -1;
     ok = fprintf(f, "%s\n", host) > 0;
     ok &= fclose(f) == 0;
