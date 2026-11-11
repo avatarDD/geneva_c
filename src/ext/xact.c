@@ -14,12 +14,13 @@
 #include "l7.h"
 #include "log.h"
 #include "rng.h"
+#include "seqtrack.h"
 
 static const xa_kind *const kinds[] = {
     &xa_send,     &xa_mod,    &xa_fake,  &xa_split,  &xa_disorder, &xa_tcpseg,  &xa_hostfake,
     &xa_fakedsplit, &xa_fakeddisorder, &xa_synacksplit, &xa_synack, &xa_wsize, &xa_wssize, &xa_syndata,
     &xa_rst,      &xa_http,   &xa_tlsclone, &xa_udplen, &xa_dhtdn, &xa_xlog,  &xa_tag,     &xa_pcap,
-    &xa_when,     &xa_stop,   &xa_repeat, &xa_cutoffk,
+    &xa_when,     &xa_stop,   &xa_repeat, &xa_cutoffk, &xa_oob,    &xa_tlsrec, &xa_drip,
 };
 
 /* ---- keys ------------------------------------------------------------------ */
@@ -822,6 +823,7 @@ typedef struct {
 
 void xact_flow_clear(ct_flow *f)
 {
+    xseq_free(f);
     free(f->xa);
     f->xa = NULL;
 }

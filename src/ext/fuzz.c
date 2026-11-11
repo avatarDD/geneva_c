@@ -272,6 +272,10 @@ static const char *const ext_strategies[] = {
     "[L7:host:example.com]-xfake{blob=fake_default_tls;ttl=4}-| \\/",
     "[FLOW:n:<5]-xmod{ttl=5}-| \\/",
     "[TCP:flags:PA]-xwhen{iff=cond_payload_str;pattern=GET}(xsplit{pos=method+2},xmod{ttl=6})-| \\/",
+    "[FLOW:n:1-]-xoob{urp=e;char=X}-| \\/",
+    "[FLOW:n:1-]-xoob{urp=midsld}-| \\/",
+    "[FLOW:n:1-]-xtlsrec{pos=sniext+1}-| \\/",
+    "[TCP:flags:PA]-xdrip{n=3;delay=5}-| \\/",
     NULL,
 };
 
@@ -420,7 +424,7 @@ static void t_apply(const uint8_t *d, size_t n)
         if (!(p = pkt_parse(raw, len)))
             continue;
         xctx = xoff_packet(xo, &pst, p, dir, now, raw, len, apply_replay, NULL, &v);
-        if (v == XOFF_HOLD) {
+        if (v == XOFF_HOLD || v == XOFF_DROP) {
             pkt_free(p);
             continue;
         }

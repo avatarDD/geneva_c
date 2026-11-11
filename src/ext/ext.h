@@ -55,15 +55,17 @@ void xoff_free(xoffline *x);
  * goes on as it is, outside the strategy. */
 typedef void (*xoff_replay_fn)(void *ud, const uint8_t *raw, size_t len, strat_dir dir, unsigned piece,
                                unsigned pieces, void *xctx);
-enum { XOFF_RUN = 0, XOFF_BYPASS, XOFF_HOLD };
+enum { XOFF_RUN = 0, XOFF_BYPASS, XOFF_HOLD, XOFF_DROP };
 /* The context for strategy_apply_x() for p (raw: its bytes). With
  * profiles, *st (the command's strategy) becomes that of p's profile, and
  * NULL when no profile takes p. *verdict:
  * XOFF_RUN, run the strategy; XOFF_BYPASS, every tree of dir is cut off on
  * its flow, so the packet passes by the strategy; XOFF_HOLD, p is held for
- * a reassembly and leaves later through fn (NULL is returned). fn may be
- * called before the return for packets held earlier, p among them. */
-void *xoff_packet(xoffline *x, strategy **st, const gpkt *p, strat_dir dir, uint64_t now_ms, const uint8_t *raw,
+ * a reassembly and leaves later through fn (NULL is returned); XOFF_DROP,
+ * p does not go out (seqtrack sent its part again through fn). fn may be
+ * called before the return for packets held earlier, p among them, and
+ * seqtrack may change p (src/ext/seqtrack.h). */
+void *xoff_packet(xoffline *x, strategy **st, gpkt *p, strat_dir dir, uint64_t now_ms, const uint8_t *raw,
                   size_t rawlen, xoff_replay_fn fn, void *ud, int *verdict);
 /* At the end of the capture: packets still held go through fn alone. */
 void xoff_end(xoffline *x, strategy *st, xoff_replay_fn fn, void *ud);

@@ -437,6 +437,15 @@ int cmd_apply(int argc, char **argv)
                 pkt_free(p);
                 continue;
             }
+            if (v == XOFF_DROP) {
+                if (verbose) {
+                    describe(p, &line);
+                    fprintf(stderr, "#%llu %s %s -> dropped (seqtrack)\n", (unsigned long long)n_in,
+                            dir == DIR_OUT ? "out" : "in", line.data);
+                }
+                pkt_free(p);
+                continue;
+            }
             if (v == XOFF_BYPASS)
                 run = 0;
         }

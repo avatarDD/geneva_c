@@ -42,6 +42,7 @@ void suite_autolist(void);
 void suite_svc(void);
 void suite_fwx(void);
 void suite_fuzz(void);
+void suite_xseq(void);
 
 int main(void)
 {
@@ -71,6 +72,7 @@ int main(void)
     suite_svc();
     suite_fwx();
     suite_fuzz();
+    suite_xseq();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }
