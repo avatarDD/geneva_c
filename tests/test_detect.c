@@ -16,6 +16,7 @@
 
 #if GENEVA_EXT
 #  include "ext/auto.h"
+#  include "ext/ctnl.h"
 #  include "ext/detect.h"
 #  include "ext/ipcache.h"
 #  include "ext/nflog.h"
@@ -66,6 +67,8 @@ static size_t mk(uint8_t *b, const fl *f, int from_server, unsigned flags, uint3
 
 typedef struct {
     int flows_ok, flows_bad, last_cls;
+    int links, link_deg;
+    unsigned link_bad, link_active;
     char last_host[64];
     int nkey;
     struct {
@@ -97,6 +100,15 @@ static void on_key(void *ud, const xdet_key_ev *ev)
     }
 }
 
+static void on_link(void *ud, int degraded, unsigned bad, unsigned active)
+{
+    rec *r = ud;
+    r->links++;
+    r->link_deg = degraded;
+    r->link_bad = bad;
+    r->link_active = active;
+}
+
 /* the last event of a key: 1 impaired, 0 healthy, -1 none */
 static int key_state(const rec *r, const char *key, int *cls)
 {
@@ -113,7 +125,7 @@ static xdet *det(rec *r)
 {
     xdet_config c;
     ct_config ct;
-    xdet_sink s = {on_flow, on_key, NULL};
+    xdet_sink s = {on_flow, on_key, on_link, NULL};
     memset(r, 0, sizeof(*r));
     s.ud = r;
     xipc_reset();
@@ -449,9 +461,422 @@ TEST(detect_cache_multicast)
     xipc_reset();
 }
 
+/* ---- volume (X9b) ---- */
+
+/* the conntrack's counters of flow f */
+static void ctr(xdet *d, const fl *f, uint64_t rbytes, int open, uint64_t now)
+{
+    xdet_ctr c;
+    memset(&c, 0, sizeof(c));
+    c.t.ver = 4;
+    c.t.proto = f->udp ? 17 : 6;
+    c.t.cli[0] = 10, c.t.cli[3] = 1;
+    c.t.srv[0] = 10, c.t.srv[1] = 9, c.t.srv[2] = f->srv, c.t.srv[3] = 2;
+    c.t.cport = f->cport;
+    c.t.sport = f->sport;
+    c.found = 1;
+    c.open = open;
+    c.rbytes = rbytes;
+    xdet_counters(d, &c, now);
+}
+
+static int g_nreq;
+static xdet_tuple g_req;
+static void on_req(void *ud, const xdet_tuple *t)
+{
+    (void)ud;
+    g_nreq++;
+    g_req = *t;
+}
+
+/* the keys as ext_keys shows them */
+static void keys_json(xdet *d, sbuf *s)
+{
+    jw w;
+    sb_reset(s);
+    jw_init(&w, s);
+    xdet_keys_json(d, &w, 0);
+}
+
+/* a download that stops at b bytes for 3 s while the flow stays open */
+static void freeze_flow(xdet *d, fl *f, uint64_t b)
+{
+    uint64_t t;
+    ok_flow(d, f);
+    t = g_now;
+    ctr(d, f, b, 1, t);
+    ctr(d, f, b, 1, t + 2900);
+    ctr(d, f, b, 1, t + 3000);
+    g_now = t + 3010;
+    f->cport++;
+}
+
+TEST(detect_freeze)
+{
+    rec r;
+    xdet *d = det(&r);
+    fl f = {41000, 443, 20, 0, 0};
+    sbuf s;
+    int cls = 0;
+    sb_init(&s);
+    /* the watch: one request per watched flow and tick */
+    ok_flow(d, &f);
+    g_nreq = 0;
+    xdet_tick(d, g_now, on_req, NULL);
+    CHECK_INT(g_nreq, 1);
+    CHECK_INT(g_req.cport, 41000);
+    CHECK_INT(g_req.srv[2], 20);
+    /* a flow that closes is no freeze, and its watch ends */
+    ctr(d, &f, 20000, 0, g_now + 5000);
+    g_nreq = 0;
+    xdet_tick(d, g_now + 5000, on_req, NULL);
+    CHECK_INT(g_nreq, 0);
+    CHECK_INT(r.flows_bad, 0);
+    f.cport++;
+    /* a flow that goes on after a pause is no freeze */
+    ok_flow(d, &f);
+    ctr(d, &f, 20000, 1, g_now);
+    ctr(d, &f, 30000, 1, g_now + 2000);
+    ctr(d, &f, 30000, 1, g_now + 4000);
+    CHECK_INT(r.flows_bad, 0);
+    g_now += 4000;
+    f.cport++;
+    /* three freezes at about 20 KB: the key's class */
+    freeze_flow(d, &f, 20000);
+    CHECK_INT(r.flows_bad, 1);
+    CHECK_INT(r.last_cls, XC_FREEZE);
+    CHECK_INT(key_state(&r, "10.9.20.2", NULL), -1);
+    freeze_flow(d, &f, 20500);
+    CHECK_INT(key_state(&r, "10.9.20.2", NULL), -1);
+    freeze_flow(d, &f, 21500);
+    CHECK_INT(r.flows_bad, 3);
+    CHECK_INT(key_state(&r, "10.9.20.2", &cls), 1);
+    CHECK_INT(cls, XC_FREEZE);
+    CHECK_INT(key_state(&r, "blocked.example", &cls), 1);
+    keys_json(d, &s);
+    CHECK(strstr(s.data, "{\"key\":\"10.9.20.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"FREEZE_N\","
+                         "\"flows\":5,\"fails\":3,\"classes\":{\"FREEZE_N\":3}}") != NULL);
+    /* now a success needs more than twice B (20500) */
+    ok_flow(d, &f);
+    ctr(d, &f, 30000, 0, g_now);
+    keys_json(d, &s);
+    CHECK(strstr(s.data, "\"10.9.20.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"FREEZE_N\",\"flows\":5,") !=
+          NULL);
+    f.cport++;
+    ok_flow(d, &f);
+    ctr(d, &f, 30000, 1, g_now);
+    ctr(d, &f, 50000, 1, g_now + 1000);
+    keys_json(d, &s);
+    CHECK(strstr(s.data, "\"10.9.20.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"FREEZE_N\",\"flows\":6,") !=
+          NULL);
+    /* freezes far apart are no class */
+    f.srv = 21;
+    freeze_flow(d, &f, 10000);
+    freeze_flow(d, &f, 30000);
+    freeze_flow(d, &f, 60000);
+    CHECK_INT(key_state(&r, "10.9.21.2", NULL), -1);
+    /* nor are counts out of [8 KB, 64 KB] */
+    f.srv = 22;
+    for (int i = 0; i < 3; i++)
+        freeze_flow(d, &f, 100000);
+    CHECK_INT(r.flows_bad, 6);
+    xdet_free(d);
+    sb_free(&s);
+}
+
+/* a download of n windows of rate bytes a second, from t */
+static void rate_flow(xdet *d, fl *f, int n, uint64_t rate, int close)
+{
+    uint64_t t, b = 6000;
+    ok_flow(d, f);
+    t = g_now;
+    for (int i = 0; i <= n; i++, b += rate)
+        ctr(d, f, b, 1, t + 1000u * (unsigned)i);
+    if (close)
+        ctr(d, f, b - rate, 0, t + 1000u * (unsigned)n + 10);
+    g_now = t + 1000u * (unsigned)n + 20;
+    f->cport++;
+}
+
+TEST(detect_throttle)
+{
+    rec r;
+    xdet *d = det(&r);
+    fl f = {42000, 443, 30, 0, 0};
+    xdet_stats st;
+    sbuf s;
+    int cls = 0;
+    sb_init(&s);
+    /* without C nothing is slow */
+    f.srv = 33;
+    rate_flow(d, &f, 8, 20000, 1);
+    CHECK_INT(r.flows_bad, 0);
+    /* a fast download: C, 1 MB/s */
+    f.srv = 30;
+    rate_flow(d, &f, 3, 1000000, 1);
+    xdet_get_stats(d, &st);
+    CHECK(st.capacity > 999000 && st.capacity < 1001000);
+    /* a flat 20 KB/s: THROTTLE; twice: the key's class */
+    f.srv = 31;
+    rate_flow(d, &f, 6, 20000, 0);
+    CHECK_INT(r.flows_bad, 1);
+    CHECK_INT(r.last_cls, XC_THROTTLE);
+    rate_flow(d, &f, 6, 20000, 0);
+    CHECK_INT(key_state(&r, "10.9.31.2", &cls), 1);
+    CHECK_INT(cls, XC_THROTTLE);
+    keys_json(d, &s);
+    CHECK(strstr(s.data, "\"10.9.31.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"THROTTLE\",\"flows\":2,") !=
+          NULL);
+    /* now a success needs three times the plateau */
+    rate_flow(d, &f, 3, 50000, 1);
+    keys_json(d, &s);
+    CHECK(strstr(s.data, "\"10.9.31.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"THROTTLE\",\"flows\":2,") !=
+          NULL);
+    rate_flow(d, &f, 3, 100000, 1);
+    keys_json(d, &s);
+    CHECK(strstr(s.data, "\"10.9.31.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"THROTTLE\",\"flows\":3,") !=
+          NULL);
+    /* a rate that varies is no plateau, nor is one with a burst */
+    f.srv = 32;
+    {
+        uint64_t t, b = 6000;
+        static const uint64_t v[] = {0, 5000, 40000, 8000, 30000, 6000, 35000, 9000};
+        ok_flow(d, &f);
+        t = g_now;
+        for (int i = 0; i < 8; i++)
+            ctr(d, &f, b += v[i], 1, t + 1000u * (unsigned)i);
+        g_now = t + 9000;
+    }
+    CHECK_INT(r.flows_bad, 2);
+    xdet_free(d);
+    sb_free(&s);
+}
+
+/* a DNS answer for blocked.example: a, its address; 0 for a stub */
+static size_t dns_ans(uint8_t *m, uint16_t id, const uint8_t a[4])
+{
+    static const uint8_t q[] = {7, 'b', 'l', 'o', 'c', 'k', 'e', 'd', 7, 'E', 'x', 'a', 'm', 'p', 'l', 'e', 0, 0, 1, 0, 1};
+    size_t n = 12;
+    memset(m, 0, 12);
+    put16(m, id);
+    put16(m + 2, 0x8180);
+    put16(m + 4, 1);
+    put16(m + 6, 1);
+    memcpy(m + n, q, sizeof(q));
+    n += sizeof(q);
+    put16(m + n, 0xc00c), put16(m + n + 2, 1), put16(m + n + 4, 1), put32(m + n + 6, 60), put16(m + n + 10, 4);
+    memcpy(m + n + 12, a, 4);
+    return n + 16;
+}
+
+TEST(detect_dns)
+{
+    rec r;
+    xdet *d = det(&r);
+    fl f = {43000, 53, 40, 0, 1};
+    uint8_t b[512], m[256];
+    int cls = 0;
+    static const uint8_t real[4] = {93, 184, 215, 14}, stub[4] = {127, 0, 0, 1}, zero[4] = {0, 0, 0, 0};
+    /* an answer: a success, and a second alike one changes nothing */
+    feed(d, b, mk(b, &f, 0, 0, 0, 0, "q", 1));
+    feed(d, b, mk(b, &f, 1, 0, 0, 0, m, dns_ans(m, 7, real)));
+    CHECK_INT(r.flows_ok, 1);
+    CHECK_STR(r.last_host, "blocked.example");
+    feed(d, b, mk(b, &f, 1, 0, 0, 0, m, dns_ans(m, 7, real)));
+    CHECK_INT(r.flows_bad, 0);
+    /* a stub address */
+    f.cport++;
+    feed(d, b, mk(b, &f, 0, 0, 0, 0, "q", 1));
+    feed(d, b, mk(b, &f, 1, 0, 0, 0, m, dns_ans(m, 8, stub)));
+    CHECK_INT(r.flows_bad, 1);
+    CHECK_INT(r.last_cls, XC_DNS_POISON);
+    /* two answers, the first with another TTL: it was injected */
+    f.cport++;
+    feed(d, b, mk(b, &f, 0, 0, 0, 0, "q", 1));
+    f.ttl = 60;
+    feed(d, b, mk(b, &f, 1, 0, 0, 0, m, dns_ans(m, 9, real)));
+    CHECK_INT(r.flows_ok, 2);
+    f.ttl = 52;
+    feed(d, b, mk(b, &f, 1, 0, 0, 0, m, dns_ans(m, 9, real)));
+    CHECK_INT(r.flows_bad, 2);
+    /* another id is another query; a stub after a real answer is poison */
+    f.cport++;
+    f.ttl = 0;
+    feed(d, b, mk(b, &f, 0, 0, 0, 0, "q", 1));
+    feed(d, b, mk(b, &f, 1, 0, 0, 0, m, dns_ans(m, 10, real)));
+    f.ttl = 50;
+    feed(d, b, mk(b, &f, 1, 0, 0, 0, m, dns_ans(m, 11, real)));
+    CHECK_INT(r.flows_bad, 2);
+    feed(d, b, mk(b, &f, 1, 0, 0, 0, m, dns_ans(m, 11, zero)));
+    CHECK_INT(r.flows_bad, 3);
+    CHECK_INT(key_state(&r, "blocked.example", &cls), 1);
+    CHECK_INT(cls, XC_DNS_POISON);
+    /* the stubs are the name's: the resolver had one injection only */
+    CHECK_INT(key_state(&r, "udp/53", NULL), -1);
+    CHECK_INT(key_state(&r, "10.9.40.2", NULL), -1);
+    /* two more injections: the resolver's port too */
+    for (int i = 0; i < 2; i++) {
+        f.cport++;
+        f.ttl = 60;
+        feed(d, b, mk(b, &f, 0, 0, 0, 0, "q", 1));
+        feed(d, b, mk(b, &f, 1, 0, 0, 0, m, dns_ans(m, (uint16_t)(20 + i), real)));
+        f.ttl = 52;
+        feed(d, b, mk(b, &f, 1, 0, 0, 0, m, dns_ans(m, (uint16_t)(20 + i), real)));
+    }
+    CHECK_INT(key_state(&r, "udp/53", &cls), 1);
+    CHECK_INT(cls, XC_DNS_POISON);
+    f.ttl = 0;
+    /* queries without an answer */
+    f.cport++;
+    for (int i = 0; i < 4; i++)
+        feed(d, b, mk(b, &f, 0, 0, 0, 0, "q", 1));
+    CHECK_INT(r.flows_bad, 6);
+    CHECK_INT(r.last_cls, XC_UDP_NOANSWER);
+    /* junk and a query are no answer */
+    f.cport++;
+    feed(d, b, mk(b, &f, 1, 0, 0, 0, "\x01\x02\x81\x80\0\1\0\1\0\0\0\0\x05" "abc", 17));
+    m[2] = 0x01;
+    feed(d, b, mk(b, &f, 1, 0, 0, 0, m, dns_ans(m, 12, stub) - 0));
+    CHECK_INT(r.flows_bad, 6);
+    xdet_free(d);
+}
+
+TEST(detect_link)
+{
+    rec r;
+    xdet *d = det(&r);
+    fl f = {44000, 443, 50, 0, 0};
+    uint8_t b[256];
+    for (int i = 0; i < 5; i++, f.srv++, f.cport++)
+        if (i < 2) {
+            feed(d, b, mk(b, &f, 0, S, CISN, 0, NULL, 0));
+            feed(d, b, mk(b, &f, 0, S, CISN, 0, NULL, 0));
+        } else {
+            ok_flow(d, &f);
+        }
+    xdet_tick(d, g_now, NULL, NULL);
+    CHECK_INT(r.links, 1);
+    CHECK_INT(r.link_deg, 1);
+    CHECK_INT(r.link_bad, 2);
+    CHECK_INT(r.link_active, 5);
+    xdet_tick(d, g_now + 500, NULL, NULL);
+    CHECK_INT(r.links, 1);
+    g_now += 31000;
+    xdet_tick(d, g_now, NULL, NULL);
+    CHECK_INT(r.links, 2);
+    CHECK_INT(r.link_deg, 0);
+    /* one bad address of five is no degradation */
+    f.srv = 60;
+    for (int i = 0; i < 5; i++, f.srv++, f.cport++)
+        if (!i) {
+            feed(d, b, mk(b, &f, 0, S, CISN, 0, NULL, 0));
+            feed(d, b, mk(b, &f, 0, S, CISN, 0, NULL, 0));
+        } else {
+            ok_flow(d, &f);
+        }
+    g_now += 1000;
+    xdet_tick(d, g_now, NULL, NULL);
+    CHECK_INT(r.links, 2);
+    xdet_free(d);
+}
+
+/* ---- ctnetlink ---- */
+
+static void h16(uint8_t *p, uint16_t v) { memcpy(p, &v, 2); }
+static void h32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
+
+static size_t nla(uint8_t *p, uint16_t type, const void *d, size_t n)
+{
+    h16(p, (uint16_t)(4 + n));
+    h16(p + 2, type);
+    memcpy(p + 4, d, n);
+    memset(p + 4 + n, 0, ((4 + n + 3) & ~3u) - (4 + n));
+    return (4 + n + 3) & ~3u;
+}
+
+static int g_nent;
+static ctnl_entry g_ent;
+static void on_ent(const ctnl_entry *e, void *ctx)
+{
+    (void)ctx;
+    g_nent++;
+    g_ent = *e;
+}
+
+static const ctnl_tuple *lookup7(uint32_t seq, void *ctx)
+{
+    return seq == 7 ? ctx : NULL;
+}
+
+TEST(ctnl_messages)
+{
+    ctnl_tuple t;
+    uint8_t m[512], in[64];
+    size_t n, k;
+    memset(&t, 0, sizeof(t));
+    t.ver = 4, t.proto = 6;
+    t.src[0] = 192, t.src[1] = 168, t.src[3] = 2;
+    t.dst[0] = 10, t.dst[1] = 9, t.dst[3] = 7;
+    t.sport = 40001, t.dport = 443;
+    CHECK_INT(ctnl_build_get(m, 16, &t, 1), 0);
+    n = ctnl_build_get(m, sizeof(m), &t, 5);
+    CHECK_INT(n, 16 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + 8 + 8);
+    CHECK_INT(m[4] | m[5] << 8, 0x101); /* IPCTNL_MSG_CT_GET (little endian host) */
+    CHECK_INT(m[16], 2);
+    /* the kernel's answer: the same tuple, with counters and the TCP state */
+    m[4] = 0;
+    {
+        uint8_t ctrs[64], pk[8] = {0, 0, 0, 0, 0, 0, 0, 99}, by[8] = {0, 0, 0, 0, 0, 1, 0xe2, 0x40};
+        uint8_t st = 3, tcp[16], pi[32];
+        size_t c = 0;
+        c += nla(ctrs + c, 1, pk, 8);
+        c += nla(ctrs + c, 2, by, 8);
+        n += nla(m + n, 10 | 0x8000, ctrs, c);
+        k = nla(tcp, 1, &st, 1);
+        k = nla(pi, 1 | 0x8000, tcp, k);
+        n += nla(m + n, 4 | 0x8000, pi, k);
+        h32(m, (uint32_t)n);
+    }
+    if (!(m[0] == n || m[3] == n)) /* host order: little or big endian */
+        CHECK(0);
+    g_nent = 0;
+    CHECK_INT(ctnl_parse(m, n, NULL, on_ent, NULL), 1);
+    CHECK_INT(g_nent, 1);
+    CHECK_INT(g_ent.found, 1);
+    CHECK_INT(g_ent.t.sport, 40001);
+    CHECK_INT(g_ent.t.dport, 443);
+    CHECK_INT(g_ent.t.proto, 6);
+    CHECK_MEM(g_ent.t.src, 4, t.src, 4);
+    CHECK_MEM(g_ent.t.dst, 4, t.dst, 4);
+    CHECK_INT(g_ent.tcp_state, CTNL_TCP_ESTABLISHED);
+    CHECK_INT(g_ent.rbytes, 123456);
+    CHECK_INT(g_ent.rpackets, 99);
+    /* two in one datagram, the second cut short */
+    memcpy(m + n, m, n);
+    CHECK_INT(ctnl_parse(m, 2 * n - 1, NULL, on_ent, NULL), 1);
+    /* an error answer (ENOENT) to request 7: the flow is gone */
+    memset(in, 0, sizeof(in));
+    h32(in, 36);
+    h16(in + 4, 2);
+    h32(in + 8, 7);
+    h32(in + 16, (uint32_t)-2);
+    g_nent = 0;
+    CHECK_INT(ctnl_parse(in, 36, lookup7, on_ent, &t), 1);
+    CHECK_INT(g_ent.found, 0);
+    CHECK_INT(g_ent.t.sport, 40001);
+    h32(in + 8, 8);
+    CHECK_INT(ctnl_parse(in, 36, lookup7, on_ent, &t), 0);
+    /* an acknowledgement (error 0) is no answer */
+    h32(in + 8, 7);
+    h32(in + 16, 0);
+    CHECK_INT(ctnl_parse(in, 36, lookup7, on_ent, &t), 0);
+    CHECK_INT(ctnl_parse(in, 10, lookup7, on_ent, &t), 0);
+}
+
 TEST(detect_names)
 {
     CHECK_STR(xdet_class_name(XC_RST_INJECT), "RST_INJECT");
+    CHECK_STR(xdet_class_name(XC_FREEZE), "FREEZE_N");
     CHECK_STR(xdet_class_name(XC_N), "?");
     CHECK_STR(xdet_level_name(XK_HOST), "host");
 }
@@ -678,7 +1103,8 @@ TEST(detect_auto_feed)
     xauto_status(&w);
     jw_obj_end(&w);
     CHECK(strstr(s.data, "\"auto\":\"observe\",\"nflog_group\":310,\"observing\":false,\"packets\":4,\"lost\":0,"
-                         "\"flows\":2,\"flows_ok\":0,\"flows_failed\":2,\"keys\":3,\"impaired\":[{\"key\":\"tcp/443\"") !=
+                         "\"flows\":2,\"flows_ok\":0,\"flows_failed\":2,\"keys\":3,\"counters\":false,\"watched\":0,"
+                         "\"capacity\":0,\"link_degraded\":false,\"impaired\":[{\"key\":\"tcp/443\"") !=
           NULL);
     CHECK(strstr(s.data, "\"class\":\"BLACKHOLE_SYN\"") != NULL);
     xauto_reset();
@@ -694,6 +1120,11 @@ void suite_detect(void)
     RUN(detect_redirect);
     RUN(detect_udp_syn_icmp);
     RUN(detect_cache_multicast);
+    RUN(detect_freeze);
+    RUN(detect_throttle);
+    RUN(detect_dns);
+    RUN(detect_link);
+    RUN(ctnl_messages);
     RUN(detect_names);
     RUN(nflog_parse_msgs);
     RUN(detect_fw);

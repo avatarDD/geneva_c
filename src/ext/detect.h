@@ -20,9 +20,39 @@
  *   BLACKHOLE_SYN  syn_tries (2) SYNs without a SYN,ACK
  *   ICMP_PROHIBIT  ICMP unreachable 9, 10 or 13 (ICMPv6 1/1) for the flow
  *
+ * Volume (X9b; the kernel conntrack's counters of the flow, polled about
+ * once a second through xdet_tick/xdet_counters while the flow lives, up to
+ * watch_s):
+ *
+ *   FREEZE_N       the server's bytes stopped at B in [freeze_min,
+ *                  freeze_max] (8 KB, 64 KB), the flow still open and
+ *                  silent for max(4 RTT, freeze_silence_ms (3 s)). A key
+ *                  takes the class when freeze_flows (3) such flows within
+ *                  10 minutes have an interquartile range of B under
+ *                  freeze_iqr (4 KB): a censor freezes at the same count
+ *   THROTTLE       at least throttle_windows (5) one-second windows with
+ *                  data (the first one left out) whose median rate is under
+ *                  throttle_rho (0.25) of the capacity C (the fastest window
+ *                  of any flow lately), coefficient of variation under
+ *                  throttle_cv (0.3), no window over twice the median, and
+ *                  throttle_min_bytes (64 KB) in all: a policer's plateau
+ *   DNS_POISON     a DNS answer with a stub address (0.0.0.0, 127/8, ::,
+ *                  ::1), or two answers to one query, the first with
+ *                  another IP TTL than the second: the first was injected. A stub address counts
+ *                  for the host name's key only: ad-blocking resolvers
+ *                  answer so too
+ *
  * Success (standard_success_detector): the client past retrans_maxseq or
- * the server past incoming_maxseq; UDP: more than udp_in back. A flow gets
- * one outcome; one that ends undecided gets none.
+ * the server past incoming_maxseq; UDP: more than udp_in back; DNS: an
+ * answer. A key impaired with FREEZE_N or THROTTLE takes a success only
+ * from a flow with more than twice the freeze's B, or a median rate over
+ * three times the plateau. A flow gets one outcome; a success that a
+ * later THROTTLE or DNS_POISON proves wrong becomes that failure, one that
+ * FREEZE_N proves wrong is taken back. One that ends undecided gets none.
+ *
+ * LINK_DEGRADED: when at least link_share (30 %) of the addresses with
+ * flows in the last 30 s (at least link_min_keys, 5) had a failure, the
+ * fault is likely the own link: the sink is told (and again when it ends).
  *
  * Keys: the flow's protocol and port ("tcp/443"), the server's network
  * (/24, IPv6 /48), its address and its host name (from the flow's
@@ -54,6 +84,9 @@ enum {
     XC_UDP_NOANSWER,
     XC_BLACKHOLE_SYN,
     XC_ICMP_PROHIBIT,
+    XC_FREEZE,
+    XC_THROTTLE,
+    XC_DNS_POISON,
     XC_N
 };
 const char *xdet_class_name(int c);
@@ -71,6 +104,18 @@ typedef struct {
     double p0, p1, alpha, beta; /* 0.1, 0.6, 0.05, 0.05 */
     size_t max_keys;           /* 4096 */
     unsigned key_idle_s;       /* keys idle this long are forgotten (3600) */
+    /* volume (X9b) */
+    uint32_t freeze_min, freeze_max; /* 8192, 65536 */
+    unsigned freeze_silence_ms;      /* 3000 */
+    uint32_t freeze_iqr;             /* 4096 */
+    int freeze_flows;                /* 3 */
+    double throttle_rho, throttle_cv; /* 0.25, 0.3 */
+    int throttle_windows;            /* 5 */
+    uint64_t throttle_min_bytes;     /* 65536 */
+    double link_share;               /* 0.3 */
+    int link_min_keys;               /* 5 */
+    size_t watch_max;                /* flows whose counters are polled (512) */
+    unsigned watch_s;                /* for at most (120) */
 } xdet_config;
 
 void xdet_config_default(xdet_config *c);
@@ -97,8 +142,25 @@ typedef struct {
 typedef struct {
     void (*flow)(void *ud, const xdet_flow_ev *ev);
     void (*key)(void *ud, const xdet_key_ev *ev);
+    /* LINK_DEGRADED began (1) or ended (0): bad of active addresses */
+    void (*link)(void *ud, int degraded, unsigned bad, unsigned active);
     void *ud;
 } xdet_sink;
+
+/* A flow by its client's tuple (the conntrack's original direction) */
+typedef struct {
+    uint8_t ver, proto;
+    uint8_t cli[16], srv[16];
+    uint16_t cport, sport;
+} xdet_tuple;
+
+/* The kernel conntrack's view of a watched flow */
+typedef struct {
+    xdet_tuple t;
+    int found;          /* 0: gone */
+    int open;           /* TCP still established */
+    uint64_t rbytes;    /* bytes from the server (IP headers included) */
+} xdet_ctr;
 
 typedef struct xdet xdet;
 
@@ -108,9 +170,16 @@ void xdet_free(xdet *d);
 /* One packet as observed (either direction; the conntrack tells which) */
 void xdet_packet(xdet *d, const gpkt *p, uint64_t now_ms);
 
+/* About once a second: the volume checks, LINK_DEGRADED, and req for each
+ * watched flow whose counters are wanted (answer with xdet_counters) */
+void xdet_tick(xdet *d, uint64_t now_ms, void (*req)(void *ud, const xdet_tuple *t), void *ud);
+void xdet_counters(xdet *d, const xdet_ctr *c, uint64_t now_ms);
+
 typedef struct {
     uint64_t packets, flows_ok, flows_failed;
-    size_t flows, keys, impaired;
+    size_t flows, keys, impaired, watched;
+    double capacity; /* C, bytes/s (0: not known yet) */
+    int link_degraded;
 } xdet_stats;
 void xdet_get_stats(const xdet *d, xdet_stats *s);
 
