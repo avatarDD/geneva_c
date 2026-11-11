@@ -1000,9 +1000,17 @@ int fw_up(fw_config *c, sbuf *err)
     return 0;
 }
 
+static void (*g_down_hook)(const fw_config *c);
+
+void fw_set_down_hook(void (*fn)(const fw_config *c)) { g_down_hook = fn; }
+
 void fw_down(const fw_config *c)
 {
     char bin[256];
+    if (g_down_hook) {
+        g_down_hook(c); /* --ext: a root helper takes the rules down */
+        return;
+    }
     if (c->backend != FW_IPTABLES && find_bin("nft", bin, sizeof(bin)) == 0)
         nft_down(c);
     if (c->backend != FW_NFT)
@@ -1018,5 +1026,6 @@ int fw_up(fw_config *c, sbuf *err)
 }
 
 void fw_down(const fw_config *c) {}
+void fw_set_down_hook(void (*fn)(const fw_config *c)) { (void)fn; }
 
 #endif

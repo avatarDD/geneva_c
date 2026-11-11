@@ -364,6 +364,40 @@ for FW in $FIREWALLS; do
     ip netns exec "$NS" iptables -D INPUT -p tcp --dport $PORT -m string --string example.com --algo bm -j DROP
     fi
 
+    # running as a service (stage X7a): as nobody with two capabilities and
+    # seccomp; a SIGKILL of the engine leaves the root helper to take the
+    # rules down; --daemon returns once packets flow
+    if "$GENEVA" version --json | grep -q '"ext_service"'; then
+    start_case "service" "$FW" '[TCP:flags:PA]-tamper{TCP:window:replace:7}-| \/' 10.77.0.2 \
+        "--ext --user nobody --pidfile $WORK/geneva.pid --control unix:$WORK/ctl.sock"
+    exchange && ok "exchange works" || bad "exchange failed" "$WORK/eng.log"
+    check "running as nobody" '[ "$(ps -o user= -p $ENG)" = nobody ]'
+    check "only CAP_NET_ADMIN and CAP_NET_RAW" 'grep -q "^CapEff:.*0000000000003000$" /proc/$ENG/status'
+    check "seccomp on" 'grep -q "^Seccomp:.*2$" /proc/$ENG/status'
+    check "the pidfile" '[ "$(cat $WORK/geneva.pid)" = $ENG ]'
+    check "ctl ext_flows" 'ip netns exec $NC $GENEVA ctl -c unix:$WORK/ctl.sock ext_flows | grep -q "\"sport\":$PORT"'
+    check "ctl ext_keys" 'ip netns exec $NC $GENEVA ctl -c unix:$WORK/ctl.sock ext_keys | grep -q "\"autolist\":\[\]"'
+    kill -KILL $ENG
+    wait $ENG 2>/dev/null
+    sleep 0.5
+    check "SIGKILL: rules removed by the helper" rules_gone
+    check "SIGKILL: the pidfile removed" '[ ! -e $WORK/geneva.pid ]'
+    kill -INT $TCPD 2>/dev/null; wait $TCPD 2>/dev/null
+    CASE=daemon
+    ip netns exec "$NC" "$GENEVA" run --ext -s '\/' -p $PORT --firewall "$FW" --daemon --pidfile $WORK/geneva.pid \
+        --log-file "$WORK/eng.log" --quiet
+    check "--daemon returns 0 once running" '[ $? -eq 0 ] && [ -s $WORK/geneva.pid ] && ! rules_gone'
+    DPID=$(cat $WORK/geneva.pid 2>/dev/null)
+    check "the daemon has its own session" '[ "$(ps -o sid= -p $DPID | tr -d " ")" = "$DPID" ]'
+    exchange && ok "exchange works" || bad "exchange failed" "$WORK/eng.log"
+    kill -TERM $DPID 2>/dev/null
+    i=0; while kill -0 $DPID 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    check "SIGTERM: rules removed" rules_gone
+    check "SIGTERM: the pidfile removed" '[ ! -e $WORK/geneva.pid ]'
+    ip netns exec "$NC" "$GENEVA" run --ext -s '[x' -p $PORT --firewall "$FW" --daemon 2>/dev/null
+    check "a failed start: exit code 3" '[ $? -eq 3 ]'
+    fi
+
     start_case "SIGHUP reload" "$FW" '\/'
     printf '%s\n' '[TCP:flags:S]-tamper{TCP:window:replace:7}-| \/' > "$WORK/strategy"
     kill -HUP $ENG; sleep 0.3

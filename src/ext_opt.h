@@ -27,7 +27,23 @@
 /* The option row every command with extensions puts into its table. The
  * extensions are described in docs/EXT.md, and integrators find them as
  * the "ext" feature of "version --json". */
-#define EXT_OPT {"ext", 0, 0, NULL, EXT_HELP("turn on the extensions beyond Geneva (docs/EXT.md)")}
+#define EXT_OPT                                                                                               \
+    {"ext", 0, 0, NULL, EXT_HELP("turn on the extensions beyond Geneva (docs/EXT.md); geneva CMD @FILE "      \
+                                 "takes the options from FILE (with --ext)")},                                  \
+    {"comment", 0, 2, "TEXT", EXT_HELP("ignored (a note in an @FILE)")}
+
+/* Running as a service (run): zapret2's names, with --ext */
+#define EXT_RUN_OPTS                                                                                          \
+    {"dry-run", 0, 0, NULL, EXT_HELP("check the options, the strategies and the lists, then exit (0: fine)")}, \
+    {"daemon", 0, 0, NULL, EXT_HELP("go to the background once packets flow (the exit code tells a failed "   \
+                                    "start)")},                                                               \
+    {"pidfile", 0, 1, "FILE", EXT_HELP("write the process id to FILE (removed on exit)")},                    \
+    {"user", 0, 1, "NAME", EXT_HELP("Linux: once running, become NAME, keeping CAP_NET_ADMIN and CAP_NET_RAW " \
+                                    "(a root helper removes the rules on exit)")},                           \
+    {"uid", 0, 1, "UID[:GID,..]", EXT_HELP("the same with numbers")},                                          \
+    {"ext-seccomp", 0, 2, "0|1", EXT_HELP("Linux: once running, forbid exec, kill, ptrace and file system "   \
+                                          "changes (1; the root helper removes the rules on exit)")},         \
+    {"log-target", 0, 1, "syslog", EXT_HELP("also log to syslog (/dev/log)")}
 
 /* The conntrack and the L7 of the extensions (FLOW: and L7: triggers), for
  * the commands that run strategies: run, eval, evolve, apply. */

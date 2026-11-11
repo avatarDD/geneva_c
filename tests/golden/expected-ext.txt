@@ -38,6 +38,8 @@ Extensions (with --ext):
   [TCP:flags:PA]-xfake{blob=fake_default_tls;ttl=3}(xdisorder{pos=1,midsld},)-| \/
   [TCP:flags:PA]-xtlsclone{blob=c;sni_first=a.example}(xfake{blob=c;ttl=3},)-| \/
   [TCP:flags:PA]-xwhen{iff=FLOW:n:<3}(xrepeat{repeats=2}(xfake{blob=0x41;ttl=1},),)-| \/
+  geneva CMD @FILE takes the options from FILE (with --ext); run --ext also
+  has --dry-run, --daemon, --pidfile, --user/--uid, seccomp and syslog.
   See docs/EXT.md.
 [exit 0]
 ### help-ext-censor
@@ -124,7 +126,8 @@ Options:
   -h, --help                     show help
 
 Extensions (with --ext):
-      --ext                      turn on the extensions beyond Geneva (docs/EXT.md)
+      --ext                      turn on the extensions beyond Geneva (docs/EXT.md); geneva CMD @FILE takes the options from FILE (with --ext)
+      --comment[=TEXT]           ignored (a note in an @FILE)
       --ext-ctrack-timeouts S:E:F[:U]
                                  conntrack timeouts, s: TCP SYN, ESTABLISHED, FIN, UDP (60:300:60:60)
       --ext-ctrack-max N         flows the conntrack keeps per worker (16384)
@@ -177,6 +180,13 @@ Extensions (with --ext):
       --ext-ipcache-hostname[=0|1]
                                  cache host names by address (from DNS answers and flows) for the next flows' profile search
       --ext-profile FILE         profiles from FILE ([profile NAME] sections; after those of the command line); repeatable
+      --dry-run                  check the options, the strategies and the lists, then exit (0: fine)
+      --daemon                   go to the background once packets flow (the exit code tells a failed start)
+      --pidfile FILE             write the process id to FILE (removed on exit)
+      --user NAME                Linux: once running, become NAME, keeping CAP_NET_ADMIN and CAP_NET_RAW (a root helper removes the rules on exit)
+      --uid UID[:GID,..]         the same with numbers
+      --ext-seccomp[=0|1]        Linux: once running, forbid exec, kill, ptrace and file system changes (1; the root helper removes the rules on exit)
+      --log-target syslog        also log to syslog (/dev/log)
 [exit 0]
 ### censor-ext-list
 $ $G censor --ext --list
@@ -871,3 +881,25 @@ geneva apply: bad --ext-ipcache-hostname 2 (0 or 1)
 geneva apply: --hostlist-auto-debug needs --ext
 geneva apply: cannot write --hostlist-auto-debug /nonexistent/x
 [exit 0]
+### cfg-ext
+$ cd $T; printf '%s\n' '# options' "--ext --comment='a note'" "-f $D/ok.txt # the corpus" '--pretty' > c.txt && $G check @c.txt | head -3; printf -- '-f x' > d.txt; $G check @d.txt; $G check '$d.txt' --ext; $G check @nonexistent; printf '%s' "--ext 'x" > e.txt; $G check @e.txt; $G check --comment=x
+ 
+ \/ 
+ 
+geneva check: options from d.txt need --ext
+geneva check: cannot read x
+geneva check: cannot read nonexistent
+geneva check: e.txt: unterminated '
+geneva check: --comment needs --ext
+[exit 2]
+### run-ext-dry
+$ $G run --ext -s '\/' -p 443 --mark 0x10000000 --dry-run; $G run --ext -s '[x' -p 443 --mark 0x10000000 --dry-run; $G run --ext -s '\/' -p 443 --dry-run 2>&1 | sed 's/^[0-9-]* [0-9:.]* //'; $G run --ext -s '\/' -p 443 --log-target x; $G run --ext -s '\/' -p 443 --uid 1 --user root; $G run --ext -s '\/' -p 443 --ext-seccomp=2; $G run -s '\/' -p 443 --dry-run
+geneva run: the options are fine
+geneva run: could not identify the trigger in "[x|"
+warn  run: --mark 0x20000000 shares bit 0x20000000 with zapret2's DESYNC_MARK_POSTNAT: running nfqws2 on this host too, give one of them another mark
+geneva run: the options are fine
+geneva run: --log-target must be syslog
+geneva run: --user and --uid exclude each other
+geneva run: --ext-seccomp must be 0 or 1
+geneva run: --dry-run needs --ext
+[exit 2]

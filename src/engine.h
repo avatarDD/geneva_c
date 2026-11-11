@@ -69,6 +69,9 @@ typedef struct {
 } engine_opts;
 
 void engine_opts_default(engine_opts *o);
+/* Parses the strategy (or its file) as engine_run would: 0, or -1 with
+ * the error in err (--dry-run). */
+int engine_check(const engine_opts *o, sbuf *err);
 /* Runs until SIGINT/SIGTERM (or the duration). Returns an exit code. */
 int engine_run(engine_opts *o);
 

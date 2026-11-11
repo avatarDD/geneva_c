@@ -10,6 +10,7 @@
 #include "engine_int.h"
 #include "ext/ext.h"
 #include "ext_opt.h"
+#include "json.h"
 #include "pkt.h"
 #include "strategy.h"
 #include "test.h"
@@ -816,6 +817,43 @@ TEST(l7_engine_detach)
     eng_pkt(&e, 0, S | A, 5000, 9001, 65535, NULL, 0);
     eng_pkt(&e, 1, P | A, 9001, 5001, 64000, ch, 1000);
     CHECK_INT(elog.drops, 3);
+    {
+        /* ctl ext_flows and ext_keys */
+        sbuf js, cerr;
+        jw w;
+        json_val *req;
+        sb_init(&js);
+        sb_init(&cerr);
+        jw_init(&w, &js);
+        jw_obj(&w);
+        CHECK_INT(o.ext->control(&e, "ext_flows", NULL, &w, &cerr), 1);
+        jw_obj_end(&w);
+        CHECK(strstr(js.data, "\"flows\":[{\"proto\":\"tcp\"") != NULL);
+        CHECK(strstr(js.data, "\"total\":1,\"truncated\":false,\"ctrack\":true") != NULL);
+        CHECK(strstr(js.data, "\"cport\":") != NULL);
+        CHECK(strstr(js.data, "\"state\":\"est\"") != NULL);
+        CHECK(strstr(js.data, "\"out\":{\"n\":1,\"d\":1,\"b\":1000,\"s\":1") != NULL);
+        sb_reset(&js);
+        jw_init(&w, &js);
+        jw_obj(&w);
+        req = json_parse("{\"limit\":0}", NULL);
+        CHECK_INT(o.ext->control(&e, "ext_flows", req, &w, &cerr), 1);
+        jw_obj_end(&w);
+        CHECK(strstr(js.data, "\"flows\":[],\"total\":1,\"truncated\":true") != NULL);
+        json_free(req);
+        req = json_parse("{\"limit\":-1}", NULL);
+        CHECK_INT(o.ext->control(&e, "ext_flows", req, &w, &cerr), -1);
+        json_free(req);
+        sb_reset(&js);
+        jw_init(&w, &js);
+        jw_obj(&w);
+        CHECK_INT(o.ext->control(&e, "ext_keys", NULL, &w, &cerr), 1);
+        jw_obj_end(&w);
+        CHECK_STR(js.data, "{\"autolist\":[]}");
+        CHECK_INT(o.ext->control(&e, "nosuch", NULL, &w, &cerr), 0);
+        sb_free(&js);
+        sb_free(&cerr);
+    }
     engine_run_timers(&e, 1);
     engine_workers_free(&e);
     CHECK_INT(elog.resends, 3);

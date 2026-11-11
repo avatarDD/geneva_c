@@ -93,8 +93,9 @@ int cmd_ctl(int argc, char **argv)
                   "Talks to \"geneva run --control ADDR\". Commands: status, stats, reset_stats,\n"
                   "set_strategy strategy=..., reload, pause, resume, log_level level=...,\n"
                   "subscribe, stop, ping, version, reload_lists (run --ext: re-read the\n"
-                  "--hostlist/--ipset files). Prints the JSON answer; exit code 1 if\n"
-                  "it is not ok.",
+                  "--hostlist/--ipset files), ext_flows [limit=N] (run --ext: the\n"
+                  "conntrack's flows), ext_keys (run --ext: the autolist's failure\n"
+                  "counters). Prints the JSON answer; exit code 1 if it is not ok.",
                   defs);
         rc = EXIT_OK;
         goto done;

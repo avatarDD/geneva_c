@@ -32,7 +32,9 @@
 | `filter` | (Windows) фильтр WinDivert установлен: при старте и после каждой успешной смены | `filter` (итоговое выражение, с `and not loopback`), `source` (`start`, `set_filter`, `reload_filter`) |
 | `ready` | правила firewall стоят (или открыт WinDivert), пакеты идут через движок | `backend`, `firewall` (`nft`, `iptables`, `windivert`, `none`) |
 | `ready` | (agent) агент ждёт оценщика или начал к нему подключаться | `addr` |
-| `state` | `pause` / `resume` | `state` (`paused`, `running`) |
+| `state` | `ext_flows` | `limit` (необязателен, 1000) | (`--ext`) потоки conntrack (`docs/EXT.md`, X7a): `flows` — массив объектов `proto`, `client`, `cport`, `server`, `sport`, `state` (TCP: `syn`, `est`, `fin`), `age_ms`, `idle_ms`, `profile_n`, `profile`, `l7`, `host`, `incoming_ttl`, `autolist`, `out` и `in` (`n`, `d`, `b`; TCP: `s`, `win`, `mss`); `total`, `truncated`, `ctrack` |
+| `ext_keys` | — | (`--ext`) счётчики неудач автосписка: `autolist` — массив `{profile_n, profile, file, fails: [{host, count, expire_s}]}` |
+| `pause` / `resume` | `state` (`paused`, `running`) |
 | `stats` | каждые `--stats-interval` с (по умолчанию 10 с, если есть `--events` или `--control`), по SIGUSR1 и при выходе | см. ниже |
 | `ext_pkt` | (`--ext`) пакет прошёл x-действие `xlog` (`docs/EXT.md`, X5b) | `dir` (`out`, `in`), `tree`, `l7payload`, `len`; по параметрам — `msg`, `pkt`, `pos`, `hex`; у куска собранного сообщения `piece`, `pieces` |
 | `log` | сообщение лога (в `--log-format json` и для подписчиков) | `level`, `mod`, `msg` |

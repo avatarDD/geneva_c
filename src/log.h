@@ -38,6 +38,9 @@ void log_set_format(log_format f);
 int log_open_file(const char *path);
 /* Silence stderr output (used when a controller reads only the event stream). */
 void log_set_quiet(int quiet);
+/* Every log line also goes to fn (under the log's lock); NULL: none. */
+typedef void (*log_hook_fn)(log_level lvl, const char *mod, const char *msg);
+void log_set_hook(log_hook_fn fn);
 
 #define log_enabled(lvl) ((lvl) <= log_get_level())
 

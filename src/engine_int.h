@@ -140,7 +140,7 @@ struct ext_hooks {
     /* A control command the engine does not know (w: the reply), and
      * "reload_lists" on SIGHUP (w NULL). Returns 1 when it was the
      * extensions', 0 when not, -1 with err when it failed. */
-    int (*control)(const char *cmd, const json_val *req, jw *w, sbuf *err);
+    int (*control)(engine *e, const char *cmd, const json_val *req, jw *w, sbuf *err);
 };
 
 struct eng_worker {
