@@ -35,6 +35,7 @@ const char *const ext_features[] = {
     "ext_profile", /* X6: profiles, --filter-*, --ext-profile */
     "ext_lists",   /* X6b: --hostlist*, --ipset*, gzip, reload_lists */
     "ext_autolist", /* X6c: --hostlist-auto*, --ext-ipcache-* */
+    "ext_service",  /* X7a: @FILE, --dry-run, --daemon, --pidfile, --user/--uid, seccomp, syslog, ctl ext_flows/ext_keys */
     0,
 };
 
@@ -645,10 +646,136 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
 }
 
 /* "reload_lists": every list file read again */
-static int xw_control(const char *cmd, const json_val *req, jw *w, sbuf *err)
+/* ctl ext_flows: zapret2's conntrack dump (SIGUSR1 there) */
+typedef struct {
+    jw *w;
+    uint64_t now;
+    int64_t limit, n;
+} flows_ud;
+
+static void side_json(jw *w, const char *k, const ct_side *s, int tcp)
+{
+    jw_key(w, k);
+    jw_obj(w);
+    jw_kuint(w, "n", s->pcounter);
+    jw_kuint(w, "d", s->pdcounter);
+    jw_kuint(w, "b", s->pbcounter);
+    if (tcp) {
+        jw_kuint(w, "s", s->seq_last - s->seq0);
+        jw_kuint(w, "win", s->winsize_calc);
+        jw_kuint(w, "mss", s->mss);
+    }
+    jw_obj_end(w);
+}
+
+static void flow_json(ct_flow *f, void *ud)
+{
+    static const char *const st[] = {"syn", "est", "fin"};
+    flows_ud *u = ud;
+    jw *w = u->w;
+    char a[INET6_ADDRSTRLEN];
+    const char *l7;
+    int af = f->ver == 6 ? AF_INET6 : AF_INET, tcp = f->proto == 6;
+    if (u->n++ >= u->limit)
+        return;
+    jw_obj(w);
+    jw_kstr(w, "proto", tcp ? "tcp" : f->proto == 17 ? "udp" : "other");
+    inet_ntop(af, f->cli, a, sizeof(a));
+    jw_kstr(w, "client", a);
+    jw_kint(w, "cport", f->cport);
+    inet_ntop(af, f->srv, a, sizeof(a));
+    jw_kstr(w, "server", a);
+    jw_kint(w, "sport", f->sport);
+    if (tcp)
+        jw_kstr(w, "state", f->state < 3 ? st[f->state] : "?");
+    jw_kuint(w, "age_ms", u->now - f->t_start);
+    jw_kuint(w, "idle_ms", u->now - f->t_last);
+    if (f->xprof >= 0 && (size_t)f->xprof < g_prof.n && g_prof.v[f->xprof]->name)
+        jw_kstr(w, "profile", g_prof.v[f->xprof]->name);
+    if (f->xprof >= 0)
+        jw_kint(w, "profile_n", f->xprof + 1);
+    if (f->l7proto && (l7 = l7_proto_name(f->l7proto)) != NULL)
+        jw_kstr(w, "l7", l7);
+    if (f->chost)
+        jw_kstr(w, "host", f->chost);
+    else if (f->host)
+        jw_kstr(w, "host", f->host);
+    if (f->incoming_ttl)
+        jw_kint(w, "incoming_ttl", f->incoming_ttl);
+    if (f->ah_check)
+        jw_kstr(w, "autolist", f->ah_final ? "decided" : "watched");
+    side_json(w, "out", &f->client, tcp);
+    side_json(w, "in", &f->server, tcp);
+    jw_obj_end(w);
+}
+
+static int flows(engine *e, const json_val *req, jw *w, sbuf *err)
+{
+    flows_ud u;
+    size_t total = 0;
+    memset(&u, 0, sizeof(u));
+    u.w = w;
+    u.now = plat_now_ms();
+    u.limit = req ? json_get_int(req, "limit", 1000) : 1000;
+    if (u.limit < 0) {
+        sb_puts(err, "limit must be 0 or more");
+        return -1;
+    }
+    jw_key(w, "flows");
+    jw_arr(w);
+    for (unsigned i = 0; i < e->nw; i++) {
+        xworker *x = e->w[i].x;
+        if (x && x->ct) {
+            total += ctrack_count(x->ct);
+            ctrack_foreach(x->ct, flow_json, &u); /* the least recently active first */
+        }
+    }
+    jw_arr_end(w);
+    jw_kuint(w, "total", total);
+    jw_kbool(w, "truncated", u.n > u.limit);
+    jw_kbool(w, "ctrack", !g_ct_disable);
+    return 1;
+}
+
+/* ctl ext_keys: what the extensions count per key; for now the autolist's
+ * failures per host (zapret2's SIGUSR2 dump) */
+static int keys(jw *w)
+{
+    uint64_t now = plat_now_ms() / 1000;
+    jw_key(w, "autolist");
+    jw_arr(w);
+    for (size_t i = 0; i < g_prof.n; i++) {
+        xprofile *p = g_prof.v[i];
+        if (!p->ahl)
+            continue;
+        jw_obj(w);
+        jw_kint(w, "profile_n", (int64_t)i + 1);
+        if (p->name)
+            jw_kstr(w, "profile", p->name);
+        jw_kstr(w, "file", p->ahl->name);
+        jw_key(w, "fails");
+        jw_arr(w);
+        for (size_t k = 0; k < p->nfails; k++) {
+            jw_obj(w);
+            jw_kstr(w, "host", p->fails[k].host);
+            jw_kint(w, "count", p->fails[k].counter);
+            jw_kint(w, "expire_s", p->fails[k].expire > now ? (int64_t)(p->fails[k].expire - now) : 0);
+            jw_obj_end(w);
+        }
+        jw_arr_end(w);
+        jw_obj_end(w);
+    }
+    jw_arr_end(w);
+    return 1;
+}
+
+static int xw_control(engine *e, const char *cmd, const json_val *req, jw *w, sbuf *err)
 {
     int n;
-    (void)req, (void)err;
+    if (!strcmp(cmd, "ext_flows"))
+        return w ? flows(e, req, w, err) : 1;
+    if (!strcmp(cmd, "ext_keys"))
+        return w ? keys(w) : 1;
     if (strcmp(cmd, "reload_lists"))
         return 0;
     n = xlists_reload(plat_now_ms(), 1);

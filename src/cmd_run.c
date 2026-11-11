@@ -2,6 +2,7 @@
  * "geneva run": the strategy engine.
  * "geneva fw":  print, apply or remove its firewall rules by hand.
  */
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #include "ext_opt.h"
 #if GENEVA_EXT
 #  include "ext/ext.h"
+#  include "ext/svc.h"
 #endif
 #include "engine.h"
 #include "evaluator.h"
@@ -209,6 +211,36 @@ int parse_logging(const args_t *a, const char *cmd)
     return 0;
 }
 
+#if GENEVA_EXT
+/* --ext as a service (src/ext/svc.c): privileges go once packets flow */
+typedef struct {
+    xsvc *svc;
+    const engine_opts *o;
+} run_ready;
+
+static void on_run_ready(void *ctx, int rc)
+{
+    run_ready *r = ctx;
+    if (rc)
+        return; /* the engine did not start */
+    /* a failure comes before seccomp: the engine stops as on SIGTERM */
+    if (xsvc_ready(r->svc, r->o->apply_fw ? &r->o->fw : NULL))
+        raise(SIGTERM);
+}
+
+/* zapret2's marks (DESYNC_MARK, DESYNC_MARK_POSTNAT): our default is the
+ * second (decision 11.5: warn only) */
+static void warn_mark(uint32_t mark)
+{
+    if (mark & 0x20000000u)
+        LOGW("run", "--mark 0x%x shares bit 0x20000000 with zapret2's DESYNC_MARK_POSTNAT: running nfqws2 on "
+                    "this host too, give one of them another mark", (unsigned)mark);
+    if (mark & 0x40000000u)
+        LOGW("run", "--mark 0x%x shares bit 0x40000000 with zapret2's DESYNC_MARK: running nfqws2 on this host "
+                    "too, give one of them another mark", (unsigned)mark);
+}
+#endif
+
 int cmd_run(int argc, char **argv)
 {
     static const optdef defs[] = {
@@ -232,10 +264,15 @@ int cmd_run(int argc, char **argv)
         EXT_OPT,
         EXT_CTRACK_OPTS,
         EXT_PROFILE_OPTS,
+        EXT_RUN_OPTS,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
     args_t a, a0;
+#if GENEVA_EXT
+    xsvc svc;
+    run_ready rr;
+#endif
     char err[128];
     engine_opts o;
     char *filter_owned = NULL;
@@ -305,6 +342,51 @@ int cmd_run(int argc, char **argv)
         goto done;
     if (v)
         rng_global_seed((uint64_t)v);
+#if GENEVA_EXT
+    if (ext_enabled()) {
+        sbuf e;
+        int r;
+        sb_init(&e);
+        r = xsvc_parse(&a, &svc, &e);
+        if (r < 0)
+            fprintf(stderr, "geneva run: %s\n", e.data);
+        sb_free(&e);
+        if (r < 0)
+            goto done;
+        warn_mark(o.fw.mark);
+        if (svc.dry_run) {
+            sb_init(&e);
+            r = engine_check(&o, &e);
+            if (r < 0)
+                fprintf(stderr, "geneva run: %s\n", e.data);
+            else
+                printf("geneva run: the options are fine\n");
+            sb_free(&e);
+            rc = r < 0 ? EXIT_STRATEGY : EXIT_OK;
+            goto done;
+        }
+        sb_init(&e);
+        r = xsvc_start(&svc, &e);
+        if (r >= 0) {
+            /* the daemon's parent, or a failed start */
+            if (e.len)
+                fprintf(stderr, "geneva run: %s\n", e.data);
+            sb_free(&e);
+            rc = r;
+            goto done;
+        }
+        sb_free(&e);
+        rr.svc = &svc;
+        rr.o = &o;
+        o.on_ready = on_run_ready;
+        o.ready_ctx = &rr;
+        rc = engine_run(&o);
+        xsvc_stop(&svc);
+        if (svc.fail)
+            rc = svc.fail;
+        goto done;
+    }
+#endif
     rc = engine_run(&o);
 done:
     free(filter_owned);

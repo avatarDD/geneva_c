@@ -11,6 +11,7 @@
 #include "args.h"
 #include "ext_opt.h"
 #if GENEVA_EXT
+#  include "ext/cfgfile.h"
 #  include "ext/ext.h"
 #endif
 #include "geneva.h"
@@ -67,6 +68,8 @@ static void usage(FILE *f)
                "  [TCP:flags:PA]-xfake{blob=fake_default_tls;ttl=3}(xdisorder{pos=1,midsld},)-| \\/\n"
                "  [TCP:flags:PA]-xtlsclone{blob=c;sni_first=a.example}(xfake{blob=c;ttl=3},)-| \\/\n"
                "  [TCP:flags:PA]-xwhen{iff=FLOW:n:<3}(xrepeat{repeats=2}(xfake{blob=0x41;ttl=1},),)-| \\/\n"
+               "  geneva CMD @FILE takes the options from FILE (with --ext); run --ext also\n"
+               "  has --dry-run, --daemon, --pidfile, --user/--uid, seccomp and syslog.\n"
                "  See docs/EXT.md.\n");
 #endif
 }
@@ -163,8 +166,27 @@ int main(int argc, char **argv)
     if (strcmp(cmd, "-V") == 0 || strcmp(cmd, "--version") == 0)
         return cmd_version(0, NULL);
     for (size_t i = 0; i < ARRAY_LEN(commands); i++)
-        if (strcmp(cmd, commands[i].name) == 0)
-            return commands[i].fn(argc - 2, argv + 2);
+        if (strcmp(cmd, commands[i].name) == 0) {
+            int n = argc - 2;
+            char **v = argv + 2;
+#if GENEVA_EXT
+            /* geneva CMD @FILE: the options from FILE (the commands with
+             * --ext; it must be among them) */
+            static const char *const with_ext[] = {"apply", "censor", "check", "eval", "evolve", "fw", "run"};
+            sbuf err;
+            int has = 0;
+            for (size_t k = 0; k < ARRAY_LEN(with_ext); k++)
+                has |= !strcmp(cmd, with_ext[k]);
+            sb_init(&err);
+            if (has && xcfg_expand(&n, &v, &err) < 0) {
+                fprintf(stderr, "geneva %s: %s\n", cmd, err.data);
+                sb_free(&err);
+                return EXIT_USAGE;
+            }
+            sb_free(&err);
+#endif
+            return commands[i].fn(n, v);
+        }
     fprintf(stderr, "geneva: unknown command \"%s\"\n\n", cmd);
     usage(stderr);
     return EXIT_USAGE;

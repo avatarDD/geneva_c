@@ -92,5 +92,8 @@ int fw_up(fw_config *c, sbuf *err);
 /* Removes the rules of c->backend (both backends for FW_AUTO). Errors are
  * ignored: missing rules are fine. */
 void fw_down(const fw_config *c);
+/* fw_down calls fn instead (NULL: itself), e.g. when the engine dropped its
+ * privileges and a root helper keeps the rules (src/ext/svc.c) */
+void fw_set_down_hook(void (*fn)(const fw_config *c));
 
 #endif

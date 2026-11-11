@@ -959,12 +959,21 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
         return 0;
     }
     if (e->o->ext && e->o->ext->control) {
-        int r = e->o->ext->control(cmd, req, w, err);
+        int r = e->o->ext->control(e, cmd, req, w, err);
         if (r)
             return r < 0 ? -1 : 0;
     }
     sb_printf(err, "unknown command \"%s\"", cmd);
     return -1;
+}
+
+int engine_check(const engine_opts *o, sbuf *err)
+{
+    strategy *s = load_strategy(o, err);
+    if (!s)
+        return -1;
+    strategy_free(s);
+    return 0;
 }
 
 /* ---- main loop ----------------------------------------------------------- */
@@ -1150,7 +1159,7 @@ int engine_run(engine_opts *o)
                 LOGI("engine", "SIGHUP: %s", herr.data);
             sb_reset(&herr);
             if (e.o->ext && e.o->ext->control)
-                e.o->ext->control("reload_lists", NULL, NULL, &herr);
+                e.o->ext->control(&e, "reload_lists", NULL, NULL, &herr);
             sb_free(&herr);
         }
         now = plat_now_ms();

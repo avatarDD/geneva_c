@@ -15,6 +15,7 @@ static FILE *g_logfile;
 static FILE *g_sink;
 static int g_sink_owned;
 static ev_tap_fn g_tap;
+static log_hook_fn g_hook; /* --ext: syslog */
 static void *g_tap_ctx;
 
 static plat_mutex_t g_mu;
@@ -45,6 +46,7 @@ log_level log_get_level(void) { return g_level; }
 const char *log_level_name(log_level lvl) { return level_names[lvl]; }
 void log_set_format(log_format f) { g_format = f; }
 void log_set_quiet(int quiet) { g_quiet = quiet; }
+void log_set_hook(log_hook_fn fn) { g_hook = fn; }
 
 int log_parse_level(const char *s, log_level *out)
 {
@@ -102,6 +104,11 @@ void log_msg(log_level lvl, const char *mod, const char *fmt, ...)
     sb_vprintf(&msg, fmt, ap);
     va_end(ap);
 
+    if (g_hook) {
+        lock();
+        g_hook(lvl, mod, msg.data);
+        unlock();
+    }
     if (g_format == LOG_FMT_TEXT || g_logfile) {
         char ts[40];
         fmt_time(ts, sizeof(ts), now);

@@ -39,6 +39,7 @@ void suite_xcomb(void);
 void suite_profile(void);
 void suite_lists(void);
 void suite_autolist(void);
+void suite_svc(void);
 
 int main(void)
 {
@@ -65,6 +66,7 @@ int main(void)
     suite_profile();
     suite_lists();
     suite_autolist();
+    suite_svc();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }

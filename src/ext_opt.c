@@ -15,7 +15,8 @@ static const char *const ext_only[] = {"new",        "name",       "skip",      
                                        "filter-l3",  "filter-tcp", "filter-udp",  "filter-icmp", "filter-ipp",
                                        "filter-l7",  "filter-mark", "hostlist",   "hostlist-domains",
                                        "hostlist-exclude", "hostlist-exclude-domains", "ipset", "ipset-ip",
-                                       "ipset-exclude", "ipset-exclude-ip"};
+                                       "ipset-exclude", "ipset-exclude-ip", "comment", "dry-run", "daemon",
+                                       "pidfile", "user", "uid", "log-target"};
 
 /* and the autolist's: every "hostlist-auto*" */
 
