@@ -78,6 +78,9 @@ struct ct_flow {
     /* the x-actions' per-flow state (src/ext/xact.c), freed through
      * ct_config.clear */
     void *xa;
+    /* seqtrack (src/ext/seqtrack.c): the shift of a grown first message,
+     * freed through ct_config.clear */
+    void *xseq;
     /* its profile (src/ext/profile.c): the index, -1 for none; looked for
      * xprof_done times (0: not yet), the last time with the L7 protocol
      * xprof_l7 and (xprof_host) the host name */

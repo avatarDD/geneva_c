@@ -19,6 +19,7 @@
 #include "plat.h"
 #include "profile.h"
 #include "rawsend.h"
+#include "seqtrack.h"
 #include "xact.h"
 #include "xl7.h"
 #include "xtrig.h"
@@ -578,9 +579,23 @@ static int found(const ct_flow *f, int i, const strategy *st)
     return !g_prof.n ? st != NULL : f ? f->xprof >= 0 : i >= 0;
 }
 
+typedef struct {
+    eng_worker *w;
+    const void *pctx;
+} xw_emit_ud;
+
+/* seqtrack's retransmission of a grown first message */
+static void xw_emit(void *ud, const uint8_t *pkt, size_t len)
+{
+    xw_emit_ud *u = ud;
+    engine_inject(u->w, u->pctx, pkt, len);
+}
+
 static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, const uint8_t *data, size_t len,
                      const void *pctx)
 {
+    uint8_t *mb = NULL; /* p as seqtrack changed it */
+    size_t ml = 0;
     xworker *x = w->x;
     xpkt_ctx *c = &x->ctx;
     xw_replay_ud u;
@@ -595,6 +610,23 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
     xipc_purge(now);
     if (x->ct)
         c->f = ctrack_feed(x->ct, p, now, &c->reverse);
+    if (c->f && c->f->xseq) {
+        xw_emit_ud eu;
+        eu.w = w;
+        eu.pctx = pctx;
+        switch (xseq_packet(c->f, c->reverse, p, ct_mss(c->f), xw_emit, &eu)) {
+        case XSEQ_DROP:
+            engine_verdict(w, pctx, 0, NULL, 0, 0);
+            return 1;
+        case XSEQ_MODIFIED:
+            mb = pkt_bytes(p, &ml);
+            if (ml) {
+                data = mb;
+                len = ml;
+            }
+            break;
+        }
+    }
     if (g_prof.n) {
         xlists_reload(now, 0);
         i = pick(p, c->f, dir, c->reverse, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, c->mark, now);
@@ -624,6 +656,7 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
     }
     if (r == XL7_HOLD) {
         engine_held(w, pctx, kp);
+        free(mb);
         return 1;
     }
     if (has && x->view.l7p == L7P_DNS_RESPONSE && p->l4 == LAYER_UDP)
@@ -637,10 +670,13 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
             bypass = st && c->f && !w->e->paused && xtrig_all_cut(st, dir, c->f);
         }
     }
-    if (bypass) {
-        engine_verdict(w, pctx, 1, data, len, 0);
+    if (bypass || (mb && ml && (w->e->paused || !st))) {
+        /* (the engine would let the packet go as it came) */
+        engine_verdict(w, pctx, 1, data, len, mb && ml);
+        free(mb);
         return 1;
     }
+    free(mb);
     c->l7 = &x->view;
     w->xctx = c;
     *stp = st;
@@ -865,20 +901,57 @@ static void xo_clear(ct_flow *f, void *ud)
     xact_flow_clear(f);
 }
 
-void *xoff_packet(xoffline *x, strategy **stp, const gpkt *p, strat_dir dir, uint64_t now_ms, const uint8_t *raw,
+static void *xoff_packet2(xoffline *x, strategy **stp, gpkt *p, strat_dir dir, uint64_t now, const uint8_t *raw,
+                          size_t rawlen, xoff_replay_fn fn, void *ud, int *verdict);
+
+/* seqtrack's retransmission of a grown first message: written as it is */
+static void xo_emit(void *ud, const uint8_t *pkt, size_t len)
+{
+    xoffline *x = ud;
+    if (x->fn)
+        x->fn(x->ud, pkt, len, DIR_OUT, 0, 0, NULL);
+}
+
+void *xoff_packet(xoffline *x, strategy **stp, gpkt *p, strat_dir dir, uint64_t now_ms, const uint8_t *raw,
                   size_t rawlen, xoff_replay_fn fn, void *ud, int *verdict)
 {
+    uint8_t *mb = NULL;
+    size_t ml = 0;
+    void *rc;
     xpkt_ctx *c = &x->ctx;
-    xo_replay_ud u;
-    strategy *cmd = *stp, *st = cmd;
     uint64_t now = now_ms ? now_ms : 1;
-    int bypass, hold, i = -1, has;
     x->fn = fn;
     x->ud = ud;
     memset(c, 0, sizeof(*c));
     xipc_purge(now);
     if (x->ct)
         c->f = ctrack_feed(x->ct, p, now, &c->reverse);
+    if (c->f && c->f->xseq) {
+        switch (xseq_packet(c->f, c->reverse, p, ct_mss(c->f), xo_emit, x)) {
+        case XSEQ_DROP:
+            *verdict = XOFF_DROP;
+            return NULL;
+        case XSEQ_MODIFIED:
+            mb = pkt_bytes(p, &ml);
+            if (ml) {
+                raw = mb;
+                rawlen = ml;
+            }
+            break;
+        }
+    }
+    rc = xoff_packet2(x, stp, p, dir, now, raw, rawlen, fn, ud, verdict);
+    free(mb);
+    return rc;
+}
+
+static void *xoff_packet2(xoffline *x, strategy **stp, gpkt *p, strat_dir dir, uint64_t now, const uint8_t *raw,
+                          size_t rawlen, xoff_replay_fn fn, void *ud, int *verdict)
+{
+    xpkt_ctx *c = &x->ctx;
+    xo_replay_ud u;
+    strategy *cmd = *stp, *st = cmd;
+    int bypass, hold, i = -1, has;
     if (g_prof.n) {
         i = pick(p, c->f, dir, c->reverse, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, 0, now);
         st = prof_st(i, cmd);
