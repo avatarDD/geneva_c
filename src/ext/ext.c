@@ -37,6 +37,7 @@ const char *const ext_features[] = {
     "ext_autolist", /* X6c: --hostlist-auto*, --ext-ipcache-* */
     "ext_service",  /* X7a: @FILE, --dry-run, --daemon, --pidfile, --user/--uid, seccomp, syslog, ctl ext_flows/ext_keys */
     "ext_fw",       /* X7b: --ext-first, --ext-wan/--ext-lan, --ext-notrack, --ext-ttl-icmp, --ext-flowoffload, --fw-hook-*, --wf-* */
+    "ext_selftest", /* X7c: geneva selftest --ext --fuzz N, fuzz targets for libFuzzer/AFL++ */
     0,
 };
 

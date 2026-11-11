@@ -136,6 +136,10 @@ int xprof_wanted(const args_t *a);
  * command got -s or -f before the first --new. Returns 0 (out->n is 0 when
  * no profile option is used), or -1 with a message in err. */
 int xprof_build(const args_t *a, int has_cmd_st, xprofiles *out, sbuf *err);
+/* The same from the text of a profile file alone (the fuzz target): keys
+ * that read or write files (strategy-file, hostlist, ipset and their
+ * -exclude forms, hostlist-auto) are refused. */
+int xprof_build_text(const char *text, size_t len, xprofiles *out, sbuf *err);
 void xprof_free(xprofiles *ps);
 
 /* The first profile that takes m (its index), -1 when none does.
