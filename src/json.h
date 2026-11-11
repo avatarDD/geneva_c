@@ -9,7 +9,7 @@
 
 /* ---- writer -------------------------------------------------------------- */
 
-#define JW_MAX_DEPTH 32
+#define JW_MAX_DEPTH 512 /* a strategy tree nests up to 200 actions, two levels each */
 
 typedef struct {
     sbuf *sb;

@@ -19,7 +19,7 @@ static void jw_pre(jw *w)
         w->after_key = 0;
         return;
     }
-    if (w->depth > 0) {
+    if (w->depth > 0 && w->depth <= JW_MAX_DEPTH) {
         if (w->need_comma[w->depth - 1])
             sb_putc(w->sb, ',');
         w->need_comma[w->depth - 1] = 1;
