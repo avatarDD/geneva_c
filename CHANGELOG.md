@@ -110,6 +110,19 @@
   новой команде управления `reload_lists` (ответ `files`). Фича
   `ext_lists`. e2e: профили со списками дают те же пакеты, что nfqws2
   v1.0.6; смена профиля по списку из gzip и его перечитывание по SIGHUP.
+- X6c: автосписок zapret2 `--hostlist-auto` с параметрами
+  `--hostlist-auto-fail-threshold`, `-fail-time`, `-retrans-threshold`,
+  `-retrans-maxseq`, `-retrans-reset`, `-incoming-maxseq`, `-udp-out`,
+  `-udp-in` и журналом `--hostlist-auto-debug`: неудачи по повторам
+  запроса, RST и редиректу сервера, по счётчикам UDP; хост дописывается в
+  файл, клиенту уходит RST (NFQUEUE). Кэш адресов (`ipcache`): имена из
+  DNS-ответов и потоков (`--ext-ipcache-hostname`), TTL первого ответа
+  сервера для autottl, `--ext-ipcache-lifetime`. Поток, профиль которого
+  может появиться только по имени хоста, держит ClientHello из нескольких
+  пакетов до имени. Фича `ext_autolist`. e2e: автосписок против цензора,
+  сбрасывающего и выбрасывающего пакеты. Удержанный для сборки пакет на
+  NFQUEUE сразу выбрасывается и потом отправляется заново, как в nfqws2:
+  иначе TCP small queues задерживали следующий сегмент клиента.
 
 ## v1.2.0
 

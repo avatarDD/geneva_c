@@ -7,8 +7,10 @@
 #  include <net/if.h>
 #endif
 
+#include "autolist.h"
 #include "blob.h"
 #include "engine_int.h"
+#include "ipcache.h"
 #include "l7.h"
 #include "lists.h"
 #include "ext_opt.h"
@@ -32,6 +34,7 @@ const char *const ext_features[] = {
     "ext_xact",   /* X5: x-actions (xfake, xsplit, ...), blobs */
     "ext_profile", /* X6: profiles, --filter-*, --ext-profile */
     "ext_lists",   /* X6b: --hostlist*, --ipset*, gzip, reload_lists */
+    "ext_autolist", /* X6c: --hostlist-auto*, --ext-ipcache-* */
     0,
 };
 
@@ -111,6 +114,26 @@ int ext_activate(const args_t *a, const char *cmd)
     rawsend_set_flags(RAWSEND_EXT | (arg_has(a, "ext-bind-fix4") ? RAWSEND_BIND4 : 0) |
                       (arg_has(a, "ext-bind-fix6") ? RAWSEND_BIND6 : 0));
 #endif
+    xipc_reset();
+    xah_debug_log(NULL);
+    {
+        int64_t life;
+        int host = 0;
+        if (arg_int(a, "ext-ipcache-lifetime", XIPC_LIFETIME, 0, 1 << 30, &life) < 0)
+            return -1;
+        if ((s = arg_str(a, "ext-ipcache-hostname", NULL))) {
+            if (*s && strcmp(s, "0") && strcmp(s, "1")) {
+                fprintf(stderr, "geneva %s: bad --ext-ipcache-hostname %s (0 or 1)\n", cmd, s);
+                return -1;
+            }
+            host = strcmp(s, "0") != 0;
+        }
+        xipc_config((unsigned)life, host);
+    }
+    if ((s = arg_str(a, "hostlist-auto-debug", NULL)) && xah_debug_log(s) < 0) {
+        fprintf(stderr, "geneva %s: cannot write --hostlist-auto-debug %s\n", cmd, s);
+        return -1;
+    }
     strategy_set_xtrig(&xtrig_ops);
     strategy_set_xact(&xact_ops);
     {
@@ -167,6 +190,8 @@ void ext_deactivate(void)
 #endif
     blob_free_all();
     xprof_free(&g_prof);
+    xipc_reset();
+    xah_debug_log(NULL);
     g_active = 0;
 }
 
@@ -218,11 +243,59 @@ static void log_prof(const char *what, int i, const ct_flow *f)
     sb_free(&l);
 }
 
+/* zapret2's ctrack->hostname: the host name the L7 found (once; it goes
+ * into the ipcache for the server's address) or, for the client's packet
+ * before the flow's first search, the one the ipcache has for the server */
+static void flow_host(ct_flow *f, int reverse, const char *host, uint64_t now)
+{
+    char hb[XL7_HOST_MAX];
+    int ip = 0;
+    if (host && !f->chost_disc) {
+        f->chost_ip = (uint8_t)xhost_norm(host, hb, sizeof(hb));
+        free(f->chost);
+        f->chost = xstrdup(hb);
+        f->chost_disc = 1;
+        xipc_put_host(f->ver, f->srv, hb, f->chost_ip, now);
+    } else if (!host && !f->chost && !f->xprof_done && !reverse &&
+               xipc_get_host(f->ver, f->srv, hb, sizeof(hb), &ip)) {
+        f->chost = xstrdup(hb);
+        f->chost_ip = (uint8_t)ip;
+        LOGD("ipcache", "flow %u->%u: the cached host name %s", f->cport, f->sport, hb);
+    }
+}
+
+/* The hostlist check of dp_rediscovery once the flow's host name is known:
+ * a host that does not pass the lists of the flow's profile gets no
+ * strategy (the profile stays the flow's: an autolist profile wins without
+ * the check, then watches the host) */
+static void flow_check(ct_flow *f)
+{
+    xprofile *P = g_prof.v[f->xprof];
+    int excluded = 0;
+    if (!f->chost_disc || f->xcheck || xprof_hostlists_empty(P))
+        return;
+    if (xprof_hosts(P, f->chost, f->chost_ip, &excluded)) {
+        f->xcheck = 1;
+        if (f->proto == 6 && f->ah_check)
+            f->ah_retrans = XAH_RETRANS_STOP;
+        return;
+    }
+    f->xcheck = 2;
+    f->ah_check = P->ahl && !excluded;
+    if (f->proto == 6 && !f->ah_check)
+        f->ah_retrans = XAH_RETRANS_STOP;
+    LOGD("profile", "flow %u->%u: %s does not pass the lists of profile %d%s", f->cport, f->sport, f->chost, P->n,
+         f->ah_check ? ", the autolist watches it" : "");
+}
+
 /* The profile of p (dp_find with dp_rediscovery): its index, -1 for none.
  * A flow keeps its profile and looks again once its L7 protocol is known
  * and once its host name is; an ICMP error goes with its flow's profile
- * when it has one. p is NULL for a replayed packet of flow f. */
-static int pick(const gpkt *p, ct_flow *f, strat_dir dir, int l7, const char *host, uint32_t mark)
+ * when it has one. p is NULL for a replayed packet of flow f; reverse: p
+ * comes from the server. The strategy is not run (-1) for a host that
+ * fails the lists of its flow's profile (f->xprof stays). */
+static int pick(const gpkt *p, ct_flow *f, strat_dir dir, int reverse, int l7, const char *host, uint32_t mark,
+                uint64_t now)
 {
     xmatch m;
     char hb[XL7_HOST_MAX];
@@ -238,25 +311,87 @@ static int pick(const gpkt *p, ct_flow *f, strat_dir dir, int l7, const char *ho
         f = NULL;
     }
     if (!f) {
+        char cb[XL7_HOST_MAX];
+        int ip;
+        /* other IP protocols: the cached name of either address */
+        if (!host && p->l4 != LAYER_TCP && p->l4 != LAYER_UDP &&
+            (xipc_get_host(p->ipver, p->dst, cb, sizeof(cb), &ip) ||
+             xipc_get_host(p->ipver, p->src, cb, sizeof(cb), &ip)))
+            host = cb;
         match_of(&m, p, NULL, dir, l7, host, mark, hb, sizeof(hb));
-        return xprof_find(&g_prof, &m, 0);
+        i = xprof_find(&g_prof, &m, 0);
+        /* a name the L7 found is checked (dp_rediscovery), a cached one not */
+        if (i >= 0 && host && host != cb && !xprof_hostlists_empty(g_prof.v[i]) &&
+            !xprof_hosts(g_prof.v[i], m.host, m.host_ip, NULL))
+            return -1;
+        return i;
     }
+    flow_host(f, reverse, host, now);
     new_l7 = f->xprof_l7 == L7_UNKNOWN && l7 != L7_UNKNOWN;
-    new_host = !f->xprof_host && host;
-    if (f->xprof_done && !new_l7 && !new_host)
-        return f->xprof;
-    match_of(&m, p, f, dir, l7, host, mark, hb, sizeof(hb));
-    i = xprof_find(&g_prof, &m, 0);
-    if (!f->xprof_done)
-        log_prof("new", i, f);
-    else if (i != f->xprof)
-        log_prof(new_host ? "host known, changed" : "L7 known, changed", i, f);
-    f->xprof = (int16_t)i;
-    f->xprof_l7 = (uint8_t)l7;
-    f->xprof_host = host != NULL;
-    if (f->xprof_done < 255)
-        f->xprof_done++;
-    return i;
+    new_host = f->chost_disc && !f->xprof_host;
+    if (!f->xprof_done || new_l7 || new_host) {
+        match_of(&m, p, f, dir, l7, f->chost, mark, hb, sizeof(hb));
+        i = xprof_find(&g_prof, &m, 0);
+        if (!f->xprof_done)
+            log_prof("new", i, f);
+        else if (i != f->xprof)
+            log_prof(new_host ? "host known, changed" : "L7 known, changed", i, f);
+        f->xprof = (int16_t)i;
+        f->xprof_l7 = (uint8_t)l7;
+        f->xprof_host = f->chost_disc;
+        f->xcheck = 0;
+        if (f->xprof_done < 255)
+            f->xprof_done++;
+    }
+    if (f->xprof < 0)
+        return -1;
+    flow_check(f);
+    return f->xcheck == 2 ? -1 : f->xprof;
+}
+
+/* zapret2's ipcache_update_ttl and ipcache_get_ttl: the TTL of the server's
+ * first reply per server and interface, for autottl on the next flow */
+static void flow_ttl(ct_flow *f, int reverse, const char *ifin, const char *ifout, uint64_t now)
+{
+    if (!f || g_server_side || (f->proto != 6 && f->proto != 17))
+        return;
+    if (reverse) {
+        if (f->incoming_ttl)
+            xipc_put_ttl(f->ver, f->srv, ifin, f->incoming_ttl, now);
+        else
+            f->incoming_ttl = xipc_get_ttl(f->ver, f->srv, ifin);
+    } else if (!f->incoming_ttl) {
+        f->incoming_ttl = xipc_get_ttl(f->ver, f->srv, ifout);
+    }
+}
+
+/* The autolist's detection for p of flow f (autolist.h): TCP before the
+ * second search (tcp = 1), UDP after it */
+static void flow_autolist(int tcp, const gpkt *p, ct_flow *f, int reverse, int l7p, uint64_t now,
+                          void (*send)(void *, const uint8_t *, size_t), void *ud)
+{
+    xprofile *P;
+    xah_pkt k;
+    if (!f || g_server_side || f->xprof < 0 || p->l4 != (tcp ? LAYER_TCP : LAYER_UDP))
+        return;
+    P = g_prof.v[f->xprof];
+    if (!P->ahl)
+        return;
+    memset(&k, 0, sizeof(k));
+    k.p = p;
+    k.f = f;
+    k.reverse = reverse;
+    k.l7p = l7p;
+    k.payload = p->payload;
+    k.len = p->payload_len;
+    k.now_ms = now;
+    k.send = send;
+    k.ud = ud;
+    xah_purge(P, now);
+    if (tcp)
+        xah_tcp(P, &k);
+    else
+        xah_udp(P, &k);
 }
 
 /* The strategy of profile i: profile 0 of the command line runs the
@@ -288,8 +423,12 @@ typedef struct {
  * on as it is (v is NULL) */
 static void xw_pass(void *ud, const uint8_t *raw, size_t len, strat_dir dir, const void *pctx, const xl7_view *v)
 {
+    eng_worker *w = ud;
     (void)dir, (void)v;
-    engine_verdict(ud, pctx, 1, raw, len, 0);
+    w->vdata = raw; /* a detached context sends these */
+    w->vlen = len;
+    engine_verdict(w, pctx, 1, raw, len, 0);
+    w->vdata = NULL;
 }
 
 static void xw_clear(ct_flow *f, void *ud)
@@ -393,13 +532,13 @@ static void xw_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, c
     meta(u->w->x, u->w, pctx, &c);
     c.l7 = v;
     if (g_prof.n)
-        st = prof_st(pick(NULL, c.f, dir, v->l7, v->host, c.mark), u->st);
+        st = prof_st(pick(NULL, c.f, dir, c.reverse, v->l7, v->host, c.mark, plat_now_ms()), u->st);
     c.st = st;
     engine_replay(u->w, st, raw, len, dir, pctx, &c);
 }
 
-/* Could a profile with a strategy take p once its flow's L7 protocol is
- * known? (a reassembly is then worth holding for) */
+/* Could a profile with a strategy take p once its flow's L7 protocol and
+ * host name are known? (a reassembly is then worth holding for) */
 static int maybe_st(const gpkt *p, const ct_flow *f, strat_dir dir, uint32_t mark, strategy *cmd)
 {
     xmatch m;
@@ -411,38 +550,85 @@ static int maybe_st(const gpkt *p, const ct_flow *f, strat_dir dir, uint32_t mar
     return 0;
 }
 
+typedef struct {
+    eng_worker *w;
+    const void *pctx;
+} xw_rst_ud;
+
+/* The autolist's RST to the client: back the way the client's packet came
+ * (NFQUEUE: the raw socket routes it). WinDivert would send it on in the
+ * packet's direction, to the server: none there (docs/EXT.md). */
+static void xw_rst(void *ud, const uint8_t *pkt, size_t len)
+{
+    xw_rst_ud *u = ud;
+    if (!strcmp(u->w->e->be->name, "windivert")) {
+        LOGD("autolist", "no RST to the client through WinDivert");
+        return;
+    }
+    engine_inject(u->w, u->pctx, pkt, len);
+}
+
+/* After the first search: does the packet have a profile (zapret2 goes on
+ * only with one)? Without profiles: does it have a strategy? */
+static int found(const ct_flow *f, int i, const strategy *st)
+{
+    return !g_prof.n ? st != NULL : f ? f->xprof >= 0 : i >= 0;
+}
+
 static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, const uint8_t *data, size_t len,
                      const void *pctx)
 {
     xworker *x = w->x;
     xpkt_ctx *c = &x->ctx;
     xw_replay_ud u;
+    xw_rst_ud ru;
     strategy *cmd = *stp, *st = cmd;
-    int bypass, hold, r;
+    uint64_t now = plat_now_ms();
+    uint8_t kept[PCTX_MAX];
+    const void *kp;
+    int bypass, hold, r, i = -1, has;
     memset(c, 0, sizeof(*c));
     meta(x, w, pctx, c);
+    xipc_purge(now);
     if (x->ct)
-        c->f = ctrack_feed(x->ct, p, plat_now_ms(), &c->reverse);
+        c->f = ctrack_feed(x->ct, p, now, &c->reverse);
     if (g_prof.n) {
-        xlists_reload(plat_now_ms(), 0);
-        st = prof_st(pick(p, c->f, dir, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, c->mark), cmd);
+        xlists_reload(now, 0);
+        i = pick(p, c->f, dir, c->reverse, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, c->mark, now);
+        st = prof_st(i, cmd);
     }
     c->st = st;
+    if ((has = found(c->f, i, st)))
+        flow_ttl(c->f, c->reverse, c->ifin, c->ifout, now);
     /* every tree is behind this flow: it passes by the strategy */
     bypass = st && c->f && !w->e->paused && xtrig_all_cut(st, dir, c->f);
     hold = !w->e->paused && !bypass &&
-           (st || (g_prof.n && !(c->f && c->f->l7proto) && maybe_st(p, c->f, dir, c->mark, cmd)));
+           (st || (g_prof.n && !(c->f && c->f->l7proto && c->f->chost_disc) &&
+                   maybe_st(p, c->f, dir, c->mark, cmd)));
     u.w = w;
     u.st = cmd;
     u.base = c;
-    r = xl7_packet(x->l7, c->f, c->reverse, p, dir, data, len, pctx, w->e->be->pctx_len, hold, xw_replay, &u,
+    /* what is held keeps a detached context: the captured packet goes now
+     * and is sent anew later; only outgoing ones (an incoming packet sent
+     * through a raw socket would not arrive as it came: --server-side) */
+    kp = hold && dir == DIR_OUT ? engine_detach(w, pctx, kept) : pctx;
+    r = xl7_packet(x->l7, c->f, c->reverse, p, dir, data, len, kp, w->e->be->pctx_len, hold, xw_replay, &u,
                    &x->view);
+    if (has && g_prof.n) {
+        ru.w = w;
+        ru.pctx = pctx;
+        flow_autolist(1, p, c->f, c->reverse, r == XL7_HOLD ? L7P_UNKNOWN : x->view.l7p, now, xw_rst, &ru);
+    }
     if (r == XL7_HOLD) {
-        engine_hold(w);
+        engine_held(w, pctx, kp);
         return 1;
     }
+    if (has && x->view.l7p == L7P_DNS_RESPONSE && p->l4 == LAYER_UDP)
+        xipc_dns_response(p->payload, p->payload_len, now);
     if (g_prof.n) {
-        strategy *st2 = prof_st(pick(p, c->f, dir, x->view.l7, x->view.host, c->mark), cmd);
+        strategy *st2 = prof_st(pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, c->mark, now), cmd);
+        if (has)
+            flow_autolist(0, p, c->f, c->reverse, x->view.l7p, now, NULL, NULL);
         if (st2 != st) {
             st = c->st = st2;
             bypass = st && c->f && !w->e->paused && xtrig_all_cut(st, dir, c->f);
@@ -521,6 +707,7 @@ typedef struct {
     void *ud;
     strategy *cmd; /* the command's strategy */
     const xpkt_ctx *base;
+    uint64_t now;
 } xo_replay_ud;
 
 static void xo_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, const void *pctx, const xl7_view *v)
@@ -530,7 +717,7 @@ static void xo_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, c
     (void)pctx;
     c.l7 = v;
     if (g_prof.n)
-        c.st = prof_st(pick(NULL, c.f, dir, v->l7, v->host, 0), u->cmd);
+        c.st = prof_st(pick(NULL, c.f, dir, c.reverse, v->l7, v->host, 0, u->now), u->cmd);
     u->fn(u->ud, raw, len, dir, v->piece, v->pieces, &c);
 }
 
@@ -555,28 +742,43 @@ void *xoff_packet(xoffline *x, strategy **stp, const gpkt *p, strat_dir dir, uin
     xpkt_ctx *c = &x->ctx;
     xo_replay_ud u;
     strategy *cmd = *stp, *st = cmd;
-    int bypass, hold;
+    uint64_t now = now_ms ? now_ms : 1;
+    int bypass, hold, i = -1, has;
     x->fn = fn;
     x->ud = ud;
     memset(c, 0, sizeof(*c));
+    xipc_purge(now);
     if (x->ct)
-        c->f = ctrack_feed(x->ct, p, now_ms ? now_ms : 1, &c->reverse);
-    if (g_prof.n)
-        st = prof_st(pick(p, c->f, dir, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, 0), cmd);
+        c->f = ctrack_feed(x->ct, p, now, &c->reverse);
+    if (g_prof.n) {
+        i = pick(p, c->f, dir, c->reverse, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, 0, now);
+        st = prof_st(i, cmd);
+    }
     c->st = st;
+    if ((has = found(c->f, i, st)))
+        flow_ttl(c->f, c->reverse, NULL, NULL, now);
     bypass = st && c->f && xtrig_all_cut(st, dir, c->f);
-    hold = !bypass && (st || (g_prof.n && !(c->f && c->f->l7proto) && maybe_st(p, c->f, dir, 0, cmd)));
+    hold = !bypass && (st || (g_prof.n && !(c->f && c->f->l7proto && c->f->chost_disc) && maybe_st(p, c->f, dir, 0, cmd)));
     u.fn = fn;
     u.ud = ud;
     u.cmd = cmd;
     u.base = c;
+    u.now = now;
     if (xl7_packet(x->l7, c->f, c->reverse, p, dir, raw, rawlen, NULL, 0, hold, xo_replay, &u, &x->view) ==
         XL7_HOLD) {
+        if (has && g_prof.n)
+            flow_autolist(1, p, c->f, c->reverse, L7P_UNKNOWN, now, NULL, NULL);
         *verdict = XOFF_HOLD;
         return NULL;
     }
+    if (has && g_prof.n)
+        flow_autolist(1, p, c->f, c->reverse, x->view.l7p, now, NULL, NULL);
+    if (has && x->view.l7p == L7P_DNS_RESPONSE && p->l4 == LAYER_UDP)
+        xipc_dns_response(p->payload, p->payload_len, now);
     if (g_prof.n) {
-        strategy *st2 = prof_st(pick(p, c->f, dir, x->view.l7, x->view.host, 0), cmd);
+        strategy *st2 = prof_st(pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, 0, now), cmd);
+        if (has)
+            flow_autolist(0, p, c->f, c->reverse, x->view.l7p, now, NULL, NULL);
         if (st2 != st) {
             st = c->st = st2;
             bypass = st && c->f && xtrig_all_cut(st, dir, c->f);
@@ -616,6 +818,7 @@ void xoff_end(xoffline *x, strategy *st, xoff_replay_fn fn, void *ud)
     u.ud = ud;
     u.cmd = st;
     u.base = NULL;
+    u.now = 0;
     e.st = st;
     e.u = &u;
     ctrack_foreach(x->ct, end_flow, &e);

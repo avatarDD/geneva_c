@@ -152,6 +152,10 @@ static void record(eng_worker *w, const uint8_t *data, size_t len)
 static void give_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len)
 {
     engine *e = w->e;
+    if (accept && !data && w->vdata) {
+        data = w->vdata; /* a held packet: a detached verdict sends these */
+        len = w->vlen;
+    }
     if (e->be->verdict(w, pctx, accept, data, len) < 0)
         w->c.verdict_errors++;
 }
@@ -356,6 +360,21 @@ void engine_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t 
 
 void engine_hold(eng_worker *w) { w->c.held++; }
 
+const void *engine_detach(eng_worker *w, const void *pctx, void *out)
+{
+    if (!w->e->be->detach)
+        return pctx;
+    w->e->be->detach(pctx, out);
+    return out;
+}
+
+void engine_held(eng_worker *w, const void *pctx, const void *kept)
+{
+    w->c.held++;
+    if (kept != pctx && w->e->be->verdict(w, pctx, 0, NULL, 0) < 0)
+        w->c.verdict_errors++;
+}
+
 int engine_workers_init(engine *e, unsigned nw, sbuf *err)
 {
     if (e->w)
@@ -460,16 +479,19 @@ void engine_replay(eng_worker *w, strategy *st, const uint8_t *data, size_t len,
                    void *xctx)
 {
     gpkt *p = pkt_parse(data, len);
+    w->vdata = data;
+    w->vlen = len;
     if (!p || w->e->paused || !st) {
         if (!p)
             w->c.parse_errors++;
         pkt_free(p);
         w->c.accepted++;
         give_verdict(w, pctx, 1, NULL, 0);
-        return;
+    } else {
+        w->xctx = xctx;
+        run(w, st, w->slot, p, dir, data, len, pctx);
     }
-    w->xctx = xctx;
-    run(w, st, w->slot, p, dir, data, len, pctx);
+    w->vdata = NULL;
 }
 
 /* The results of a strategy with x-actions (--ext): everything goes in the

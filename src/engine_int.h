@@ -78,6 +78,14 @@ typedef struct {
      * to. NULL: inject() is used. */
     int (*inject_x)(eng_worker *w, const void *pctx, const uint8_t *data, size_t len, uint32_t mark,
                     const char *ifout);
+    /* A packet the extensions hold for a while (src/ext/xl7.c): out gets a
+     * copy of pctx whose verdict later sends the packet anew (accept, with
+     * its bytes) or does nothing (drop), so that the captured one can be
+     * dropped at once. NFQUEUE: the kernel keeps the socket's buffer while
+     * the verdict is pending, and TCP small queues then hold back the
+     * client's next segment, the one the reassembly waits for (zapret2
+     * drops and resends too). NULL: the verdict stays pending. */
+    void (*detach)(const void *pctx, void *out);
 } backend;
 
 /* A packet waiting for its sleep to end. */
@@ -149,6 +157,8 @@ struct eng_worker {
     void *xctx;         /* per packet: what the hook found for strat_xtrig */
     eng_slot *slot;     /* per packet: its evaluator slot (NULL: none), for replays */
     int x_open;         /* worker_open succeeded: worker_close is due */
+    const uint8_t *vdata; /* a held packet's bytes for an "unmodified" verdict (detach) */
+    size_t vlen;
 };
 
 struct engine {
@@ -190,6 +200,11 @@ void engine_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t 
  * its verdict waits, like that of a delayed packet, and it is counted as
  * held. The hook keeps pctx and the bytes. */
 void engine_hold(eng_worker *w);
+/* The context to keep with a packet that is held: pctx itself, or a
+ * detached copy in out (PCTX_MAX bytes; see backend.detach) */
+const void *engine_detach(eng_worker *w, const void *pctx, void *out);
+/* After the hold: the captured packet goes (detached: dropped now) */
+void engine_held(eng_worker *w, const void *pctx, const void *kept);
 /* A held packet back: runs it through st (NULL, or paused: it goes as it
  * is) with xctx for the triggers of the extensions; the first result rides
  * on its verdict, as for a packet that was never held. */

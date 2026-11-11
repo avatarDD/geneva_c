@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "autolist.h"
 #include "l7.h"
 #include "util.h"
 
@@ -186,6 +187,14 @@ int xprof_mark(const char *s, uint32_t *mark, uint32_t *mask)
 static xprofile *prof_new(void)
 {
     xprofile *p = xcalloc(1, sizeof(*p));
+    p->ah_fail_threshold = XAH_FAIL_THRESHOLD;
+    p->ah_fail_time = XAH_FAIL_TIME;
+    p->ah_retrans_threshold = XAH_RETRANS_THRESHOLD;
+    p->ah_retrans_maxseq = XAH_RETRANS_MAXSEQ;
+    p->ah_retrans_reset = 1;
+    p->ah_incoming_maxseq = XAH_INCOMING_MAXSEQ;
+    p->ah_udp_out = XAH_UDP_OUT;
+    p->ah_udp_in = XAH_UDP_IN;
     return p;
 }
 
@@ -205,6 +214,7 @@ static void prof_free(xprofile *p)
     xlistref_free(&p->hl_ex);
     xlistref_free(&p->ips);
     xlistref_free(&p->ips_ex);
+    xah_free(p);
     free(p);
 }
 
@@ -243,8 +253,29 @@ static const xprofile *find_name(const xprofiles *ps, const char *name)
 /* dp_copy: L3 is added, L7 replaced, the lists appended (not the mark); the strategy is
  * taken when the profile has none of its own (zapret2 appends the
  * template's functions: a Geneva strategy is one whole) */
-static void prof_import(xprofile *to, const xprofile *from)
+static int prof_import(xprofile *to, const xprofile *from, sbuf *err)
 {
+#define AH_COPY(bit, f)              \
+    if (from->ah_set & (bit)) {      \
+        to->f = from->f;             \
+        to->ah_set |= (bit);         \
+    }
+    AH_COPY(1, ah_fail_threshold)
+    AH_COPY(2, ah_fail_time)
+    AH_COPY(4, ah_retrans_threshold)
+    AH_COPY(8, ah_retrans_maxseq)
+    AH_COPY(16, ah_incoming_maxseq)
+    AH_COPY(32, ah_retrans_reset)
+    AH_COPY(64, ah_udp_out)
+    AH_COPY(128, ah_udp_in)
+#undef AH_COPY
+    if (from->ahl && from->ahl != to->ahl) {
+        if (to->ahl) {
+            sb_puts(err, "autohostlist replacement is not supported (one --hostlist-auto per profile)");
+            return -1;
+        }
+        to->ahl = from->ahl;
+    }
     if (from->b_l3) {
         to->ipv4 |= from->ipv4;
         to->ipv6 |= from->ipv6;
@@ -267,6 +298,7 @@ static void prof_import(xprofile *to, const xprofile *from)
         to->src = xstrdup(from->src);
         to->tpl_text = 1;
     }
+    return 0;
 }
 
 /* --hostlist, --ipset and their -exclude, -domains, -ip forms */
@@ -326,9 +358,66 @@ static int list_opt(xprofile *p, int k, const char *value, sbuf *err)
     return 0;
 }
 
+/* --hostlist-auto and its parameters */
+static const struct {
+    const char *name;
+    int min, max;
+    unsigned bit;
+} ah_opts[] = {
+    {"hostlist-auto-fail-threshold", 1, 20, 1}, {"hostlist-auto-fail-time", 1, 1 << 30, 2},
+    {"hostlist-auto-retrans-threshold", 2, 10, 4}, {"hostlist-auto-retrans-maxseq", 0, 1 << 30, 8},
+    {"hostlist-auto-incoming-maxseq", 0, 1 << 30, 16}, {"hostlist-auto-retrans-reset", 0, 1, 32},
+    {"hostlist-auto-udp-out", 0, 1 << 30, 64}, {"hostlist-auto-udp-in", 0, 1 << 30, 128},
+};
+
+static int ah_opt(xprofile *p, const char *name, const char *value, sbuf *err)
+{
+    unsigned v;
+    size_t k;
+    if (!strcmp(name, "hostlist-auto")) {
+        xlist *l;
+        if (p->ahl) {
+            sb_puts(err, "only one --hostlist-auto per profile");
+            return -1;
+        }
+        if (!(l = xlist_auto(value, err)))
+            return -1;
+        if (xlistref_add(&p->hl, l) < 0) {
+            sb_printf(err, "--hostlist-auto %s is already a --hostlist of this profile", value);
+            return -1;
+        }
+        p->ahl = l;
+        return 1;
+    }
+    for (k = 0; k < ARRAY_LEN(ah_opts) && strcmp(name, ah_opts[k].name); k++)
+        ;
+    if (k == ARRAY_LEN(ah_opts))
+        return 0;
+    if (ah_opts[k].bit == 32 && !*value)
+        value = "1"; /* --hostlist-auto-retrans-reset alone */
+    if (num(value, strlen(value), (unsigned)ah_opts[k].max, &v) < 0 || v < (unsigned)ah_opts[k].min) {
+        sb_printf(err, "bad --%s %s (%d..%d)", name, value, ah_opts[k].min, ah_opts[k].max);
+        return -1;
+    }
+    switch (ah_opts[k].bit) {
+    case 1: p->ah_fail_threshold = (int)v; break;
+    case 2: p->ah_fail_time = (int)v; break;
+    case 4: p->ah_retrans_threshold = (int)v; break;
+    case 8: p->ah_retrans_maxseq = v; break;
+    case 16: p->ah_incoming_maxseq = v; break;
+    case 32: p->ah_retrans_reset = (int)v; break;
+    case 64: p->ah_udp_out = (int)v; break;
+    default: p->ah_udp_in = (int)v; break;
+    }
+    p->ah_set |= ah_opts[k].bit;
+    return 1;
+}
+
 int xprof_opt(xprofile *p, const char *name, const char *value, const xprofiles *templates, sbuf *err)
 {
     int r = 0;
+    if (str_starts(name, "hostlist-auto") && strcmp(name, "hostlist-auto-debug"))
+        return ah_opt(p, name, value, err);
     for (size_t k = 0; k < ARRAY_LEN(list_opts); k++)
         if (!strcmp(name, list_opts[k].name))
             return list_opt(p, (int)k, value, err) < 0 ? -1 : 1;
@@ -401,7 +490,8 @@ int xprof_opt(xprofile *p, const char *name, const char *value, const xprofiles 
             sb_printf(err, "template \"%s\" not found (a --template comes before its --import)", value);
             return -1;
         }
-        prof_import(p, t);
+        if (prof_import(p, t, err) < 0)
+            return -1;
     } else {
         return 0;
     }
@@ -515,10 +605,14 @@ static const char *const prof_opts[] = {"new",       "skip",       "name",      
 
 int xprof_wanted(const args_t *a)
 {
-    for (int i = 0; i < a->nopts; i++)
+    for (int i = 0; i < a->nopts; i++) {
+        const char *n = a->opts[i].def->name;
+        if (str_starts(n, "hostlist-auto") && strcmp(n, "hostlist-auto-debug"))
+            return 1;
         for (size_t k = 0; k < ARRAY_LEN(prof_opts); k++)
-            if (!strcmp(a->opts[i].def->name, prof_opts[k]))
+            if (!strcmp(n, prof_opts[k]))
                 return 1;
+    }
     return 0;
 }
 
@@ -801,6 +895,13 @@ static int l4_match(const xprofile *p, const xmatch *m)
     }
 }
 
+int xprof_hostlists_empty(const xprofile *p) { return xlistref_empty(&p->hl) && xlistref_empty(&p->hl_ex); }
+
+int xprof_hosts(const xprofile *p, const char *host, int host_ip, int *excluded)
+{
+    return xlists_host(&p->hl, &p->hl_ex, host, host_ip, excluded);
+}
+
 /* dp_match */
 int xprof_match(const xprofile *p, const xmatch *m, int any_l7)
 {
@@ -815,7 +916,7 @@ int xprof_match(const xprofile *p, const xmatch *m, int any_l7)
         return 0;
     if (!xlistref_ok(&p->hl) || !xlistref_ok(&p->hl_ex))
         return 0; /* a list that failed to load */
-    hl_empty = xlistref_empty(&p->hl) && xlistref_empty(&p->hl_ex);
+    hl_empty = xprof_hostlists_empty(p);
     if (!m->host && !hl_empty && !any_l7)
         return 0; /* host lists, and no host name yet */
     if (p->ips.n || p->ips_ex.n) {
@@ -823,9 +924,11 @@ int xprof_match(const xprofile *p, const xmatch *m, int any_l7)
             !xlists_ip(&p->ips, &p->ips_ex, m->ver, m->ip))
             return 0;
     }
+    if (p->ahl && m->host)
+        return 1; /* an autolist profile wins once the host is known */
     if (hl_empty || !m->host)
         return 1;
-    return xlists_host(&p->hl, &p->hl_ex, m->host, m->host_ip, NULL);
+    return xprof_hosts(p, m->host, m->host_ip, NULL);
 }
 
 int xprof_find(const xprofiles *ps, const xmatch *m, int any_l7)

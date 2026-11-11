@@ -157,6 +157,25 @@ Extensions (with --ext):
       --ipset-ip CIDR,..         the same with the subnets given here
       --ipset-exclude FILE       the profile does not take servers of FILE
       --ipset-exclude-ip CIDR,.. the same with the subnets given here
+      --hostlist-auto FILE       autolist: a host of this profile that fails without the strategy is added to FILE (created when missing; it is a --hostlist of the profile too)
+      --hostlist-auto-fail-threshold N
+                                 failures that add a host (3; 1..20)
+      --hostlist-auto-fail-time SEC
+                                 ... within SEC seconds (60)
+      --hostlist-auto-retrans-threshold N
+                                 TCP: N retransmissions of the client's request are a failure (3; 2..10)
+      --hostlist-auto-retrans-maxseq BYTES
+                                 ... counted within the client's first BYTES; past them the site works (32768)
+      --hostlist-auto-retrans-reset[=0|1]
+                                 send the client a RST after a retransmission failure (1)
+      --hostlist-auto-incoming-maxseq BYTES
+                                 TCP: a RST or an HTTP redirect to another domain within the server's first BYTES is a failure, data past them a success (4096; 0: off)
+      --hostlist-auto-udp-out N  UDP: N packets out with at most --hostlist-auto-udp-in back are a failure (4; 0: off)
+      --hostlist-auto-udp-in N   ... and more than N back a success (1)
+      --hostlist-auto-debug FILE log every autolist decision to FILE
+      --ext-ipcache-lifetime SEC how long the IP cache keeps an address's host name and TTL (7200; 0: for ever)
+      --ext-ipcache-hostname[=0|1]
+                                 cache host names by address (from DNS answers and flows) for the next flows' profile search
       --ext-profile FILE         profiles from FILE ([profile NAME] sections; after those of the command line); repeatable
 [exit 0]
 ### censor-ext-list
@@ -836,4 +855,19 @@ $ $G apply --ext --hostlist no-such-list -s '\/' -i $D/l7.pcap; $G apply --ext -
 geneva apply: profile 1: cannot access no-such-list: No such file or directory
 geneva apply: profile 1: bad --ipset-ip item 1.2.3.4/33 (an IPv4 or IPv6 address or subnet)
 geneva apply: profile 1: --ipset ./ok.txt is already in this profile
+[exit 0]
+### apply-ext-autolist
+$ $G apply --ext --filter-tcp 80,443 --hostlist-auto $T/auto.txt --hostlist-auto-debug $T/debug.log -s '[TCP:flags:PA]-tamper{TCP:urgptr:replace:9}-| \/' --new -s '\/' -i $D/l7.pcap -p 80,443 -v -o $T/out.pcap 2>/dev/null && cksum < $T/out.pcap && cat $T/auto.txt && echo debug: $(wc -c < $T/debug.log) && echo example.org > $T/a2.txt && $G apply --ext --filter-tcp 80,443 --hostlist-auto $T/a2.txt -s '[TCP:flags:PA]-tamper{TCP:urgptr:replace:9}-| \/' --new -s '\/' -i $D/l7.pcap -p 80,443 -o $T/out2.pcap 2>/dev/null && cksum < $T/out2.pcap
+117876941 6443
+debug: 0
+727395584 6443
+[exit 0]
+### apply-ext-autolist-bad
+$ cd $T; ( $G apply --ext --hostlist-auto a --hostlist-auto-fail-threshold 21 -s '\/' -i $D/l7.pcap; $G apply --ext --hostlist-auto a --hostlist-auto b -s '\/' -i $D/l7.pcap; printf '\037\213' > gz; $G apply --ext --hostlist-auto gz -s '\/' -i $D/l7.pcap; $G apply --ext --ext-ipcache-hostname=2 -s '\/' -i $D/l7.pcap; $G apply --hostlist-auto-debug x -s '\/' -i $D/l7.pcap; $G apply --ext --hostlist-auto-debug /nonexistent/x -s '\/' -i $D/l7.pcap ) 2>&1 | grep -v ' lists: '
+geneva apply: profile 1: bad --hostlist-auto-fail-threshold 21 (1..20)
+geneva apply: profile 1: only one --hostlist-auto per profile
+geneva apply: profile 1: gz: an autolist cannot be in gzip
+geneva apply: bad --ext-ipcache-hostname 2 (0 or 1)
+geneva apply: --hostlist-auto-debug needs --ext
+geneva apply: cannot write --hostlist-auto-debug /nonexistent/x
 [exit 0]

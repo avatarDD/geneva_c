@@ -25,6 +25,7 @@ typedef struct xlist {
     xipset ips;
     int64_t mtime, mtime_ns, size; /* what was loaded */
     int failed;  /* the last load failed: the list is empty */
+    int autolist; /* --hostlist-auto: never empty (an impossible name), "!" excludes */
     int refs;
 } xlist;
 
@@ -37,6 +38,12 @@ typedef struct {
 /* The list of path (a file, loaded now; shared with the profiles that
  * named it before), NULL with err. */
 xlist *xlist_file(const char *path, int ip, sbuf *err);
+/* The autolist of --hostlist-auto: path is created when missing; gzip is
+ * an error (zapret2). NULL with err. */
+xlist *xlist_auto(const char *path, sbuf *err);
+/* Adds host to an autolist and to its file (one line). 0, or -1 when the
+ * file cannot be written (the name stays in memory). */
+int xlist_append(xlist *l, const char *host);
 /* A new fixed list */
 xlist *xlist_fixed(int ip);
 /* Adds l to r (a reference). Returns 0, or -1 when r has it already. */
@@ -52,7 +59,8 @@ int xlistref_empty(const xlistref *r);
 int xlistref_ok(const xlistref *r);
 
 /* HostlistCheck_ (without the reload): 1 to apply. host: lower case,
- * without a port. *excluded: an exclude list has it. */
+ * without a port. *excluded: an exclude list has it, or an autolist
+ * exempts it ("!name"). */
 int xlists_host(const xlistref *inc, const xlistref *exc, const char *host, int no_subdom, int *excluded);
 /* IpsetCheck_: 1 to apply */
 int xlists_ip(const xlistref *inc, const xlistref *exc, int ver, const uint8_t *ip);

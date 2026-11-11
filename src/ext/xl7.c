@@ -191,6 +191,8 @@ void xl7_clear(ct_flow *f, xl7_replay_fn fn, void *ud)
     f->xr = NULL;
     free(f->host);
     f->host = NULL;
+    free(f->chost);
+    f->chost = NULL;
 }
 
 unsigned xl7_held(const ct_flow *f) { return f && f->xr ? ((const reasm *)f->xr)->n : 0; }

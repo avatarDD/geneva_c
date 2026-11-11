@@ -21,9 +21,10 @@ typedef struct {
     int fw_on;
 } nfq_state;
 
-/* the NFQUEUE packet id first, then what the extensions read (meta) */
+/* the NFQUEUE packet id first, then what the extensions read (meta);
+ * detached: the packet was dropped, the verdict sends it anew */
 typedef struct {
-    uint32_t id, mark, indev, outdev;
+    uint32_t id, mark, indev, outdev, detached;
 } nfq_pctx;
 
 static int nfq_be_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len)
@@ -31,6 +32,18 @@ static int nfq_be_verdict(eng_worker *w, const void *pctx, int accept, const uin
     nfq_state *s = w->e->bs;
     uint32_t id;
     memcpy(&id, pctx, sizeof(id));
+    if (((const nfq_pctx *)pctx)->detached) {
+        nfq_pctx c;
+        memcpy(&c, pctx, sizeof(c));
+        if (!accept)
+            return 0;
+        /* with the packet's own mark (routing) besides the engine's */
+        if (!data || rawsend_send_x(s->rs, data, len, c.mark, NULL) < 0) {
+            LOGD("engine", "sending held packet %u: %s", id, data ? strerror(errno) : "no bytes");
+            return -1;
+        }
+        return 0;
+    }
     if (nfq_verdict(s->q, id, accept ? NFQ_ACCEPT : NFQ_DROP, data, len, 0, 0) < 0) {
         LOGW("engine", "verdict for packet %u failed: %s", id, strerror(errno));
         return -1;
@@ -67,10 +80,18 @@ static void nfq_be_meta(const void *pctx, uint32_t *mark, uint32_t *ifin, uint32
     *mark = c.mark, *ifin = c.indev, *ifout = c.outdev;
 }
 
+static void nfq_be_detach(const void *pctx, void *out)
+{
+    nfq_pctx c;
+    memcpy(&c, pctx, sizeof(c));
+    c.detached = 1;
+    memcpy(out, &c, sizeof(c));
+}
+
 static void on_msg(const nfq_msg *m, void *ctx)
 {
     eng_worker *w = ctx;
-    nfq_pctx id = {m->id, m->mark, m->indev, m->outdev};
+    nfq_pctx id = {m->id, m->mark, m->indev, m->outdev, 0};
     int dir;
     switch (m->hook) {
     case NFQ_HOOK_PRE_ROUTING:
@@ -89,7 +110,7 @@ static void on_msg(const nfq_msg *m, void *ctx)
 
 static void pass_msg(const nfq_msg *m, void *ctx)
 {
-    nfq_pctx id = {m->id, m->mark, m->indev, m->outdev};
+    nfq_pctx id = {m->id, m->mark, m->indev, m->outdev, 0};
     nfq_be_verdict(ctx, &id, 1, NULL, 0);
 }
 
@@ -207,6 +228,7 @@ const backend nfq_backend = {
     NULL,
     nfq_be_meta,
     nfq_be_inject_x,
+    nfq_be_detach,
 };
 
 #endif

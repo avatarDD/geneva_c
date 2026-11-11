@@ -83,6 +83,13 @@ struct ct_flow {
      * xprof_l7 and (xprof_host) the host name */
     int16_t xprof;
     uint8_t xprof_done, xprof_l7, xprof_host;
+    /* zapret2's ctrack->hostname (src/ext/ext.c, autolist.c): the host name
+     * without its port, found by the L7 (chost_disc) or taken from the
+     * ipcache; the profile's hostlist check (xcheck: 0 not done, 1 passed,
+     * 2 failed: no strategy) and the autolist's watch (ah_check: watched,
+     * ah_final: decided, ah_retrans: the retransmission counter) */
+    char *chost;
+    uint8_t chost_ip, chost_disc, xcheck, ah_check, ah_final, ah_retrans;
 
     /* table links */
     ct_flow *hnext, *lprev, *lnext;
