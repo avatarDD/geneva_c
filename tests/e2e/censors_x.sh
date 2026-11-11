@@ -711,7 +711,9 @@ throttle() { # once a fast download (the capacity), then a policed one
     fi
     ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null --max-time 9 'http://10.81.2.2/huge.bin?ultrasurf'
 }
-auto_case 13 "--rate 60000 --burst 20000" THROTTLE 10.81.2.2 throttle
+# 16 KB/s: under a quarter of C also where the lab's censor (every packet
+# through its queue) lets no flow past about 120 KB/s
+auto_case 13 "--rate 16000 --burst 8000" THROTTLE 10.81.2.2 throttle
 # a query for a name: the forged answer comes first (another IP TTL)
 cat > "$WORK/dnsq.py" <<'EOF'
 import os, socket, sys
