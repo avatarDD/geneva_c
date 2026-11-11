@@ -113,7 +113,7 @@ void jw_dbl(jw *w, double v)
         sb_puts(w->sb, "null");
         return;
     }
-    if (v == (double)(long long)v && fabs(v) < 1e15)
+    if (fabs(v) < 1e15 && v == (double)(long long)v) /* the range first: the cast is undefined past it */
         sb_printf(w->sb, "%lld", (long long)v);
     else
         sb_printf(w->sb, "%.6g", v);
@@ -450,7 +450,14 @@ const char *json_get_str(const json_val *obj, const char *key, const char *def)
 int64_t json_get_int(const json_val *obj, const char *key, int64_t def)
 {
     const json_val *v = json_get(obj, key);
-    return v && v->type == JSON_NUM ? (int64_t)v->num : def;
+    if (!v || v->type != JSON_NUM || v->num != v->num)
+        return def;
+    /* out of range is undefined in C: the nearest end instead */
+    if (v->num >= 9223372036854775807.0)
+        return INT64_MAX;
+    if (v->num <= -9223372036854775807.0)
+        return INT64_MIN;
+    return (int64_t)v->num;
 }
 
 double json_get_num(const json_val *obj, const char *key, double def)

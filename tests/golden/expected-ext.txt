@@ -40,6 +40,8 @@ Extensions (with --ext):
   [TCP:flags:PA]-xwhen{iff=FLOW:n:<3}(xrepeat{repeats=2}(xfake{blob=0x41;ttl=1},),)-| \/
   geneva CMD @FILE takes the options from FILE (with --ext); run --ext also
   has --dry-run, --daemon, --pidfile, --user/--uid, seccomp and syslog.
+  geneva selftest --ext --fuzz N runs every reader of packets, captures,
+  strategies, lists and profiles over N random inputs (selftest --help).
   See docs/EXT.md.
 [exit 0]
 ### help-ext-censor
@@ -1075,3 +1077,51 @@ geneva fw: --fw-hook-pre needs an absolute path without quotes
 geneva fw: --local-ports/--workers print the evaluator's rules, which have no --ext-ttl-icmp
 geneva fw: --no-notrack and --ext-notrack all|frag exclude each other
 [exit 2]
+### selftest-ext
+$ cd $T; $G selftest --help; $G selftest --ext --list; $G selftest; $G selftest --ext --target nosuch; $G selftest --ext --fuzz -1; $G selftest --ext --seed x; $G selftest --ext --target spec,json --seed 1 --fuzz 200 | sed 's/ [0-9.]* s$//'; $G selftest --ext --target spec --seed 1 --json | sed 's/"ms":[0-9]*/"ms":0/'; $G selftest --ext --target pcap --seeds-out seeds >/dev/null && ls seeds/pcap
+Usage: geneva selftest --ext [--fuzz N] [options]
+Runs the fuzz targets (every reader of packets, captures, strategies, lists,
+profiles and option values) over their built-in seeds, then over N random
+changes of them each. The same --seed gives the same inputs. Exit 0 when
+every target passed, 1 when one crashed, hung or failed its own check.
+The same targets build for libFuzzer and AFL++ (tests/fuzz/run.sh).
+
+Options:
+      --ext                      turn on the extensions (required)
+      --fuzz N                   N random inputs per target after the seeds (default 0: the seeds only)
+  -t, --target LIST              only these targets (comma-separated; see --list)
+      --seed S                   seed of the random inputs (default: from the clock; printed)
+      --max-len BYTES            longest random input (default 4096)
+      --timeout SEC              an input running longer is a hang (default 10, 0: none; not on Windows)
+      --crash-dir DIR            save the input of a crash or hang there (for tests/fuzz/)
+      --seeds-out DIR            write the seeds to DIR/TARGET/ for libFuzzer or AFL++ and exit
+      --list                     list the targets
+      --json                     print the result as JSON
+  -h, --help                     show help
+pkt        Geneva's packet reader, its fields and tampers
+strategy   the strategy language with the x-actions; prints back the same
+apply      packets through the strategies with conntrack and reassembly (geneva apply --ext)
+pcap       the pcap and pcapng reader
+json       JSON of the control socket and lines of the strategy database
+l7         payload recognition, host names and position markers
+tls        TLS SNI, tls_mod and the ClientHello clone
+quic       QUIC Initial header, decryption and CRYPTO frames
+inflate    gzip, zlib and raw DEFLATE of the list files
+lists      host lists and IP sets
+profile    the profile file of --ext-profile
+spec       option values: markers, ranges, ports, filters, @FILE words
+geneva selftest: needs --ext
+geneva selftest: unknown target "nosuch" (see --list)
+geneva: --fuzz: -1 out of range [0, 4611686018427387903]
+geneva selftest: bad --seed x
+geneva selftest: seed 1, 200 random inputs per target
+  spec       ok     
+  json       ok     
+geneva selftest: 2 targets ok
+{"seed":1,"inputs":0,"targets":[{"name":"spec","result":"ok","ms":0}],"ok":true}
+seed-000
+seed-001
+seed-002
+seed-003
+seed-004
+[exit 0]

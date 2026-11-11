@@ -145,6 +145,14 @@
   `--wf-raw-filter`, `--wf-filter-lan`, `--wf-filter-loopback`,
   `--wf-priority`, `--wf-save` (на любой платформе). На Windows `--ext-wan`
   — список индексов интерфейсов. Фича `ext_fw`.
+- X7c: фаззинг. Цели для каждого разборщика (пакеты, pcap, стратегии с
+  x-действиями, JSON, L7, TLS, QUIC, gzip, списки, профили, значения
+  опций), `geneva selftest --ext --fuzz N` (воспроизводимые входы по
+  `--seed`, падения и зависания с номером входа, `--crash-dir`,
+  `--seeds-out`), сборка для libFuzzer и AFL++ (`tests/fuzz/run.sh`), CI
+  по 60 с на цель. Фича `ext_selftest`. Найдено и исправлено: число JSON
+  вне диапазона `int64` (`json_get_int` и запись чисел — неопределённое
+  поведение), ICMP без данных в распознавании L7.
 
 ## v1.2.0
 

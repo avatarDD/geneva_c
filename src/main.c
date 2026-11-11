@@ -13,6 +13,7 @@
 #if GENEVA_EXT
 #  include "ext/cfgfile.h"
 #  include "ext/ext.h"
+#  include "ext/selftest.h"
 #endif
 #include "geneva.h"
 #include "json.h"
@@ -70,6 +71,8 @@ static void usage(FILE *f)
                "  [TCP:flags:PA]-xwhen{iff=FLOW:n:<3}(xrepeat{repeats=2}(xfake{blob=0x41;ttl=1},),)-| \\/\n"
                "  geneva CMD @FILE takes the options from FILE (with --ext); run --ext also\n"
                "  has --dry-run, --daemon, --pidfile, --user/--uid, seccomp and syslog.\n"
+               "  geneva selftest --ext --fuzz N runs every reader of packets, captures,\n"
+               "  strategies, lists and profiles over N random inputs (selftest --help).\n"
                "  See docs/EXT.md.\n");
 #endif
 }
@@ -165,6 +168,11 @@ int main(int argc, char **argv)
     }
     if (strcmp(cmd, "-V") == 0 || strcmp(cmd, "--version") == 0)
         return cmd_version(0, NULL);
+#if GENEVA_EXT
+    /* not in the command list: that one is Geneva's (golden snapshots) */
+    if (strcmp(cmd, "selftest") == 0)
+        return xcmd_selftest(argc - 2, argv + 2);
+#endif
     for (size_t i = 0; i < ARRAY_LEN(commands); i++)
         if (strcmp(cmd, commands[i].name) == 0) {
             int n = argc - 2;

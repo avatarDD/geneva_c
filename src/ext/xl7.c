@@ -374,10 +374,11 @@ static int udp_packet(xl7 *x, ct_flow *f, int reverse, const gpkt *p, strat_dir 
  * ICMPv4 and ICMPv6 type numbers together for both. */
 static int icmp_payload(const gpkt *p)
 {
-    const uint8_t *d = p->payload + 8;
+    const uint8_t *d;
     size_t n = p->payload_len, off;
     if (n < 8 || !strchr("\1\2\3\4\5\13\14", p->payload[0]) || !p->payload[0])
         return L7P_ICMP;
+    d = p->payload + 8;
     n -= 8;
     off = n >= 20 ? (size_t)(d[0] & 15) * 4 : 0;
     if (n >= 20 && d[0] >> 4 == 4 && off >= 20 && n >= off && ((size_t)d[2] << 8 | d[3]) >= off)

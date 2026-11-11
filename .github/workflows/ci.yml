@@ -82,6 +82,30 @@ jobs:
       - name: censors 12-20, nfqws2 against them, posdebug parity
         run: sudo env NFQWS2_DIR="$NFQWS2_DIR" tests/e2e/censors_x.sh build/geneva
 
+  # Fuzzing (docs/EXT_ROADMAP.md, 7.2): selftest's random inputs under
+  # ASan and UBSan, then libFuzzer 60 s per target. A crash prints its
+  # input in base64 (no artifact upload: the storage quota is exhausted).
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang libclang-rt-18-dev
+      - name: selftest under the sanitizers
+        run: |
+          make -j"$(nproc)" O=build-fuzz CC=clang \
+            CFLAGS="-O1 -g -fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer" \
+            LDFLAGS="-fsanitize=fuzzer-no-link,address,undefined" build-fuzz/geneva
+          build-fuzz/geneva selftest --ext --fuzz 20000 --seed "$GITHUB_RUN_ID" --crash-dir crashes
+      - name: libFuzzer, 60 s per target
+        run: WORK=fuzz-work tests/fuzz/run.sh 60
+      - name: crashing inputs
+        if: failure()
+        run: |
+          for f in crashes/* fuzz-work/*/crash-* fuzz-work/*/leak-* fuzz-work/*/timeout-*; do
+            [ -f "$f" ] && echo "$f: $(base64 -w0 "$f")"
+          done
+          true
+
   musl-static:
     runs-on: ubuntu-24.04
     steps:
@@ -93,8 +117,11 @@ jobs:
       # X3 (conntrack, ranges, FLOW:/META: triggers): about 8 KB more
       # X5a (x-actions, blobs, tls_mod, the sending path): about 48 KB more
       # X6c (autolist, ipcache): about 16 KB more
-      - run: tools/ext_size.sh 212992 CC=musl-gcc CFLAGS="-Werror"
-      - run: tools/ext_size.sh 204800 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
+      # X7c (fuzz targets and seeds, geneva selftest): about 24 KB more
+      - run: tools/ext_size.sh 245760 CC=musl-gcc CFLAGS="-Werror"
+      - run: tools/ext_size.sh 233472 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
+      # the fuzz targets on musl (fork, alarm, fmemopen), seeds and 2000 inputs each
+      - run: build/geneva selftest --ext --fuzz 2000 --seed 1
       - run: ls -la build/geneva && file build/geneva
 
   windows-cross:
@@ -128,6 +155,8 @@ jobs:
           install: mingw-w64-x86_64-gcc make unzip
       - run: make -j4 CC=gcc STATIC=1 CFLAGS="-O2 -Werror"
       - run: make CC=gcc STATIC=1 CFLAGS="-O2 -Werror" test
+      # the fuzz targets in the process (no fork on Windows; pcap via tmpfile)
+      - run: ./build/geneva.exe selftest --ext --fuzz 2000 --seed 1
       - name: Fetch WinDivert (official release)
         run: |
           curl -fsSL -o windivert.zip "https://github.com/basil00/WinDivert/releases/download/v${WINDIVERT_VERSION}/WinDivert-${WINDIVERT_VERSION}-A.zip"

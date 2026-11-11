@@ -535,6 +535,7 @@ typedef struct {
     xprofiles *out, tpl;
     xprofile *cur;
     int skip, tmpl;
+    int nofiles; /* xprof_build_text(): no key that reads or writes a file */
     sbuf *err;
 } builder;
 
@@ -589,6 +590,12 @@ static int option(builder *b, const char *name, const char *value)
         }
         return 1;
     }
+    if (b->nofiles && (!strcmp(name, "strategy-file") || str_starts(name, "hostlist-auto") ||
+                       ((str_starts(name, "hostlist") || str_starts(name, "ipset")) && !str_ends(name, "-domains") &&
+                        !str_ends(name, "-ip")))) {
+        sb_printf(b->err, "%s: no files here", name);
+        return -1;
+    }
     if (!strcmp(name, "strategy") || !strcmp(name, "strategy-file"))
         return prof_strategy(b->cur, name[8] == '-', value, b->err) < 0 ? -1 : 1;
     if (b->skip && (str_starts(name, "hostlist") || str_starts(name, "ipset")))
@@ -639,15 +646,12 @@ static int flag(const char *v)
     return -1;
 }
 
-static int load_file(builder *b, const char *path)
+/* The lines of a profile file (text: NUL-terminated, changed in place;
+ * path: for the messages) */
+static int load_text(builder *b, const char *path, char *text)
 {
-    size_t len;
-    char *text = read_file(path, &len), *line, *next;
+    char *line, *next;
     int lineno = 0, rc = 0;
-    if (!text) {
-        sb_printf(b->err, "cannot read %s", path);
-        return -1;
-    }
     for (line = text; line && !rc; line = next) {
         char *s, *eq, *key, *val;
         next = strchr(line, '\n');
@@ -740,6 +744,19 @@ static int load_file(builder *b, const char *path)
             }
         }
     }
+    return rc;
+}
+
+static int load_file(builder *b, const char *path)
+{
+    size_t len;
+    char *text = read_file(path, &len);
+    int rc;
+    if (!text) {
+        sb_printf(b->err, "cannot read %s", path);
+        return -1;
+    }
+    rc = load_text(b, path, text);
     free(text);
     return rc;
 }
@@ -784,6 +801,8 @@ static int seg0(builder *b, int has_cmd_st)
     }
     return 0;
 }
+
+static int build_end(builder *b, int rc);
 
 int xprof_build(const args_t *a, int has_cmd_st, xprofiles *out, sbuf *err)
 {
@@ -830,8 +849,31 @@ int xprof_build(const args_t *a, int has_cmd_st, xprofiles *out, sbuf *err)
             if (load_file(&b, a->opts[i].value) < 0 || finish(&b) < 0)
                 rc = -1;
         }
-    prof_free(b.cur);
-    b.cur = NULL;
+    return build_end(&b, rc);
+}
+
+int xprof_build_text(const char *text, size_t len, xprofiles *out, sbuf *err)
+{
+    builder b;
+    char *t = xstrndup(text, len);
+    int rc;
+    memset(&b, 0, sizeof(b));
+    memset(out, 0, sizeof(*out));
+    b.out = out;
+    b.err = err;
+    b.nofiles = 1;
+    rc = load_text(&b, "text", t) < 0 || finish(&b) < 0 ? -1 : 0;
+    free(t);
+    return build_end(&b, rc);
+}
+
+/* The end of a build: numbers, defaults and strategies of the profiles */
+static int build_end(builder *b, int rc)
+{
+    xprofiles *out = b->out;
+    sbuf *err = b->err;
+    prof_free(b->cur);
+    b->cur = NULL;
     for (size_t i = 0; i < out->n && !rc; i++) {
         xprofile *p = out->v[i];
         p->n = (int)i + 1;
@@ -851,7 +893,7 @@ int xprof_build(const args_t *a, int has_cmd_st, xprofiles *out, sbuf *err)
             sb_free(&e2);
         }
     }
-    xprof_free(&b.tpl);
+    xprof_free(&b->tpl);
     if (!rc && !out->n) {
         sb_puts(err, "no profile left (every one is skipped or a template)");
         rc = -1;
