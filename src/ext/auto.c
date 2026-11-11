@@ -273,7 +273,9 @@ static void on_req(void *ud, const xdet_tuple *t)
 void xauto_tick(uint64_t now)
 {
     int full = 0;
-    if (!g.d || (g.t_tick && now - g.t_tick < 1000))
+    /* the loop wakes at least once a second: a little short of 1000 ms
+     * keeps the windows near one second instead of two */
+    if (!g.d || (g.t_tick && now - g.t_tick < 950))
         return;
     g.t_tick = now;
     xdet_tick(g.d, now, g.cn ? on_req : NULL, &full);

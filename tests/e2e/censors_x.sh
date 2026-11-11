@@ -65,7 +65,7 @@ ip netns exec "$NR" sysctl -qw net.ipv4.ip_forward=1
 mkdir "$WORK/www"
 echo "the page behind the censor" > "$WORK/www/secret.html"
 head -c 300000 /dev/zero > "$WORK/www/big.bin"
-head -c 4000000 /dev/zero > "$WORK/www/huge.bin"
+head -c 8000000 /dev/zero > "$WORK/www/huge.bin"
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=lab -keyout "$WORK/key.pem" \
     -out "$WORK/cert.pem" >/dev/null 2>&1 || { echo "openssl failed"; exit 1; }
 # HTTP on 80, HTTPS on 443 (any name), and a UDP echo on 443 for QUIC
