@@ -821,10 +821,14 @@ TEST(ctnl_messages)
     CHECK_INT(ctnl_build_get(m, 16, &t, 1), 0);
     n = ctnl_build_get(m, sizeof(m), &t, 5);
     CHECK_INT(n, 16 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + 8 + 8);
-    CHECK_INT(m[4] | m[5] << 8, 0x101); /* IPCTNL_MSG_CT_GET (little endian host) */
+    {
+        uint16_t ty;
+        memcpy(&ty, m + 4, 2); /* netlink's header is in host order */
+        CHECK_INT(ty, 0x101);  /* IPCTNL_MSG_CT_GET */
+    }
     CHECK_INT(m[16], 2);
     /* the kernel's answer: the same tuple, with counters and the TCP state */
-    m[4] = 0;
+    h16(m + 4, 0x100); /* IPCTNL_MSG_CT_NEW */
     {
         uint8_t ctrs[64], pk[8] = {0, 0, 0, 0, 0, 0, 0, 99}, by[8] = {0, 0, 0, 0, 0, 1, 0xe2, 0x40};
         uint8_t st = 3, tcp[16], pi[32];
@@ -837,8 +841,6 @@ TEST(ctnl_messages)
         n += nla(m + n, 4 | 0x8000, pi, k);
         h32(m, (uint32_t)n);
     }
-    if (!(m[0] == n || m[3] == n)) /* host order: little or big endian */
-        CHECK(0);
     g_nent = 0;
     CHECK_INT(ctnl_parse(m, n, NULL, on_ent, NULL), 1);
     CHECK_INT(g_nent, 1);
