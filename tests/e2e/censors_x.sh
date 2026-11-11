@@ -669,7 +669,8 @@ auto_case() {
             ok "$key impaired: $cls after $n flow(s)"
         else
             bad "no $cls for $key after $n flows" "$WORK/auto.jsonl"
-            grep -E "rates of|detect|auto:" "$WORK/auto.log" | tail -20 | sed 's/^/       /'
+            grep -E "detect|auto:" "$WORK/auto.log" | grep -v "rates of" | head -30 | sed 's/^/       /'
+            grep "rates of" "$WORK/auto.log" | head -8 | sed 's/^/       /'
         fi
         # no key of these flows got another class
         grep '"impaired":true' "$WORK/auto.jsonl" | grep -v "\"class\":\"$cls\"" > "$WORK/other"

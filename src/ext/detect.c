@@ -357,6 +357,7 @@ static void watch_add(xdet *d, ct_flow *f, uint64_t now)
     w->rtt = (uint32_t)(now - f->t_start);
     d->watch[d->nwatch++] = f;
     f->xa = w;
+    LOGD("detect", "watching the counters of the flow from port %u to port %u", f->cport, f->sport);
 }
 
 xdet *xdet_new(const xdet_config *c, const ct_config *ctc, const xdet_sink *s)
@@ -854,6 +855,9 @@ void xdet_counters(xdet *d, const xdet_ctr *c, uint64_t now)
     if (!c->found || !c->open) {
         if (w->nrate)
             check_throttle(d, f, w, now);
+        if (!w->done)
+            LOGD("detect", "the flow from port %u ended (%s) after %llu bytes, %d rate windows", f->cport,
+                 c->found ? "closed" : "gone", (unsigned long long)w->rbytes, w->nrate);
         w->done = 1; /* closed: nothing more to see */
     }
 }
