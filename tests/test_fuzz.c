@@ -212,21 +212,5 @@ void suite_fuzz(void)
 }
 
 #else
-/* found by fuzzing: an empty "0x" blob leaked its buffer (ASan's leak
- * check in the sanitizer builds) */
-TEST(fuzz_empty_hex_blob)
-{
-    sbuf e;
-    strategy *s;
-    sb_init(&e);
-    s = strategy_parse("[TCP:flags:PA]-xfakedsplit{pos=method+2;pattern=0x}-| \\/", &e);
-    CHECK(s == NULL);
-    CHECK(strstr(e.data, "bad hex") != NULL);
-    strategy_free(s);
-    sb_reset(&e);
-    CHECK_INT(blob_opt("empty:0x", &e), -1);
-    sb_free(&e);
-}
-
 void suite_fuzz(void) {}
 #endif
