@@ -632,6 +632,7 @@ auto_impaired() { # class: the keys that went impaired with it
 }
 auto_start() {
     : > "$WORK/auto.jsonl"
+    : > "$WORK/auto.log"
     ip netns exec "$NC" "$GENEVA" run --ext --ext-auto observe -s '\/' -p 1 --firewall "${AUTO_FW:-auto}" \
         --events "$WORK/auto.jsonl" --log-file "$WORK/auto.log" --log-level debug --quiet \
         --control "unix:$WORK/auto.sock" &
