@@ -10,6 +10,7 @@
 #include "args.h"
 #include "ext_opt.h"
 #if GENEVA_EXT
+#  include "ext/auto.h"
 #  include "ext/ext.h"
 #  include "ext/fwx.h"
 #  include "ext/svc.h"
@@ -318,6 +319,7 @@ int cmd_run(int argc, char **argv)
         EXT_PROFILE_OPTS,
         EXT_FW_OPTS,
         EXT_RUN_OPTS,
+        EXT_AUTO_OPTS,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
@@ -407,7 +409,9 @@ int cmd_run(int argc, char **argv)
         sbuf e;
         sb_init(&e);
         r = xsvc_parse(&a, &svc, &e);
-        if (r < 0)
+        if (r >= 0)
+            r = xauto_parse(&a, &o.fw, &e);
+        if (r < 0 && e.len) /* arg_int printed its own */
             fprintf(stderr, "geneva run: %s\n", e.data);
         sb_free(&e);
         if (r < 0)

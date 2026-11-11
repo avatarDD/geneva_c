@@ -7,6 +7,7 @@
 #  include <net/if.h>
 #endif
 
+#include "auto.h"
 #include "autolist.h"
 #include "blob.h"
 #include "engine_int.h"
@@ -39,6 +40,7 @@ const char *const ext_features[] = {
     "ext_service",  /* X7a: @FILE, --dry-run, --daemon, --pidfile, --user/--uid, seccomp, syslog, ctl ext_flows/ext_keys */
     "ext_fw",       /* X7b: --ext-first, --ext-wan/--ext-lan, --ext-notrack, --ext-ttl-icmp, --ext-flowoffload, --fw-hook-*, --wf-* */
     "ext_selftest", /* X7c: geneva selftest --ext --fuzz N, fuzz targets for libFuzzer/AFL++ */
+    "ext_auto",     /* X9: --ext-auto observe (NFLOG, detector), ext_flow/ext_impaired/ext_class, ext_status */
     0,
 };
 
@@ -196,6 +198,7 @@ void ext_deactivate(void)
     xprof_free(&g_prof);
     xipc_reset();
     xah_debug_log(NULL);
+    xauto_reset();
     g_active = 0;
 }
 
@@ -455,7 +458,8 @@ static int xw_open(eng_worker *w, sbuf *err)
     if (!g_ct_disable)
         x->ct = ctrack_new(&c);
     x->l7 = xl7_new(&g_l7);
-    return 0;
+    /* one observer for the process, opened before the rules go up */
+    return w->id == 0 ? xauto_open(err) : 0;
 }
 
 static void flush_flow(ct_flow *f, void *ud) { xw_clear(f, ud); }
@@ -474,6 +478,8 @@ static void xw_close(eng_worker *w)
     if (!x)
         return;
     x->closed = 1; /* xw_flush gave held packets their verdicts */
+    if (w->id == 0)
+        xauto_close();
     ctrack_free(x->ct);
     xl7_free(x->l7);
     free(x);
@@ -812,8 +818,18 @@ static int xw_control(engine *e, const char *cmd, const json_val *req, jw *w, sb
     int n;
     if (!strcmp(cmd, "ext_flows"))
         return w ? flows(e, req, w, err) : 1;
-    if (!strcmp(cmd, "ext_keys"))
-        return w ? keys(w) : 1;
+    if (!strcmp(cmd, "ext_keys")) {
+        if (w) {
+            keys(w);
+            xauto_keys(w);
+        }
+        return 1;
+    }
+    if (!strcmp(cmd, "ext_status")) {
+        if (w)
+            xauto_status(w);
+        return 1;
+    }
     if (strcmp(cmd, "reload_lists"))
         return 0;
     n = xlists_reload(plat_now_ms(), 1);
@@ -823,7 +839,19 @@ static int xw_control(engine *e, const char *cmd, const json_val *req, jw *w, sb
     return 1;
 }
 
-static const ext_hooks hooks = {xw_open, xw_close, xw_packet, xw_flush, xw_control};
+static size_t xw_pollfds(engine *e, plat_pollfd *fds, size_t max)
+{
+    (void)e;
+    return xauto_pollfds(fds, max);
+}
+
+static void xw_ready(engine *e, const plat_pollfd *fds, size_t n)
+{
+    (void)e;
+    xauto_ready(fds, n);
+}
+
+static const ext_hooks hooks = {xw_open, xw_close, xw_packet, xw_flush, xw_control, xw_pollfds, xw_ready};
 
 const ext_hooks *ext_engine_hooks(void) { return g_active ? &hooks : NULL; }
 

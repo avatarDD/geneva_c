@@ -605,5 +605,102 @@ if [ -n "${NFQWS2_DIR:-}" ] && { on nfqws2 || on posdebug; }; then
     done
 fi
 
+# --ext-auto observe (stage X9): geneva run in the client namespace watches
+# every flow through NFLOG and must give each censor's key its class within
+# five flows, while flows that get through give no class at all. AUTO_FW
+# picks the firewall (auto: nft, then iptables).
+auto_impaired() { # class: the keys that went impaired with it
+    grep '"ev":"ext_impaired"' "$WORK/auto.jsonl" | grep '"impaired":true' | grep "\"class\":\"$1\"" |
+        sed 's/.*"key":"\([^"]*\)".*/\1/' | sort -u | tr '\n' ' '
+}
+auto_start() {
+    : > "$WORK/auto.jsonl"
+    ip netns exec "$NC" "$GENEVA" run --ext --ext-auto observe -s '\/' -p 1 --firewall "${AUTO_FW:-auto}" \
+        --events "$WORK/auto.jsonl" --log-file "$WORK/auto.log" --log-level debug --quiet \
+        --control "unix:$WORK/auto.sock" &
+    APID=$!
+    NPID=$APID
+    for _ in $(seq 50); do
+        grep -q '"ev":"ready"' "$WORK/auto.jsonl" 2>/dev/null && return 0
+        sleep 0.1
+    done
+    bad "geneva run --ext-auto did not start" "$WORK/auto.log"
+    return 1
+}
+auto_stop() {
+    kill "$APID" 2>/dev/null
+    wait "$APID" 2>/dev/null
+    NPID=
+    ip netns exec "$NC" sh -c 'iptables-save 2>/dev/null; nft list ruleset 2>/dev/null' | grep -qi geneva &&
+        bad "--ext-auto rules left behind" || ok "the rules are gone"
+}
+# auto_case NAME "censor options" CLASS KEY "request": up to five requests
+auto_case() {
+    name=$1 copts=$2 cls=$3 key=$4 req=$5
+    on auto || on "auto$name" || return
+    echo "== --ext-auto observe against censor $name"
+    start_censor $name $copts || return
+    if auto_start; then
+        n=0
+        while [ $n -lt 5 ]; do
+            n=$((n + 1))
+            eval "$req" > /dev/null 2>&1
+            sleep 0.3
+            echo " $(auto_impaired "$cls")" | grep -q " $key " && break
+        done
+        if echo " $(auto_impaired "$cls")" | grep -q " $key "; then
+            ok "$key impaired: $cls after $n flow(s)"
+        else
+            bad "no $cls for $key after $n flows" "$WORK/auto.jsonl"
+        fi
+        # no key of these flows got another class
+        grep '"impaired":true' "$WORK/auto.jsonl" | grep -v "\"class\":\"$cls\"" > "$WORK/other"
+        [ -s "$WORK/other" ] && bad "other classes" "$WORK/other" || ok "no other class"
+        auto_stop
+    fi
+    kill "$CPID" 2>/dev/null
+    wait "$CPID" 2>/dev/null
+    CPID=
+}
+UDPN=40030
+udp4() { # four datagrams on one flow
+    UDPN=$((UDPN + 1))
+    ip netns exec "$NC" python3 "$WORK/udp.py" 10.81.2.2 "$DATA/quic_initial_www_google_com.bin" $UDPN
+    ip netns exec "$NC" python3 "$WORK/udp.py" 10.81.2.2 "$DATA/quic_initial_www_google_com.bin" $UDPN
+}
+cat > "$WORK/status.py" <<'EOF'
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+s.sendall(b'{"cmd":"ext_status","id":1}\n')
+print(s.makefile().readline().strip())
+EOF
+auto_case 14 "--rst-ttl 50" RST_INJECT ultrasurf.example 'https ultrasurf.example'
+auto_case 15 "" RETRANS ultrasurf.example 'https ultrasurf.example'
+auto_case 16 "--forbidden google" UDP_NOANSWER udp/443 udp4
+auto_case 17 "--block-ip 10.81.2.3 --port 80,443" BLACKHOLE_SYN 10.81.2.3 'https lab.example 10.81.2.3'
+auto_case 18 "" REDIRECT ultrasurf.example "http /secret.html -H 'Host: ultrasurf.example'"
+if on auto || on autonone; then
+    echo "== --ext-auto observe without a censor: no class"
+    if auto_start; then
+        for i in 1 2 3; do
+            http /big.bin > /dev/null
+            https lab.example > /dev/null
+            ip netns exec "$NC" python3 "$WORK/udp.py" 10.81.2.2 "$DATA/quic_initial_vk_com.bin" $((40050 + i)) > /dev/null
+        done
+        ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null --max-time 10 --limit-rate 100k http://10.81.2.2/big.bin
+        sleep 0.5
+        grep -q '"ev":"ext_impaired"' "$WORK/auto.jsonl" && bad "a class without a censor" "$WORK/auto.jsonl" ||
+            ok "no class"
+        ip netns exec "$NC" python3 "$WORK/status.py" "$WORK/auto.sock" > "$WORK/status" 2>&1
+        if grep -q '"flows_ok":[1-9]' "$WORK/status" && grep -q '"flows_failed":0' "$WORK/status"; then
+            ok "ext_status: $(sed 's/.*"packets":\([0-9]*\).*"flows_ok":\([0-9]*\).*/\1 packets, \2 flows ok/' "$WORK/status")"
+        else
+            bad "ext_status" "$WORK/status"
+        fi
+        auto_stop
+    fi
+fi
+
 if [ $fails -eq 0 ]; then echo "all passed"; else echo "$fails failure(s)"; fi
 exit $fails

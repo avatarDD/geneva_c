@@ -45,6 +45,16 @@
                                           "changes (1; the root helper removes the rules on exit)")},         \
     {"log-target", 0, 1, "syslog", EXT_HELP("also log to syslog (/dev/log)")}
 
+/* --ext-auto (run; src/ext/auto.h) */
+#define EXT_AUTO_OPTS                                                                                         \
+    {"ext-auto", 0, 1, "observe",                                                                             \
+     EXT_HELP("Linux: watch the first packets of every flow (any port, NFLOG) and tell of blocked keys "     \
+              "(port, /24 or /48, address, host): events ext_flow, ext_impaired, ext_class, ctl ext_status; " \
+              "traffic is not changed")},                                                                     \
+    {"ext-nflog-group", 0, 1, "N", EXT_HELP("the NFLOG group of --ext-auto (the queue number)")},              \
+    {"ext-observe-first", 0, 1, "N",                                                                          \
+     EXT_HELP("--ext-auto: packets of each direction observed per flow (16)")}
+
 /* The firewall's (run and fw): zapret2's rules and winws2's --wf-* filter,
  * with --ext (src/ext/fwx.c) */
 #define EXT_FW_OPTS                                                                                           \

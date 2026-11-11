@@ -225,6 +225,9 @@ Extensions (with --ext):
       --uid UID[:GID,..]         the same with numbers
       --ext-seccomp[=0|1]        Linux: once running, forbid exec, kill, ptrace and file system changes (1; the root helper removes the rules on exit)
       --log-target syslog        also log to syslog (/dev/log)
+      --ext-auto observe         Linux: watch the first packets of every flow (any port, NFLOG) and tell of blocked keys (port, /24 or /48, address, host): events ext_flow, ext_impaired, ext_class, ctl ext_status; traffic is not changed
+      --ext-nflog-group N        the NFLOG group of --ext-auto (the queue number)
+      --ext-observe-first N      --ext-auto: packets of each direction observed per flow (16)
 [exit 0]
 ### censor-ext-list
 $ $G censor --ext --list
@@ -941,6 +944,16 @@ geneva run: --user and --uid exclude each other
 geneva run: --ext-seccomp must be 0 or 1
 geneva run: --dry-run needs --ext
 [exit 2]
+### run-ext-auto
+$ $G run --ext -s '\/' -p 443 --mark 0x10000000 --ext-auto observe --dry-run; $G run --ext -s '\/' -p 443 --ext-auto apply; $G run --ext -s '\/' -p 443 --ext-auto x; $G run --ext -s '\/' -p 443 --ext-observe-first 8; $G run --ext -s '\/' -p 443 --ext-auto observe --ext-observe-first 2; $G run --ext -s '\/' -p 443 --server-side --ext-auto observe; $G run -s '\/' -p 443 --ext-auto observe
+geneva run: the options are fine
+geneva run: --ext-auto apply is not there yet: observe
+geneva run: bad --ext-auto x (observe)
+geneva run: --ext-observe-first is for --ext-auto
+geneva: --ext-observe-first: 2 out of range [4, 1000]
+geneva run: --ext-auto watches the client side: not with --server-side
+geneva run: --ext-auto needs --ext
+[exit 2]
 ### fw-ext-nft
 $ $G fw print --ext -p 443 --proto tcp,udp --ext-first tcp-out=20,tcp-in=10,udp-out=5,udp-in=3 --ext-wan eth0,ppp0 --ext-notrack frag --ext-ttl-icmp --ext-flowoffload hardware --ext-lan br-lan --firewall nft --fw-hook-post /bin/true
 # nft: apply
@@ -1117,6 +1130,7 @@ inflate    gzip, zlib and raw DEFLATE of the list files
 lists      host lists and IP sets
 profile    the profile file of --ext-profile
 spec       option values: markers, ranges, ports, filters, @FILE words
+observe    NFLOG datagrams and the detector of --ext-auto
 geneva selftest: needs --ext
 geneva selftest: unknown target "nosuch" (see --list)
 geneva: --fuzz: -1 out of range [0, 4611686018427387903]

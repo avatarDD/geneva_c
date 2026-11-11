@@ -132,7 +132,7 @@ static void fwlist_free(fwlist *l)
 /* ---- iptables ------------------------------------------------------------ */
 
 typedef struct {
-    char out[32], in[32], nt[32], dnat[32], snat[32], fwd[32];
+    char out[32], in[32], nt[32], dnat[32], snat[32], fwd[32], obo[32], obi[32];
 } chains;
 
 static void chain_names(const fw_config *c, chains *ch)
@@ -143,6 +143,8 @@ static void chain_names(const fw_config *c, chains *ch)
     snprintf(ch->dnat, sizeof(ch->dnat), "GENEVA_%u_DNAT", c->queue);
     snprintf(ch->snat, sizeof(ch->snat), "GENEVA_%u_SNAT", c->queue);
     snprintf(ch->fwd, sizeof(ch->fwd), "GENEVA_%u_FWD", c->queue);
+    snprintf(ch->obo, sizeof(ch->obo), "GENEVA_%u_OBO", c->queue);
+    snprintf(ch->obi, sizeof(ch->obi), "GENEVA_%u_OBI", c->queue);
 }
 
 /* Splits the port set into iptables port matches: multiport takes up to 15
@@ -260,6 +262,41 @@ static void gen_ipt_forward(const fw_config *c, fwlist *l, int v6, const char *c
     ipt(l, K_REQ, v6, "-t mangle -I FORWARD -j %s", chain);
 }
 
+/* --ext-auto: the observation chains, with the client's addresses as they
+ * are before NAT: out first in POSTROUTING (mangle comes before SNAT, and
+ * the queue's verdict would hide the packets from a later chain), in from
+ * INPUT and FORWARD (after the replies are mapped back) */
+static void gen_ipt_obs(const fw_config *c, fwlist *l, int v6, const char *chain, int outdir)
+{
+    const char *protos[2] = {"tcp", "udp"};
+    const char *ifv[FW_MAX_IFS];
+    int nif = fw_ifaces(c, ifv);
+    const char *dir = outdir ? "ORIGINAL" : "REPLY";
+    ipt(l, K_REQ, v6, "-t mangle -N %s", chain);
+    if (outdir)
+        ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j RETURN", chain, c->mark, c->mark);
+    ipt(l, K_REQ, v6, "-t mangle -A %s %s lo -j RETURN", chain, outdir ? "-o" : "-i");
+    for (int k = 0; k < (nif ? nif : 1); k++) {
+        char ifm[64] = "";
+        if (nif)
+            snprintf(ifm, sizeof(ifm), "%s %s ", outdir ? "-o" : "-i", ifv[k]);
+        for (int p = 0; p < 2; p++)
+            ipt(l, K_REQ, v6,
+                "-t mangle -A %s %s-p %s -m conntrack --ctdir %s -m connbytes --connbytes 1:%d "
+                "--connbytes-dir %s --connbytes-mode packets -j NFLOG --nflog-group %u",
+                chain, ifm, protos[p], dir, c->obs_first, outdir ? "original" : "reply", c->obs_group);
+        if (!outdir)
+            ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s -m %s --%s-type destination-unreachable -j NFLOG --nflog-group %u",
+                chain, ifm, v6 ? "ipv6-icmp" : "icmp", v6 ? "icmp6" : "icmp", v6 ? "icmpv6" : "icmp", c->obs_group);
+    }
+    if (outdir) {
+        ipt(l, K_REQ, v6, "-t mangle -I POSTROUTING -j %s", chain);
+    } else {
+        ipt(l, K_REQ, v6, "-t mangle -I INPUT -j %s", chain);
+        ipt(l, K_REQ, v6, "-t mangle -I FORWARD -j %s", chain);
+    }
+}
+
 static int addr_is_v6(const char *a) { return strchr(a, ':') != NULL; }
 
 static void gen_ipt(const fw_config *c, fwlist *l, int v6, int up)
@@ -267,7 +304,7 @@ static void gen_ipt(const fw_config *c, fwlist *l, int v6, int up)
     chains ch;
     struct {
         const char *table, *hook, *chain;
-    } all[6];
+    } all[9];
     chain_names(c, &ch);
     all[0].table = "mangle", all[0].hook = "POSTROUTING", all[0].chain = ch.out;
     all[1].table = "mangle", all[1].hook = "PREROUTING", all[1].chain = ch.in;
@@ -275,7 +312,12 @@ static void gen_ipt(const fw_config *c, fwlist *l, int v6, int up)
     all[3].table = "nat", all[3].hook = "PREROUTING", all[3].chain = ch.dnat;
     all[4].table = "nat", all[4].hook = "POSTROUTING", all[4].chain = ch.snat;
     all[5].table = "mangle", all[5].hook = "FORWARD", all[5].chain = ch.fwd;
-    for (int i = 0; i < 6; i++) {
+    all[6].table = "mangle", all[6].hook = "POSTROUTING", all[6].chain = ch.obo;
+    all[7].table = "mangle", all[7].hook = "INPUT", all[7].chain = ch.obi;
+    all[8].table = "mangle", all[8].hook = "FORWARD", all[8].chain = ch.obi;
+    /* the observation chains only with --ext-auto: the rules without --ext
+     * stay as they were */
+    for (int i = 0; i < (c->obs ? 9 : 6); i++) {
         ipt(l, K_DEL, v6, "-t %s -D %s -j %s", all[i].table, all[i].hook, all[i].chain);
         ipt(l, K_IGN, v6, "-t %s -F %s", all[i].table, all[i].chain);
         ipt(l, K_IGN, v6, "-t %s -X %s", all[i].table, all[i].chain);
@@ -290,6 +332,10 @@ static void gen_ipt(const fw_config *c, fwlist *l, int v6, int up)
         gen_ipt_queue(c, l, v6, ch.out, 1);
     if (c->in || c->ttl_icmp)
         gen_ipt_queue(c, l, v6, ch.in, 0);
+    if (c->obs) {
+        gen_ipt_obs(c, l, v6, ch.obo, 1);
+        gen_ipt_obs(c, l, v6, ch.obi, 0);
+    }
     if (c->notrack) {
         ipt(l, K_OPT, v6, "-t raw -N %s", ch.nt);
         if (c->notrack_frag) {
@@ -414,6 +460,35 @@ static void nft_ttl_chain(const fw_config *c, sbuf *s)
     sb_puts(s, "\t}\n");
 }
 
+/* --ext-auto: the observation chains. Both see the client's addresses as
+ * they are before NAT: out before the queue's chain and before SNAT (100),
+ * in after the replies are mapped back (-100), so after the queue's */
+static void nft_obs_chain(const fw_config *c, sbuf *s, int outdir)
+{
+    const char *dir = outdir ? "original" : "reply";
+    int prio = outdir ? (c->prenat ? -151 : 99) : -99;
+    sb_printf(s, "\tchain obs_%s {\n\t\ttype filter hook %s priority %d; policy accept;\n", outdir ? "out" : "in",
+              outdir ? "postrouting" : "prerouting", prio);
+    if (outdir)
+        sb_printf(s, "\t\tmeta mark & 0x%x == 0x%x return\n", c->mark, c->mark);
+    sb_printf(s, "\t\t%s \"lo\" return\n", outdir ? "oifname" : "iifname");
+    sb_puts(s, "\t\t");
+    if (c->ipv4 != c->ipv6)
+        sb_printf(s, "meta nfproto %s ", c->ipv4 ? "ipv4" : "ipv6");
+    nft_ifname(c, s, outdir ? "oifname" : "iifname");
+    sb_printf(s, "meta l4proto { tcp, udp } ct direction %s ct %s packets 1-%d log group %u\n", dir, dir,
+              c->obs_first, c->obs_group);
+    if (!outdir)
+        for (int v6 = 0; v6 < 2; v6++) {
+            if (!(v6 ? c->ipv6 : c->ipv4))
+                continue;
+            sb_puts(s, "\t\t");
+            nft_ifname(c, s, "iifname");
+            sb_printf(s, "%s type destination-unreachable log group %u\n", v6 ? "icmpv6" : "icmp", c->obs_group);
+        }
+    sb_puts(s, "\t}\n");
+}
+
 /* --ext-flowoffload: zapret2's FLOWOFFLOAD=software|hardware. Our own
  * flowtable over the WAN (--iface) and LAN (--ext-lan) devices; flows to the
  * ports stay out of it while the queue needs their packets (all of them, or
@@ -481,6 +556,10 @@ static char *gen_nft_script(const fw_config *c, int up, int notrack)
         nft_queue_chain(c, &s, 0);
     if (c->ttl_icmp)
         nft_ttl_chain(c, &s);
+    if (c->obs) {
+        nft_obs_chain(c, &s, 1);
+        nft_obs_chain(c, &s, 0);
+    }
     if (c->offload)
         nft_offload(c, &s);
     if (notrack && c->notrack_frag)
