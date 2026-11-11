@@ -60,6 +60,7 @@ else
     mkdir -p "$WORK"
     keep=1
 fi
+WORK=$(cd "$WORK" && pwd) # the targets run inside it
 "$O/geneva" selftest --ext --seeds-out "$WORK/seeds" >/dev/null
 
 # the samples of the repository for the targets that read them
