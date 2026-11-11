@@ -1001,7 +1001,7 @@ static void emit_start(engine *e)
     sb_free(&s);
 }
 
-#define MAX_POLL (8 + CTL_MAX_CLIENTS + 1)
+#define MAX_POLL (8 + CTL_MAX_CLIENTS + 1 + 4)
 
 int engine_run(engine_opts *o)
 {
@@ -1098,13 +1098,15 @@ int engine_run(engine_opts *o)
     deadline = o->duration > 0 ? e.start_ms + (uint64_t)(o->duration * 1000) : 0;
     while (!sig_stop && !e.stop_request && !(o->stop && atomic_load_int(o->stop))) {
         plat_pollfd pfd[MAX_POLL];
-        size_t nbe, nctl;
+        size_t nbe, nctl, nx = 0;
         uint64_t now, due;
         int timeout = 1000, r;
 
         plat_mutex_lock(&e.lock);
         nbe = e.be->pollfds(&e, pfd, 8);
-        nctl = ctl_pollfds(e.ctl, pfd + nbe, MAX_POLL - nbe);
+        nctl = ctl_pollfds(e.ctl, pfd + nbe, MAX_POLL - nbe - 4);
+        if (e.o->ext && e.o->ext->pollfds)
+            nx = e.o->ext->pollfds(&e, pfd + nbe + nctl, 4);
         now = plat_now_ms();
         if (o->stop)
             timeout = 100; /* the stop flag is polled */
@@ -1121,7 +1123,7 @@ int engine_run(engine_opts *o)
             if (deadline - now < (uint64_t)timeout)
                 timeout = (int)(deadline - now);
         }
-        r = plat_poll(pfd, (unsigned)(nbe + nctl), timeout);
+        r = plat_poll(pfd, (unsigned)(nbe + nctl + nx), timeout);
         if (r < 0) {
 #ifdef _WIN32
             int perr = plat_sock_err();
@@ -1145,6 +1147,8 @@ int engine_run(engine_opts *o)
         }
         if (r > 0 && nctl)
             ctl_dispatch(e.ctl, pfd + nbe, nctl, on_control, &e);
+        if (r > 0 && nx)
+            e.o->ext->ready(&e, pfd + nbe + nctl, nx);
         engine_run_timers(&e, 0);
         for (unsigned i = 0; i < e.nw; i++) {
             eng_worker *w = &e.w[i];

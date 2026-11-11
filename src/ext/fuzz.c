@@ -12,6 +12,7 @@
 #include "ext/blob.h"
 #include "ext/cfgfile.h"
 #include "ext/ctrack.h"
+#include "ext/detect.h"
 #include "ext/ext.h"
 #include "ext/fwx.h"
 #include "ext/hostlist.h"
@@ -19,6 +20,7 @@
 #include "ext/ipset.h"
 #include "ext/l7.h"
 #include "ext/markers.h"
+#include "ext/nflog.h"
 #include "ext/profile.h"
 #include "ext/quic.h"
 #include "ext/range.h"
@@ -1132,6 +1134,109 @@ static void s_spec(xfuzz_add_fn add, void *ud)
         add_str(add, ud, v[i]);
 }
 
+/* ---- observe: NFLOG datagrams into the detector of --ext-auto ------------------- */
+
+typedef struct {
+    xdet *d;
+    uint64_t now;
+} obs_ctx;
+
+static void obs_pkt(const nflog_msg *m, void *ud)
+{
+    obs_ctx *o = ud;
+    gpkt *p;
+    XFUZZ_CHECK(m->data && m->len <= 65536);
+    p = pkt_parse(m->data, m->len);
+    if (p) {
+        xdet_packet(o->d, p, o->now);
+        pkt_free(p);
+    }
+    o->now += 700; /* now and then past the purges */
+}
+
+static void t_observe(const uint8_t *d, size_t n)
+{
+    xdet_config c;
+    ct_config ct;
+    obs_ctx o;
+    xdet_stats st;
+    sbuf w;
+    jw j;
+    xdet_config_default(&c);
+    ct_config_default(&ct);
+    c.max_keys = 16; /* the full table too */
+    o.d = xdet_new(&c, &ct, NULL);
+    o.now = 1000;
+    /* the input is one NFLOG datagram; read twice, so its flows go on */
+    for (int k = 0; k < 2; k++)
+        (void)nflog_parse(d, n, obs_pkt, &o);
+    xdet_get_stats(o.d, &st);
+    XFUZZ_CHECK(st.flows_ok + st.flows_failed <= st.packets);
+    XFUZZ_CHECK(st.impaired <= st.keys && st.keys <= c.max_keys);
+    sb_init(&w);
+    jw_init(&j, &w);
+    xdet_keys_json(o.d, &j, 0);
+    XFUZZ_CHECK(w.len >= 2);
+    sb_free(&w);
+    xdet_free(o.d);
+}
+
+/* one NFLOG packet message around pkt */
+static void obs_msg(sbuf *b, const uint8_t *pkt, size_t n)
+{
+    uint32_t len = (uint32_t)(16 + 4 + 8 + 4 + ((n + 3) & ~(size_t)3)), z = 0;
+    uint16_t type = 4 << 8, flags = 0, al;
+    static const uint8_t nfgen[4] = {2, 0, 0, 0}, hdr[4] = {8, 0, 4, 0}, pad[4] = {0};
+    sb_append(b, &len, 4);
+    sb_append(b, &type, 2);
+    sb_append(b, &flags, 2);
+    sb_append(b, &z, 4);
+    sb_append(b, &z, 4);
+    sb_append(b, nfgen, 4);
+    al = 8, type = 1;
+    sb_append(b, &al, 2);
+    sb_append(b, &type, 2);
+    sb_append(b, hdr, 4);
+    al = (uint16_t)(4 + n), type = 9;
+    sb_append(b, &al, 2);
+    sb_append(b, &type, 2);
+    sb_append(b, pkt, n);
+    sb_append(b, pad, ((n + 3) & ~(size_t)3) - n);
+}
+
+static void s_observe(xfuzz_add_fn add, void *ud)
+{
+    uint8_t pl[1500], pk[2048];
+    for (int v6 = 0; v6 < 2; v6++) {
+        sbuf b;
+        size_t n, ln = sample(0, pl, sizeof(pl));
+        sb_init(&b);
+        /* a TCP flow: SYN, SYN,ACK (the addresses swapped), the request
+         * three times, a RST from the server */
+        n = mk_pkt(pk, sizeof(pk), v6, 6, 40000, 443, 0x02, NULL, 0);
+        obs_msg(&b, pk, n);
+        n = mk_pkt(pk, sizeof(pk), v6, 6, 443, 40000, 0x12, NULL, 0);
+        if (n && !v6) {
+            uint8_t t[4];
+            memcpy(t, pk + 12, 4), memcpy(pk + 12, pk + 16, 4), memcpy(pk + 16, t, 4);
+        }
+        obs_msg(&b, pk, n);
+        for (int i = 0; i < 4; i++) {
+            n = mk_pkt(pk, sizeof(pk), v6, 6, 40000, 443, 0x18, pl, ln);
+            obs_msg(&b, pk, n);
+        }
+        n = mk_pkt(pk, sizeof(pk), v6, 6, 443, 40000, 0x14, NULL, 0);
+        obs_msg(&b, pk, n);
+        /* UDP without an answer */
+        for (int i = 0; i < 4; i++) {
+            n = mk_pkt(pk, sizeof(pk), v6, 17, 40001, 443, 0, pl, 64);
+            obs_msg(&b, pk, n);
+        }
+        add(ud, (const uint8_t *)b.data, b.len);
+        sb_free(&b);
+    }
+}
+
 /* ---- the table ------------------------------------------------------------------- */
 
 static const xfuzz_target targets[] = {
@@ -1147,6 +1252,7 @@ static const xfuzz_target targets[] = {
     {"lists", "host lists and IP sets", t_lists, s_lists},
     {"profile", "the profile file of --ext-profile", t_profile, s_profile},
     {"spec", "option values: markers, ranges, ports, filters, @FILE words", t_spec, s_spec},
+    {"observe", "NFLOG datagrams and the detector of --ext-auto", t_observe, s_observe},
 };
 
 const xfuzz_target *xfuzz_targets(size_t *n)

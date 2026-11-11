@@ -61,6 +61,13 @@ typedef struct {
     int ttl_icmp;            /* --ext-ttl-icmp: drop ICMP time-exceeded of queued flows */
     int offload;             /* --ext-flowoffload: 0 none, 1 software, 2 hardware (nft) */
     const char *hook_pre, *hook_post; /* --fw-hook-pre/post: run with up|down */
+    /* --ext-auto (docs/EXT.md, X9): copies of the first obs_first packets of
+     * each direction of every TCP and UDP flow the client starts (any port,
+     * not the engine's own packets) and of ICMP destination-unreachable go
+     * to NFLOG group obs_group, before the queue sees them; 0: none */
+    int obs;
+    uint16_t obs_group;
+    int obs_first;
 } fw_config;
 
 #define FW_FILTER_FILE_MAX 65536 /* bytes of a --filter-file */

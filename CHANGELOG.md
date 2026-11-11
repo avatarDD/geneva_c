@@ -160,6 +160,16 @@
   SACK сервера и при потере повторяет изменённое сообщение. `xdrip`: первые
   байты по одному сегменту с паузой. e2e: загрузка 100 МБ со сверкой
   SHA-256 и потерями (`tests/e2e/seqtrack.sh`).
+- X9a: `run --ext --ext-auto observe` — наблюдение и детектор блокировок
+  без изменения трафика. Первые пакеты каждого потока (любые порты) и ICMP
+  unreachable копируются через NFLOG (`--ext-nflog-group`,
+  `--ext-observe-first`; цепочки nft `obs_out`/`obs_in`, iptables
+  `GENEVA_N_OBO`/`_OBI`). Классы `RETRANS`, `RST_IN`, `REDIRECT`,
+  `UDP_NOANSWER` (детекторы zapret2 с его порогами), `RST_INJECT`,
+  `BLACKHOLE_SYN`, `ICMP_PROHIBIT`; ключи порт, сеть, адрес и имя с тестом
+  Вальда. События `ext_flow`, `ext_impaired`, `ext_class`, команда
+  `ext_status`, поле `detect` в `ext_keys`, фича `ext_auto`. e2e против
+  цензоров 14–18 и без цензора (`tests/e2e/censors_x.sh auto`).
 
 ## v1.2.0
 

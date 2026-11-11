@@ -33,9 +33,13 @@
 | `ready` | правила firewall стоят (или открыт WinDivert), пакеты идут через движок | `backend`, `firewall` (`nft`, `iptables`, `windivert`, `none`) |
 | `ready` | (agent) агент ждёт оценщика или начал к нему подключаться | `addr` |
 | `state` | `ext_flows` | `limit` (необязателен, 1000) | (`--ext`) потоки conntrack (`docs/EXT.md`, X7a): `flows` — массив объектов `proto`, `client`, `cport`, `server`, `sport`, `state` (TCP: `syn`, `est`, `fin`), `age_ms`, `idle_ms`, `profile_n`, `profile`, `l7`, `host`, `incoming_ttl`, `autolist`, `out` и `in` (`n`, `d`, `b`; TCP: `s`, `win`, `mss`); `total`, `truncated`, `ctrack` |
-| `ext_keys` | — | (`--ext`) счётчики неудач автосписка: `autolist` — массив `{profile_n, profile, file, fails: [{host, count, expire_s}]}` |
+| `ext_keys` | — | (`--ext`) счётчики неудач автосписка: `autolist` — массив `{profile_n, profile, file, fails: [{host, count, expire_s}]}`; с `--ext-auto` ещё `detect` — ключи детектора (как `impaired` у `ext_status`) |
+| `ext_status` | — | (`--ext`) `auto` (`observe` или `off`); с `--ext-auto`: `nflog_group`, `observing`, `packets`, `lost` (сколько раз ядро теряло копии), `flows`, `flows_ok`, `flows_failed`, `keys`, `impaired` — массив `{key, level (port, net, ip, host), impaired, class, flows, fails, classes: {КЛАСС: число}}` (`docs/EXT.md`, X9a) |
 | `pause` / `resume` | `state` (`paused`, `running`) |
 | `stats` | каждые `--stats-interval` с (по умолчанию 10 с, если есть `--events` или `--control`), по SIGUSR1 и при выходе | см. ниже |
+| `ext_flow` | (`--ext-auto`) поток с неудачей | `proto`, `client`, `cport`, `server`, `sport`, `host` (если известно), `class` (`RETRANS`, `RST_IN`, `RST_INJECT`, `REDIRECT`, `UDP_NOANSWER`, `BLACKHOLE_SYN`, `ICMP_PROHIBIT`), `why` |
+| `ext_impaired` | (`--ext-auto`) ключ стал заблокированным или снова здоровым | `key`, `level` (`port`, `net`, `ip`, `host`), `impaired`, `class` (у заблокированного), `flows`, `fails` |
+| `ext_class` | (`--ext-auto`) у заблокированного ключа сменился класс | `key`, `level`, `class`, `flows`, `fails` |
 | `ext_pkt` | (`--ext`) пакет прошёл x-действие `xlog` (`docs/EXT.md`, X5b) | `dir` (`out`, `in`), `tree`, `l7payload`, `len`; по параметрам — `msg`, `pkt`, `pos`, `hex`; у куска собранного сообщения `piece`, `pieces` |
 | `log` | сообщение лога (в `--log-format json` и для подписчиков) | `level`, `mod`, `msg` |
 | `error` | ошибка | `where` (`strategy`, `nfqueue`, `rawsend`, `firewall`, `windivert`, `control`, `reload`, `filter`), `message`; у `filter` для некомпилируемого выражения ещё `pos` |
