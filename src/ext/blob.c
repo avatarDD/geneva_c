@@ -161,6 +161,7 @@ int blob_opt(const char *spec, sbuf *err)
     v = colon + 1;
     if (v[0] == '0' && (v[1] == 'x' || v[1] == 'X')) {
         if (blob_hex(v, BLOB_HEX_MAX, &data, &len) < 0 || !len) {
+            free(data); /* "0x" gives an empty buffer */
             sb_printf(err, "bad hex string in blob \"%s\"", name);
             return -1;
         }

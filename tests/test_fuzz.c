@@ -11,7 +11,9 @@
 #include "util.h"
 
 #if GENEVA_EXT
+#  include "ext/blob.h"
 #  include "ext/fuzz.h"
+#  include "strategy.h"
 #  include "ext/profile.h"
 
 typedef struct {
@@ -176,6 +178,22 @@ TEST(fuzz_icmp_empty)
     CHECK(1);
 }
 
+/* found by fuzzing: an empty "0x" blob leaked its buffer (ASan's leak
+ * check in the sanitizer builds) */
+TEST(fuzz_empty_hex_blob)
+{
+    sbuf e;
+    strategy *s;
+    sb_init(&e);
+    s = strategy_parse("[TCP:flags:PA]-xfakedsplit{pos=method+2;pattern=0x}-| \\/", &e);
+    CHECK(s == NULL);
+    CHECK(strstr(e.data, "bad hex") != NULL);
+    strategy_free(s);
+    sb_reset(&e);
+    CHECK_INT(blob_opt("empty:0x", &e), -1);
+    sb_free(&e);
+}
+
 void suite_fuzz(void)
 {
     log_level lv = log_get_level();
@@ -187,11 +205,28 @@ void suite_fuzz(void)
     RUN(fuzz_profile_text);
     RUN(fuzz_json_int_range);
     RUN(fuzz_icmp_empty);
+    RUN(fuzz_empty_hex_blob);
     ext_reset();
     log_set_quiet(0);
     log_set_level(lv);
 }
 
 #else
+/* found by fuzzing: an empty "0x" blob leaked its buffer (ASan's leak
+ * check in the sanitizer builds) */
+TEST(fuzz_empty_hex_blob)
+{
+    sbuf e;
+    strategy *s;
+    sb_init(&e);
+    s = strategy_parse("[TCP:flags:PA]-xfakedsplit{pos=method+2;pattern=0x}-| \\/", &e);
+    CHECK(s == NULL);
+    CHECK(strstr(e.data, "bad hex") != NULL);
+    strategy_free(s);
+    sb_reset(&e);
+    CHECK_INT(blob_opt("empty:0x", &e), -1);
+    sb_free(&e);
+}
+
 void suite_fuzz(void) {}
 #endif

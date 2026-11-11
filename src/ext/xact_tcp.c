@@ -85,6 +85,7 @@ int xa_check_blob(const xact *a, const char *key, sbuf *err)
         uint8_t *b;
         size_t n;
         if (blob_hex(v, 255, &b, &n) < 0 || !n) {
+            free(b); /* "0x" gives an empty buffer */
             sb_printf(err, "bad hex in %s (at most 255 bytes)", key);
             return -1;
         }
