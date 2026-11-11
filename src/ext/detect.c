@@ -321,7 +321,7 @@ struct vwatch {
     uint64_t t_start, t_change, t_sample;
     uint32_t rtt;
     uint64_t rbytes;
-    float rate[RATES];
+    float rate[RATES];       /* the last windows' rates (a ring) */
     int nrate, data_windows; /* windows with data so far (the first is left out) */
     uint8_t freeze_done, throttle_done, done;
 };
@@ -767,15 +767,17 @@ static int cmp_float(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-/* THROTTLE: a flat plateau far under C */
+/* THROTTLE: a flat plateau far under C over the last throttle_windows
+ * windows (a burst or a stall earlier in the flow ages out) */
 static void check_throttle(xdet *d, ct_flow *f, vwatch *w, uint64_t now)
 {
     float v[RATES];
     double med, mean = 0, var = 0;
-    int n = w->nrate;
-    if (w->throttle_done || n < d->c.throttle_windows || w->rbytes < d->c.throttle_min_bytes || d->cap <= 0)
+    int n = d->c.throttle_windows < RATES ? d->c.throttle_windows : RATES;
+    if (w->throttle_done || n < 1 || w->nrate < n || w->rbytes < d->c.throttle_min_bytes || d->cap <= 0)
         return;
-    memcpy(v, w->rate, sizeof(v[0]) * (size_t)n);
+    for (int i = 0; i < n; i++)
+        v[i] = w->rate[(w->nrate - 1 - i) % RATES];
     qsort(v, (size_t)n, sizeof(v[0]), cmp_float);
     med = n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2;
     for (int i = 0; i < n; i++)
@@ -784,6 +786,8 @@ static void check_throttle(xdet *d, ct_flow *f, vwatch *w, uint64_t now)
     for (int i = 0; i < n; i++)
         var += (v[i] - mean) * (v[i] - mean);
     var /= n;
+    LOGD("detect", "rates of a flow: %d windows, median %.0f B/s, cv %.2f, max %.0f, C %.0f", n, med,
+         mean > 0 ? sqrt(var) / mean : 0, (double)v[n - 1], d->cap);
     if (med <= 0 || med >= d->c.throttle_rho * d->cap || sqrt(var) / mean >= d->c.throttle_cv || v[n - 1] > 2 * med)
         return;
     w->throttle_done = 1;
@@ -822,8 +826,7 @@ void xdet_counters(xdet *d, const xdet_ctr *c, uint64_t now)
         if (c->rbytes > w->rbytes && w->data_windows++ > 0 && dt >= 500) {
             /* the first window with data holds the handshake and a burst;
              * a short one (an answer late, the next early) says little */
-            if (w->nrate < RATES)
-                w->rate[w->nrate++] = (float)r;
+            w->rate[w->nrate++ % RATES] = (float)r;
             if (r > d->cap || now - d->t_cap > FREEZE_WINDOW) { /* C forgets after 10 minutes */
                 d->cap = r;
                 d->t_cap = now;
@@ -832,7 +835,7 @@ void xdet_counters(xdet *d, const xdet_ctr *c, uint64_t now)
         w->rbytes = c->rbytes;
         w->t_change = now;
         check_throttle(d, f, w, now);
-        strict_ok(d, f, w->rbytes, w->nrate ? (double)w->rate[w->nrate - 1] : 0, now);
+        strict_ok(d, f, w->rbytes, w->nrate ? (double)w->rate[(w->nrate - 1) % RATES] : 0, now);
     } else if (c->found && c->open && !w->freeze_done && w->rbytes >= d->c.freeze_min &&
                w->rbytes <= d->c.freeze_max) {
         uint64_t silence = 4ull * w->rtt;
