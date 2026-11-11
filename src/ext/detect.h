@@ -30,8 +30,8 @@
  *                  takes the class when freeze_flows (3) such flows within
  *                  10 minutes have an interquartile range of B under
  *                  freeze_iqr (4 KB): a censor freezes at the same count
- *   THROTTLE       at least throttle_windows (5) one-second windows with
- *                  data (the first one left out) whose median rate is under
+ *   THROTTLE       the last throttle_windows (5) one-second windows with
+ *                  data (the flow's first one left out): their median rate under
  *                  throttle_rho (0.25) of the capacity C (the fastest window
  *                  of any flow lately), coefficient of variation under
  *                  throttle_cv (0.3), no window over twice the median, and
