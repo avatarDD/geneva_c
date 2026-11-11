@@ -233,6 +233,14 @@ fi
 
 if [ -z "$ONLY" ] || echo " $ONLY " | grep -q " server "; then
     echo "== server-side: geneva agent in the client namespace"
+    # The server keeps retransmitting the SYN+ACK of a handshake a censor
+    # cut off (request sockets: "ss -K" does not abort them), and one that
+    # arrives after the censor's reset is the first packet censor 7 sees:
+    # it watches that pair, the client's RST ends it, and the probe passes
+    # (censor 7 logged "watches ... 0x12, port 80 -> 30018" then "stops
+    # watching on flags 0x04"). No SYN+ACK retransmissions here: a dropped
+    # SYN+ACK is answered again when the client retransmits its SYN.
+    ip netns exec "$NS" sysctl -qw net.ipv4.tcp_synack_retries=0
     TOKEN=e2e-secret
     ip netns exec "$NC" "$GENEVA" agent --listen tcp:0.0.0.0:7110 --token $TOKEN \
         --log-file "$WORK/agent.log" --quiet &

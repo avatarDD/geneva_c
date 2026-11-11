@@ -70,6 +70,9 @@ cat > "$WORK/cli.py" <<'PY'
 import socket, sys
 fam = socket.AF_INET6 if ":" in sys.argv[1] else socket.AF_INET
 s = socket.socket(fam, socket.SOCK_STREAM); s.settimeout(8)
+if len(sys.argv) > 3:  # from this source port
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("", int(sys.argv[3])))
 s.connect((sys.argv[1], int(sys.argv[2])))
 msg = b"hello geneva 0123456789 abcdefghijklmnopqrstuvwxyz\n"
 s.sendall(msg)
@@ -98,6 +101,23 @@ while True:
     if not d: break
     got += d
 sys.exit(0 if got == b"echo:" + ch + b"\n" else 1)
+PY
+# an ICMP time-exceeded about TCP 10.77.0.1:SPORT -> 10.77.0.2:PORT, as a
+# router answers a fake with a small TTL (from the server namespace)
+cat > "$WORK/ttlx.py" <<'PY'
+import socket, struct, sys
+def csum(b):
+    if len(b) % 2: b += b"\0"
+    s = sum(struct.unpack("!%dH" % (len(b) // 2), b))
+    s = (s >> 16) + (s & 0xffff); s += s >> 16
+    return ~s & 0xffff
+ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 40, 1, 0, 1, 6, 0, socket.inet_aton("10.77.0.1"), socket.inet_aton("10.77.0.2"))
+ip = ip[:10] + struct.pack("!H", csum(ip)) + ip[12:]
+inner = ip + struct.pack("!HHI", int(sys.argv[1]), int(sys.argv[2]), 1)
+icmp = struct.pack("!BBHI", 11, 0, 0, 0) + inner
+icmp = icmp[:2] + struct.pack("!H", csum(icmp)) + icmp[4:]
+s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+s.sendto(icmp, ("10.77.0.1", 0))
 PY
 HAVE6=0
 ip netns exec "$NC" python3 -c 'import socket; socket.socket(socket.AF_INET6)' 2>/dev/null && HAVE6=1
@@ -161,6 +181,13 @@ rules_gone() {
 }
 
 cnt() { grep -c -- "$1" "$WORK/cap.txt"; }
+
+# packets the --ext-ttl-icmp rules dropped (iptables or nft counters)
+ttl_drops() {
+    { ip netns exec "$NC" iptables -t mangle -L GENEVA_310_IN -v -x -n 2>/dev/null | awk '/DROP/ && /icmp/ {print $1}'
+      ip netns exec "$NC" nft list chain inet geneva_310 ttl 2>/dev/null |
+          sed -n 's/.*icmp type time-exceeded.*packets \([0-9]*\).*/\1/p'; } | awk '{s += $1} END {print s + 0}'
+}
 
 for FW in $FIREWALLS; do
     echo "== firewall: $FW"
@@ -396,6 +423,35 @@ for FW in $FIREWALLS; do
     check "SIGTERM: the pidfile removed" '[ ! -e $WORK/geneva.pid ]'
     ip netns exec "$NC" "$GENEVA" run --ext -s '[x' -p $PORT --firewall "$FW" --daemon 2>/dev/null
     check "a failed start: exit code 3" '[ $? -eq 3 ]'
+    fi
+
+    # firewall parity with zapret2 (stage X7b): of our packets only
+    # fragments kept out of conntrack, time-exceeded of the queued flows
+    # dropped, the hooks around the rules, --ext-first per direction
+    if "$GENEVA" version --json | grep -q '"ext_fw"'; then
+    rm -f "$WORK/hooks.log"
+    printf '#!/bin/sh\necho "$1 $2 $3" >> %s\n' "$WORK/hooks.log" > "$WORK/hook.sh"
+    chmod +x "$WORK/hook.sh"
+    start_case "fw parity" "$FW" '[TCP:flags:PA]-fragment{ip:16:True}-| \/' 10.77.0.2 \
+        "--ext --ext-notrack frag --ext-ttl-icmp --ext-first out=4,in=0 --fw-hook-pre $WORK/hook.sh --fw-hook-post $WORK/hook.sh"
+    SP=$((41000 + $$ % 1000))
+    [ "$FW" = iptables ] && SP=$((SP + 1000))
+    [ "$FW" = nft ] && SP=$((SP + 2000))
+    ip netns exec "$NC" timeout 15 python3 "$WORK/cli.py" 10.77.0.2 $PORT $SP && ok "exchange works" ||
+        bad "exchange failed" "$WORK/eng.log"
+    ip netns exec "$NS" python3 "$WORK/ttlx.py" $((SP + 7)) $PORT # no such flow
+    sleep 0.2
+    check "time-exceeded of other flows passes" '[ "$(ttl_drops)" = 0 ]'
+    ip netns exec "$NS" python3 "$WORK/ttlx.py" $SP $PORT
+    sleep 0.2
+    check "time-exceeded of a queued flow dropped" '[ "$(ttl_drops)" = 1 ]'
+    stop_case
+    check "IP fragments on the wire" '[ $(cnt "flags \[+") -ge 1 ]'
+    check "--ext-first out=4: the engine saw at most 4 packets out" \
+        'n=$(grep "\"ev\":\"stats\"" "$WORK/ev.jsonl" | tail -1 | sed "s/.*\"pkts_out\":\([0-9]*\).*/\1/"); [ "$n" -ge 3 ] && [ "$n" -le 4 ]'
+    check "hooks: before and after, up and down" \
+        '[ "$(cut -d" " -f1 "$WORK/hooks.log" | tr "\n" " ")" = "up up down down " ] && [ "$(sed -n 1p "$WORK/hooks.log")" = "up $FW 310" ]'
+    check "rules removed" rules_gone
     fi
 
     start_case "SIGHUP reload" "$FW" '\/'

@@ -45,6 +45,46 @@
                                           "changes (1; the root helper removes the rules on exit)")},         \
     {"log-target", 0, 1, "syslog", EXT_HELP("also log to syslog (/dev/log)")}
 
+/* The firewall's (run and fw): zapret2's rules and winws2's --wf-* filter,
+ * with --ext (src/ext/fwx.c) */
+#define EXT_FW_OPTS                                                                                           \
+    {"ext-first", 0, 1, "N|SPEC",                                                                             \
+     EXT_HELP("--first per protocol and direction: [tcp-|udp-]out=N,[tcp-|udp-]in=N,... (zapret2's: "        \
+              "tcp-out=20,tcp-in=10,udp-out=5,udp-in=3; 0: every packet)")},                                \
+    {"ext-wan", 0, 1, "IF,..", EXT_HELP("like --iface, up to 8 interfaces (Windows: indexes)")},                          \
+    {"ext-lan", 0, 1, "IF,..", EXT_HELP("Linux: the LAN interfaces of --ext-flowoffload")},                  \
+    {"ext-notrack", 0, 1, "all|frag|none",                                                                   \
+     EXT_HELP("Linux: the packets the engine sends kept out of conntrack: all (default), frag: IP fragments " \
+              "and TCP without SYN/RST/ACK only (zapret2), none (--no-notrack)")},                           \
+    {"ext-ttl-icmp", 0, 0, NULL,                                                                              \
+     EXT_HELP("Linux: drop ICMP time-exceeded of the queued flows (fakes with a small TTL make them; ct mark " \
+              "--mark)")},                                                                                    \
+    {"ext-flowoffload", 0, 1, "none|software|hardware",                                                      \
+     EXT_HELP("Linux, nft: our flowtable over --iface/--ext-wan and --ext-lan, the queued flows kept out of " \
+              "it while queued (turn the system's flow offload off)")},                                      \
+    {"fw-hook-pre", 0, 1, "FILE", EXT_HELP("Linux: run FILE up|down BACKEND QUEUE before the rules go up or down")}, \
+    {"fw-hook-post", 0, 1, "FILE", EXT_HELP("Linux: the same after them")},                                    \
+    {"wf-tcp-out", 0, 1, "[~]P[-P],..", EXT_HELP("WinDivert filter of winws2 (replaces the one from -p): TCP to " \
+                                                 "these ports")},                                             \
+    {"wf-tcp-in", 0, 1, "[~]P[-P],..", EXT_HELP("... TCP from these ports (incoming connections)")},          \
+    {"wf-udp-out", 0, 1, "[~]P[-P],..", EXT_HELP("... UDP to these ports")},                                 \
+    {"wf-udp-in", 0, 1, "[~]P[-P],..", EXT_HELP("... UDP from these ports")},                                \
+    {"wf-icmp-out", 0, 1, "T[:C],..|*", EXT_HELP("... outgoing ICMP of these types[:codes]")},               \
+    {"wf-icmp-in", 0, 1, "T[:C],..|*", EXT_HELP("... incoming ICMP of these types[:codes]")},                \
+    {"wf-ipp-out", 0, 1, "PROTO,..|*", EXT_HELP("... outgoing packets of these IP protocols")},              \
+    {"wf-ipp-in", 0, 1, "PROTO,..|*", EXT_HELP("... incoming packets of these IP protocols")},               \
+    {"wf-iface", 0, 1, "IDX[.SUB]", EXT_HELP("... only this interface index")},                              \
+    {"wf-l3", 0, 1, "ipv4,ipv6", EXT_HELP("... only these IP versions")},                                    \
+    {"wf-tcp-empty", 0, 2, "0|1", EXT_HELP("... also TCP without data and SYN/RST/FIN (0)")},                \
+    {"wf-raw-part", 0, 1, "EXPR|@FILE", EXT_HELP("... or this expression; repeatable")},                     \
+    {"wf-raw-filter", 0, 1, "EXPR|@FILE", EXT_HELP("... and this expression")},                              \
+    {"wf-filter-lan", 0, 1, "0|1", EXT_HELP("... without private and link-local addresses (1)")},             \
+    {"wf-filter-loopback", 0, 1, "0|1", EXT_HELP("... without loopback (1)")},                               \
+    {"wf-raw", 0, 1, "EXPR|@FILE", EXT_HELP("the whole WinDivert filter, as it is")},                       \
+    {"wf-priority", 0, 1, "N", EXT_HELP("the same as --priority")},                                          \
+    {"wf-dup-check", 0, 2, "0|1", EXT_HELP("accepted and ignored (WinDivert takes several handles)")},       \
+    {"wf-save", 0, 1, "FILE", EXT_HELP("write the --wf-* filter to FILE and exit (any platform)")}
+
 /* The conntrack and the L7 of the extensions (FLOW: and L7: triggers), for
  * the commands that run strategies: run, eval, evolve, apply. */
 #define EXT_CTRACK_OPTS                                                                                       \

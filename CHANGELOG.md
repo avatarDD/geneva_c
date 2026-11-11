@@ -134,6 +134,17 @@
   Команды управления `ext_flows` (потоки conntrack) и `ext_keys`
   (счётчики неудач автосписка). Предупреждение, когда `--mark` совпадает
   с меткой zapret2. Фича `ext_service`.
+- X7b: правила firewall как у zapret2 (только с `--ext`, у `run` и `fw`):
+  `--ext-first` по протоколам и направлениям, `--ext-wan` (список
+  интерфейсов), `--ext-notrack frag` (только фрагменты и TCP без
+  SYN/RST/ACK, predefrag), `--ext-ttl-icmp` (отбрасывание ICMP
+  time-exceeded потоков из очереди), `--ext-flowoffload` с `--ext-lan`
+  (свой flowtable nft, потоки из очереди не выгружаются), хуки
+  `--fw-hook-pre/post`. Фильтр WinDivert winws2: `--wf-tcp/udp/icmp/ipp-in/out`,
+  `--wf-iface`, `--wf-l3`, `--wf-tcp-empty`, `--wf-raw`, `--wf-raw-part`,
+  `--wf-raw-filter`, `--wf-filter-lan`, `--wf-filter-loopback`,
+  `--wf-priority`, `--wf-save` (на любой платформе). На Windows `--ext-wan`
+  — список индексов интерфейсов. Фича `ext_fw`.
 
 ## v1.2.0
 

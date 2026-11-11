@@ -18,11 +18,12 @@ static const char *const ext_only[] = {"new",        "name",       "skip",      
                                        "ipset-exclude", "ipset-exclude-ip", "comment", "dry-run", "daemon",
                                        "pidfile", "user", "uid", "log-target"};
 
-/* and the autolist's: every "hostlist-auto*" */
+/* and the autolist's: every "hostlist-auto*"; winws2's "wf-*"; "fw-hook-*" */
 
 static int is_ext_only(const char *n)
 {
-    if (!strncmp(n, "ext-", 4) || !strncmp(n, "hostlist-auto", 13))
+    if (!strncmp(n, "ext-", 4) || !strncmp(n, "hostlist-auto", 13) || !strncmp(n, "wf-", 3) ||
+        !strncmp(n, "fw-hook-", 8))
         return 1;
     for (size_t i = 0; i < sizeof(ext_only) / sizeof(*ext_only); i++)
         if (!strcmp(n, ext_only[i]))

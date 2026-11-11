@@ -308,8 +308,10 @@ void engine_packet(eng_worker *w, const uint8_t *data, size_t len, int d, const 
     if (w->flows) {
         /* --first N without conntrack: later packets of a flow go on as
          * they are, outside the strategy and the counters */
-        int evicted;
-        int in_first = flowtab_packet(w->flows, p, dir, (uint32_t)e->o->fw.first, plat_now_ms(), &evicted);
+        int evicted = 0;
+        /* --ext: the count of the protocol and direction */
+        uint32_t first = (uint32_t)fw_first(&e->o->fw, p->l4 == LAYER_UDP, dir == DIR_IN);
+        int in_first = first ? flowtab_packet(w->flows, p, dir, first, plat_now_ms(), &evicted) : 1;
         if (evicted)
             w->c.flow_evictions++;
         if (!in_first) {
@@ -387,7 +389,7 @@ int engine_workers_init(engine *e, unsigned nw, sbuf *err)
         w->e = e;
         w->id = i;
         sb_init(&w->line);
-        if (e->o->fw.first > 0 && e->be->engine_first)
+        if (fw_first_any(&e->o->fw) && e->be->engine_first)
             w->flows = flowtab_new(FLOW_MAX);
     }
     for (unsigned i = 0; e->o->ext && e->o->ext->worker_open && i < nw; i++) {

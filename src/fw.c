@@ -47,6 +47,34 @@ int fw_backend_parse(const char *s, fw_backend *out)
     return 0;
 }
 
+int fw_first(const fw_config *c, int udp, int in)
+{
+    return c->first_dir ? c->firstv[udp ? 1 : 0][in ? 1 : 0] : c->first;
+}
+
+int fw_first_any(const fw_config *c)
+{
+    for (int p = 0; p < 2; p++)
+        for (int d = 0; d < 2; d++)
+            if (fw_first(c, p, d) > 0)
+                return 1;
+    return 0;
+}
+
+/* The interfaces to match: --iface, or its list under --ext. 0: any. */
+static int fw_ifaces(const fw_config *c, const char **v)
+{
+    if (c->nifs) {
+        memcpy(v, c->ifs, (size_t)c->nifs * sizeof(*v));
+        return c->nifs;
+    }
+    if (c->iface) {
+        v[0] = c->iface;
+        return 1;
+    }
+    return 0;
+}
+
 /* ---- command lists ------------------------------------------------------- */
 
 enum {
@@ -156,30 +184,50 @@ static void gen_ipt_queue(const fw_config *c, fwlist *l, int v6, const char *cha
     int src = outdir ? c->server_side : !c->server_side;
     char m[MAX_PORT_RANGES][400];
     size_t nm = port_matches(&c->ports, src, m, MAX_PORT_RANGES);
-    char ifm[64] = "", cb[96] = "", bypass[24] = "";
-    if (c->iface)
-        snprintf(ifm, sizeof(ifm), "%s %s ", outdir ? "-o" : "-i", c->iface);
-    if (c->first > 0)
-        snprintf(cb, sizeof(cb), "-m connbytes --connbytes 1:%d --connbytes-dir %s --connbytes-mode packets ",
-                 c->first, outdir ? "original" : "reply");
+    const char *ifv[FW_MAX_IFS];
+    int nif = fw_ifaces(c, ifv);
+    char bypass[24] = "";
     if (c->bypass)
         snprintf(bypass, sizeof(bypass), " --queue-bypass");
     ipt(l, K_REQ, v6, "-t mangle -N %s", chain);
-    ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j RETURN", chain, c->mark, c->mark);
-    for (int p = 0; p < 2; p++) {
-        if (!protos[p])
-            continue;
-        for (size_t i = 0; i < nm; i++)
-            ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s %s-j NFQUEUE --queue-num %u%s", chain, ifm,
-                protos[p], m[i], cb, c->queue, bypass);
+    if (c->ttl_icmp && !outdir) {
+        /* --ext: before the return of our own packets, which are outgoing */
+        ipt(l, K_REQ, v6, "-t mangle -A %s -p %s -m %s --%s-type time-exceeded -m connmark --mark 0x%x/0x%x -j DROP",
+            chain, v6 ? "ipv6-icmp" : "icmp", v6 ? "icmp6" : "icmp", v6 ? "icmpv6" : "icmp", c->mark, c->mark);
+        if (!c->in) {
+            ipt(l, K_REQ, v6, "-t mangle -I PREROUTING -j %s", chain);
+            return;
+        }
     }
-    /* --ext profiles: ICMP and other IP protocols, whatever the ports */
-    if (c->icmp)
-        ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s -j NFQUEUE --queue-num %u%s", chain, ifm,
-            v6 ? "ipv6-icmp" : "icmp", c->queue, bypass);
-    for (int i = 0; i < c->nipp; i++)
-        ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %u -j NFQUEUE --queue-num %u%s", chain, ifm, c->ipp[i], c->queue,
-            bypass);
+    ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j RETURN", chain, c->mark, c->mark);
+    for (int k = 0; k < (nif ? nif : 1); k++) {
+        char ifm[64] = "";
+        if (nif)
+            snprintf(ifm, sizeof(ifm), "%s %s ", outdir ? "-o" : "-i", ifv[k]);
+        for (int p = 0; p < 2; p++) {
+            char cb[96] = "";
+            int first = fw_first(c, p, !outdir);
+            if (!protos[p])
+                continue;
+            if (first > 0)
+                snprintf(cb, sizeof(cb), "-m connbytes --connbytes 1:%d --connbytes-dir %s --connbytes-mode packets ",
+                         first, outdir ? "original" : "reply");
+            for (size_t i = 0; i < nm; i++) {
+                if (c->ttl_icmp)
+                    ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s %s-j CONNMARK --or-mark 0x%x", chain, ifm,
+                        protos[p], m[i], cb, c->mark);
+                ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s %s-j NFQUEUE --queue-num %u%s", chain, ifm,
+                    protos[p], m[i], cb, c->queue, bypass);
+            }
+        }
+        /* --ext profiles: ICMP and other IP protocols, whatever the ports */
+        if (c->icmp)
+            ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s -j NFQUEUE --queue-num %u%s", chain, ifm,
+                v6 ? "ipv6-icmp" : "icmp", c->queue, bypass);
+        for (int i = 0; i < c->nipp; i++)
+            ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %u -j NFQUEUE --queue-num %u%s", chain, ifm, c->ipp[i],
+                c->queue, bypass);
+    }
     ipt(l, K_REQ, v6, "-t mangle -I %s -j %s", outdir ? "POSTROUTING" : "PREROUTING", chain);
 }
 
@@ -190,20 +238,25 @@ static void gen_ipt_forward(const fw_config *c, fwlist *l, int v6, const char *c
     const char *protos[2] = {c->tcp ? "tcp" : NULL, c->udp ? "udp" : NULL};
     char m[2][MAX_PORT_RANGES][400];
     size_t nm[2];
-    char ifm[64] = "", bypass[24] = "";
+    const char *ifv[FW_MAX_IFS];
+    int nif = fw_ifaces(c, ifv);
+    char bypass[24] = "";
     nm[0] = port_matches(&c->ports, 0, m[0], MAX_PORT_RANGES);
     nm[1] = port_matches(&c->ports, 1, m[1], MAX_PORT_RANGES);
-    if (c->iface)
-        snprintf(ifm, sizeof(ifm), "-i %s ", c->iface);
     if (c->bypass)
         snprintf(bypass, sizeof(bypass), " --queue-bypass");
     ipt(l, K_REQ, v6, "-t mangle -N %s", chain);
     ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j RETURN", chain, c->mark, c->mark);
-    for (int p = 0; p < 2; p++)
-        for (int src = 0; protos[p] && src < 2; src++)
-            for (size_t i = 0; i < nm[src]; i++)
-                ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s -j NFQUEUE --queue-num %u%s", chain, ifm,
-                    protos[p], m[src][i], c->queue, bypass);
+    for (int k = 0; k < (nif ? nif : 1); k++) {
+        char ifm[64] = "";
+        if (nif)
+            snprintf(ifm, sizeof(ifm), "-i %s ", ifv[k]);
+        for (int p = 0; p < 2; p++)
+            for (int src = 0; protos[p] && src < 2; src++)
+                for (size_t i = 0; i < nm[src]; i++)
+                    ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s -j NFQUEUE --queue-num %u%s", chain, ifm,
+                        protos[p], m[src][i], c->queue, bypass);
+    }
     ipt(l, K_REQ, v6, "-t mangle -I FORWARD -j %s", chain);
 }
 
@@ -235,11 +288,20 @@ static void gen_ipt(const fw_config *c, fwlist *l, int v6, int up)
     }
     if (c->out)
         gen_ipt_queue(c, l, v6, ch.out, 1);
-    if (c->in)
+    if (c->in || c->ttl_icmp)
         gen_ipt_queue(c, l, v6, ch.in, 0);
     if (c->notrack) {
         ipt(l, K_OPT, v6, "-t raw -N %s", ch.nt);
-        ipt(l, K_OPT, v6, "-t raw -A %s -m mark --mark 0x%x/0x%x -j CT --notrack", ch.nt, c->mark, c->mark);
+        if (c->notrack_frag) {
+            /* --ext: zapret2's predefrag (raw comes after defrag in iptables:
+             * fragments the kernel reassembles stay tracked) */
+            ipt(l, K_OPT, v6, "-t raw -A %s -m mark --mark 0x%x/0x%x %s -j CT --notrack", ch.nt, c->mark, c->mark,
+                v6 ? "-m frag" : "-f");
+            ipt(l, K_OPT, v6, "-t raw -A %s -m mark --mark 0x%x/0x%x -p tcp --tcp-flags SYN,RST,ACK NONE -j CT --notrack",
+                ch.nt, c->mark, c->mark);
+        } else {
+            ipt(l, K_OPT, v6, "-t raw -A %s -m mark --mark 0x%x/0x%x -j CT --notrack", ch.nt, c->mark, c->mark);
+        }
         ipt(l, K_OPT, v6, "-t raw -I OUTPUT -j %s", ch.nt);
     }
     if (c->forward_to && addr_is_v6(c->forward_to) == v6) {
@@ -262,6 +324,21 @@ static void gen_ipt(const fw_config *c, fwlist *l, int v6, int up)
 
 /* ---- nftables ------------------------------------------------------------ */
 
+/* "oifname "eth0" " or "oifname { "eth0", "ppp0" } " (nothing: any) */
+static void nft_ifname(const fw_config *c, sbuf *s, const char *key)
+{
+    const char *v[FW_MAX_IFS];
+    int n = fw_ifaces(c, v);
+    if (n == 1)
+        sb_printf(s, "%s \"%s\" ", key, v[0]);
+    if (n < 2)
+        return;
+    sb_printf(s, "%s { ", key);
+    for (int i = 0; i < n; i++)
+        sb_printf(s, "%s\"%s\"", i ? ", " : "", v[i]);
+    sb_puts(s, " } ");
+}
+
 static void nft_queue_chain(const fw_config *c, sbuf *s, int outdir)
 {
     const char *protos[2] = {c->tcp ? "tcp" : NULL, c->udp ? "udp" : NULL};
@@ -271,18 +348,20 @@ static void nft_queue_chain(const fw_config *c, sbuf *s, int outdir)
               outdir ? "out" : "in", outdir ? "postrouting" : "prerouting", prio);
     sb_printf(s, "\t\tmeta mark & 0x%x == 0x%x return\n", c->mark, c->mark);
     for (int p = 0; p < 2; p++) {
+        int first = fw_first(c, p, !outdir);
         if (!protos[p])
             continue;
         sb_puts(s, "\t\t");
         if (c->ipv4 != c->ipv6)
             sb_printf(s, "meta nfproto %s ", c->ipv4 ? "ipv4" : "ipv6");
-        if (c->iface)
-            sb_printf(s, "%s \"%s\" ", outdir ? "oifname" : "iifname", c->iface);
+        nft_ifname(c, s, outdir ? "oifname" : "iifname");
         sb_printf(s, "%s %s { ", protos[p], src ? "sport" : "dport");
         ports_format(&c->ports, s, ", ", "-");
         sb_puts(s, " } ");
-        if (c->first > 0)
-            sb_printf(s, "ct %s packets 1-%d ", outdir ? "original" : "reply", c->first);
+        if (first > 0)
+            sb_printf(s, "ct %s packets 1-%d ", outdir ? "original" : "reply", first);
+        if (c->ttl_icmp)
+            sb_printf(s, "ct mark set ct mark or 0x%x ", c->mark);
         sb_printf(s, "queue num %u%s\n", c->queue, c->bypass ? " bypass" : "");
     }
     /* --ext profiles: ICMP and other IP protocols, whatever the ports */
@@ -292,8 +371,7 @@ static void nft_queue_chain(const fw_config *c, sbuf *s, int outdir)
         sb_puts(s, "\t\t");
         if (c->ipv4 != c->ipv6)
             sb_printf(s, "meta nfproto %s ", c->ipv4 ? "ipv4" : "ipv6");
-        if (c->iface)
-            sb_printf(s, "%s \"%s\" ", outdir ? "oifname" : "iifname", c->iface);
+        nft_ifname(c, s, outdir ? "oifname" : "iifname");
         sb_puts(s, "meta l4proto { ");
         if (!k)
             sb_puts(s, "icmp, ipv6-icmp");
@@ -314,13 +392,73 @@ static void nft_forward_chain(const fw_config *c, sbuf *s)
             sb_puts(s, "\t\t");
             if (c->ipv4 != c->ipv6)
                 sb_printf(s, "meta nfproto %s ", c->ipv4 ? "ipv4" : "ipv6");
-            if (c->iface)
-                sb_printf(s, "iifname \"%s\" ", c->iface);
+            nft_ifname(c, s, "iifname");
             sb_printf(s, "%s %s { ", protos[p], src ? "sport" : "dport");
             ports_format(&c->ports, s, ", ", "-");
             sb_printf(s, " } queue num %u%s\n", c->queue, c->bypass ? " bypass" : "");
         }
     sb_puts(s, "\t}\n");
+}
+
+/* --ext-ttl-icmp: zapret2's FILTER_TTL_EXPIRED_ICMP. A fake with a small TTL
+ * makes routers on the way answer time-exceeded, which the client's socket
+ * would take as an error: such answers for the flows we queue (ct mark set
+ * by the out and in chains) are dropped. */
+static void nft_ttl_chain(const fw_config *c, sbuf *s)
+{
+    sb_puts(s, "\tchain ttl {\n\t\ttype filter hook prerouting priority -160; policy accept;\n");
+    if (c->ipv4)
+        sb_printf(s, "\t\ticmp type time-exceeded ct mark & 0x%x == 0x%x counter drop\n", c->mark, c->mark);
+    if (c->ipv6)
+        sb_printf(s, "\t\ticmpv6 type time-exceeded ct mark & 0x%x == 0x%x counter drop\n", c->mark, c->mark);
+    sb_puts(s, "\t}\n");
+}
+
+/* --ext-flowoffload: zapret2's FLOWOFFLOAD=software|hardware. Our own
+ * flowtable over the WAN (--iface) and LAN (--ext-lan) devices; flows to the
+ * ports stay out of it while the queue needs their packets (all of them, or
+ * the first N of --first). The system's own offload must be off. */
+static void nft_offload(const fw_config *c, sbuf *s)
+{
+    const char *protos[2] = {c->tcp ? "tcp" : NULL, c->udp ? "udp" : NULL};
+    const char *v[FW_MAX_IFS];
+    int n = fw_ifaces(c, v);
+    sb_puts(s, "\tflowtable ft {\n\t\thook ingress priority 0; devices = { ");
+    for (int i = 0; i < n + c->nlan; i++)
+        sb_printf(s, "%s\"%s\"", i ? ", " : "", i < n ? v[i] : c->lan[i - n]);
+    sb_puts(s, " };\n");
+    if (c->offload == 2)
+        sb_puts(s, "\t\tflags offload;\n");
+    sb_puts(s, "\t}\n\tchain forward {\n\t\ttype filter hook forward priority -1; policy accept;\n\t\t");
+    if (c->ipv4 != c->ipv6)
+        sb_printf(s, "meta nfproto %s ", c->ipv4 ? "ipv4" : "ipv6");
+    sb_puts(s, "meta l4proto { tcp, udp } ");
+    nft_ifname(c, s, "oifname");
+    sb_puts(s, "jump flow_offload\n\t}\n\tchain flow_offload {\n");
+    for (int p = 0; p < 2; p++) {
+        /* the connection's original direction: out on the client side */
+        int lim[2], always = 0;
+        const char *dir[2] = {c->server_side ? "reply" : "original", c->server_side ? "original" : "reply"};
+        if (!protos[p])
+            continue;
+        for (int d = 0; d < 2; d++) {
+            lim[d] = (d ? c->in : c->out) ? fw_first(c, p, d) : -1;
+            always |= !lim[d];
+        }
+        for (int d = 0; d < 2; d++) {
+            if (!always && lim[d] <= 0)
+                continue;
+            sb_printf(s, "\t\t%s %s { ", protos[p], c->server_side ? "sport" : "dport");
+            ports_format(&c->ports, s, ", ", "-");
+            sb_puts(s, " } ");
+            if (!always)
+                sb_printf(s, "ct %s packets 1-%d ", dir[d], lim[d]);
+            sb_puts(s, "return\n");
+            if (always)
+                break;
+        }
+    }
+    sb_puts(s, "\t\tflow add @ft\n\t}\n");
 }
 
 static char *gen_nft_script(const fw_config *c, int up, int notrack)
@@ -341,7 +479,20 @@ static char *gen_nft_script(const fw_config *c, int up, int notrack)
         nft_queue_chain(c, &s, 1);
     if (c->in)
         nft_queue_chain(c, &s, 0);
-    if (notrack)
+    if (c->ttl_icmp)
+        nft_ttl_chain(c, &s);
+    if (c->offload)
+        nft_offload(c, &s);
+    if (notrack && c->notrack_frag)
+        /* --ext: zapret2's predefrag, of our packets only fragments and
+         * TCP without SYN, RST and ACK, which conntrack takes as invalid */
+        sb_printf(&s,
+                  "\tchain predefrag {\n\t\ttype filter hook output priority -401; policy accept;\n"
+                  "\t\tmeta mark & 0x%x == 0x%x ip frag-off & 0x1fff != 0 notrack\n"
+                  "\t\tmeta mark & 0x%x == 0x%x exthdr frag exists notrack\n"
+                  "\t\tmeta mark & 0x%x == 0x%x tcp flags & (syn | rst | ack) == 0 notrack\n\t}\n",
+                  c->mark, c->mark, c->mark, c->mark, c->mark, c->mark);
+    else if (notrack)
         /* before conntrack defrag (-400): fragments we send stay fragments */
         sb_printf(&s,
                   "\tchain predefrag {\n\t\ttype filter hook output priority -401; policy accept;\n"
@@ -372,25 +523,36 @@ static char *gen_nft_script(const fw_config *c, int up, int notrack)
 
 /* ---- printing ------------------------------------------------------------ */
 
+/* --fw-hook-pre/post: "'PATH' up|down BACKEND QUEUE" */
+static void hook_line(const fw_config *c, const char *path, fw_backend b, int up, sbuf *out)
+{
+    if (path)
+        sb_printf(out, "'%s' %s %s %u\n", path, up ? "up" : "down", fw_backend_name(b), c->queue);
+}
+
 void fw_script(const fw_config *c, fw_backend b, int up, sbuf *out)
 {
+    hook_line(c, c->hook_pre, b, up, out);
     if (b == FW_NFT) {
         char *s = gen_nft_script(c, up, c->notrack);
         sb_printf(out, "nft -f - <<'EOF'\n%sEOF\n", s);
         free(s);
-        return;
+    } else if (up && c->offload) {
+        sb_puts(out, "# --ext-flowoffload works with nft only\n");
+    } else {
+        fwlist l = {0};
+        if (c->ipv4)
+            gen_ipt(c, &l, 0, up);
+        if (c->ipv6)
+            gen_ipt(c, &l, 1, up);
+        for (size_t i = 0; i < l.n; i++) {
+            /* removal commands fail harmlessly when nothing is installed */
+            int quiet = l.v[i].kind == K_IGN || l.v[i].kind == K_DEL;
+            sb_printf(out, "%s%s\n", l.v[i].text, quiet ? " 2>/dev/null" : "");
+        }
+        fwlist_free(&l);
     }
-    fwlist l = {0};
-    if (c->ipv4)
-        gen_ipt(c, &l, 0, up);
-    if (c->ipv6)
-        gen_ipt(c, &l, 1, up);
-    for (size_t i = 0; i < l.n; i++) {
-        /* removal commands fail harmlessly when nothing is installed */
-        int quiet = l.v[i].kind == K_IGN || l.v[i].kind == K_DEL;
-        sb_printf(out, "%s%s\n", l.v[i].text, quiet ? " 2>/dev/null" : "");
-    }
-    fwlist_free(&l);
+    hook_line(c, c->hook_post, b, up, out);
 }
 
 /* ---- WinDivert ----------------------------------------------------------- */
@@ -423,6 +585,10 @@ static void wd_ports(const fw_config *c, sbuf *out, const char *field)
 
 int fw_windivert_filter(const fw_config *c, sbuf *out, sbuf *err)
 {
+    if (c->filter && c->filter_whole) {
+        sb_puts(out, c->filter); /* --ext --wf-*: zapret2's filter as it is */
+        return 0;
+    }
     return fw_windivert_filter_expr(c, c->filter, out, err);
 }
 
@@ -597,15 +763,20 @@ static int wd_built(const fw_config *c, sbuf *out, sbuf *err)
     sb_puts(out, "!loopback");
     if (!c->ipv4 || !c->ipv6)
         sb_puts(out, c->ipv4 ? " and ip" : " and ipv6");
-    if (c->iface) {
-        char *end;
-        unsigned long idx = strtoul(c->iface, &end, 10);
-        if (!*c->iface || *end || !idx || idx > 0xffffffffUL) {
-            sb_printf(err, "on Windows --iface takes an interface index (see \"netsh interface ipv4 show interfaces\"), not \"%s\"",
-                      c->iface);
-            return -1;
+    {
+        const char *v[FW_MAX_IFS];
+        int n = fw_ifaces(c, v);
+        for (int i = 0; i < n; i++) {
+            char *end;
+            unsigned long idx = strtoul(v[i], &end, 10);
+            if (!*v[i] || *end || !idx || idx > 0xffffffffUL) {
+                sb_printf(err, "on Windows --iface takes an interface index (see \"netsh interface ipv4 show interfaces\"), not \"%s\"",
+                          v[i]);
+                return -1;
+            }
+            sb_printf(out, "%s%sifIdx == %lu%s", i ? " or " : " and ", n > 1 && !i ? "(" : "", idx,
+                      n > 1 && i == n - 1 ? ")" : "");
         }
-        sb_printf(out, " and ifIdx == %lu", idx);
     }
     sb_puts(out, " and (");
     if (c->out) {
@@ -880,6 +1051,10 @@ static int iptables_up(const fw_config *c, sbuf *err)
     ipt_env env;
     memset(&env, 0, sizeof(env));
     int want4 = c->ipv4, want6 = c->ipv6;
+    if (c->offload) {
+        sb_puts(err, "--ext-flowoffload works with nft only");
+        return -1;
+    }
     if (want4 && ipt_env_init(&env, 0) < 0) {
         sb_puts(err, "iptables not found");
         return -1;
@@ -976,7 +1151,7 @@ static void nft_down(const fw_config *c)
     free(s);
 }
 
-int fw_up(fw_config *c, sbuf *err)
+static int fw_up_(fw_config *c, sbuf *err)
 {
     char bin[256];
     if (c->backend == FW_NFT)
@@ -991,6 +1166,12 @@ int fw_up(fw_config *c, sbuf *err)
             sb_free(&e);
             return 0;
         }
+        if (c->offload) {
+            /* --ext-flowoffload: nft only, its own error */
+            sb_puts(err, e.data);
+            sb_free(&e);
+            return -1;
+        }
         LOGI("fw", "nftables did not work (%s), trying iptables", e.data);
         sb_free(&e);
     }
@@ -998,6 +1179,41 @@ int fw_up(fw_config *c, sbuf *err)
         return -1;
     c->backend = FW_IPTABLES;
     return 0;
+}
+
+/* --fw-hook-pre/post: PATH up|down BACKEND QUEUE; a failure is a warning */
+static void run_hook(const fw_config *c, const char *path, int up)
+{
+    char q[16], *argv[5];
+    sbuf out;
+    int r;
+    if (!path)
+        return;
+    snprintf(q, sizeof(q), "%u", c->queue);
+    argv[0] = (char *)path;
+    argv[1] = up ? "up" : "down";
+    argv[2] = (char *)fw_backend_name(c->backend);
+    argv[3] = q;
+    argv[4] = NULL;
+    sb_init(&out);
+    r = run_argv(argv, NULL, &out);
+    trim(&out);
+    if (r)
+        LOGW("fw", "hook %s %s: %s%s%s", path, argv[1], r < 0 ? "cannot run" : "failed",
+             out.len ? ": " : "", out.len ? out.data : "");
+    else
+        LOGD("fw", "hook %s %s%s%s", path, argv[1], out.len ? ": " : "", out.len ? out.data : "");
+    sb_free(&out);
+}
+
+int fw_up(fw_config *c, sbuf *err)
+{
+    int r;
+    run_hook(c, c->hook_pre, 1);
+    r = fw_up_(c, err);
+    if (!r)
+        run_hook(c, c->hook_post, 1);
+    return r;
 }
 
 static void (*g_down_hook)(const fw_config *c);
@@ -1011,10 +1227,12 @@ void fw_down(const fw_config *c)
         g_down_hook(c); /* --ext: a root helper takes the rules down */
         return;
     }
+    run_hook(c, c->hook_pre, 0);
     if (c->backend != FW_IPTABLES && find_bin("nft", bin, sizeof(bin)) == 0)
         nft_down(c);
     if (c->backend != FW_NFT)
         iptables_down(c);
+    run_hook(c, c->hook_post, 0);
 }
 
 #else /* !__linux__ */

@@ -645,10 +645,14 @@ static int check7(censor *c, const view *v)
         return NO;
     if (FLAGS_ARE(v, F_RST) || FLAGS_ARE(v, F_RST | F_ACK) || FLAGS_ARE(v, F_FIN)) {
         if (pair_matches(c, v)) {
+            LOGD("censor", "7: stops watching on flags 0x%02x, port %u -> %u", (unsigned)v->flags,
+                 (unsigned)v->sport, (unsigned)v->dport);
             c->state = T_NONE;
             return NO;
         }
     } else if (c->state == T_EMPTY) {
+        LOGD("censor", "7: watches the pair of flags 0x%02x, port %u -> %u", (unsigned)v->flags,
+             (unsigned)v->sport, (unsigned)v->dport);
         set_pair(c, v);
     }
     if (c->state == T_NONE)

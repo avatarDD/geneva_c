@@ -180,6 +180,35 @@ Extensions (with --ext):
       --ext-ipcache-hostname[=0|1]
                                  cache host names by address (from DNS answers and flows) for the next flows' profile search
       --ext-profile FILE         profiles from FILE ([profile NAME] sections; after those of the command line); repeatable
+      --ext-first N|SPEC         --first per protocol and direction: [tcp-|udp-]out=N,[tcp-|udp-]in=N,... (zapret2's: tcp-out=20,tcp-in=10,udp-out=5,udp-in=3; 0: every packet)
+      --ext-wan IF,..            like --iface, up to 8 interfaces (Windows: indexes)
+      --ext-lan IF,..            Linux: the LAN interfaces of --ext-flowoffload
+      --ext-notrack all|frag|none
+                                 Linux: the packets the engine sends kept out of conntrack: all (default), frag: IP fragments and TCP without SYN/RST/ACK only (zapret2), none (--no-notrack)
+      --ext-ttl-icmp             Linux: drop ICMP time-exceeded of the queued flows (fakes with a small TTL make them; ct mark --mark)
+      --ext-flowoffload none|software|hardware
+                                 Linux, nft: our flowtable over --iface/--ext-wan and --ext-lan, the queued flows kept out of it while queued (turn the system's flow offload off)
+      --fw-hook-pre FILE         Linux: run FILE up|down BACKEND QUEUE before the rules go up or down
+      --fw-hook-post FILE        Linux: the same after them
+      --wf-tcp-out [~]P[-P],..   WinDivert filter of winws2 (replaces the one from -p): TCP to these ports
+      --wf-tcp-in [~]P[-P],..    ... TCP from these ports (incoming connections)
+      --wf-udp-out [~]P[-P],..   ... UDP to these ports
+      --wf-udp-in [~]P[-P],..    ... UDP from these ports
+      --wf-icmp-out T[:C],..|*   ... outgoing ICMP of these types[:codes]
+      --wf-icmp-in T[:C],..|*    ... incoming ICMP of these types[:codes]
+      --wf-ipp-out PROTO,..|*    ... outgoing packets of these IP protocols
+      --wf-ipp-in PROTO,..|*     ... incoming packets of these IP protocols
+      --wf-iface IDX[.SUB]       ... only this interface index
+      --wf-l3 ipv4,ipv6          ... only these IP versions
+      --wf-tcp-empty[=0|1]       ... also TCP without data and SYN/RST/FIN (0)
+      --wf-raw-part EXPR|@FILE   ... or this expression; repeatable
+      --wf-raw-filter EXPR|@FILE ... and this expression
+      --wf-filter-lan 0|1        ... without private and link-local addresses (1)
+      --wf-filter-loopback 0|1   ... without loopback (1)
+      --wf-raw EXPR|@FILE        the whole WinDivert filter, as it is
+      --wf-priority N            the same as --priority
+      --wf-dup-check[=0|1]       accepted and ignored (WinDivert takes several handles)
+      --wf-save FILE             write the --wf-* filter to FILE and exit (any platform)
       --dry-run                  check the options, the strategies and the lists, then exit (0: fine)
       --daemon                   go to the background once packets flow (the exit code tells a failed start)
       --pidfile FILE             write the process id to FILE (removed on exit)
@@ -902,4 +931,147 @@ geneva run: --log-target must be syslog
 geneva run: --user and --uid exclude each other
 geneva run: --ext-seccomp must be 0 or 1
 geneva run: --dry-run needs --ext
+[exit 2]
+### fw-ext-nft
+$ $G fw print --ext -p 443 --proto tcp,udp --ext-first tcp-out=20,tcp-in=10,udp-out=5,udp-in=3 --ext-wan eth0,ppp0 --ext-notrack frag --ext-ttl-icmp --ext-flowoffload hardware --ext-lan br-lan --firewall nft --fw-hook-post /bin/true
+# nft: apply
+nft -f - <<'EOF'
+add table inet geneva_310
+delete table inet geneva_310
+table inet geneva_310 {
+	chain out {
+		type filter hook postrouting priority 101; policy accept;
+		meta mark & 0x20000000 == 0x20000000 return
+		oifname { "eth0", "ppp0" } tcp dport { 443 } ct original packets 1-20 ct mark set ct mark or 0x20000000 queue num 310 bypass
+		oifname { "eth0", "ppp0" } udp dport { 443 } ct original packets 1-5 ct mark set ct mark or 0x20000000 queue num 310 bypass
+	}
+	chain in {
+		type filter hook prerouting priority -150; policy accept;
+		meta mark & 0x20000000 == 0x20000000 return
+		iifname { "eth0", "ppp0" } tcp sport { 443 } ct reply packets 1-10 ct mark set ct mark or 0x20000000 queue num 310 bypass
+		iifname { "eth0", "ppp0" } udp sport { 443 } ct reply packets 1-3 ct mark set ct mark or 0x20000000 queue num 310 bypass
+	}
+	chain ttl {
+		type filter hook prerouting priority -160; policy accept;
+		icmp type time-exceeded ct mark & 0x20000000 == 0x20000000 counter drop
+		icmpv6 type time-exceeded ct mark & 0x20000000 == 0x20000000 counter drop
+	}
+	flowtable ft {
+		hook ingress priority 0; devices = { "eth0", "ppp0", "br-lan" };
+		flags offload;
+	}
+	chain forward {
+		type filter hook forward priority -1; policy accept;
+		meta l4proto { tcp, udp } oifname { "eth0", "ppp0" } jump flow_offload
+	}
+	chain flow_offload {
+		tcp dport { 443 } ct original packets 1-20 return
+		tcp dport { 443 } ct reply packets 1-10 return
+		udp dport { 443 } ct original packets 1-5 return
+		udp dport { 443 } ct reply packets 1-3 return
+		flow add @ft
+	}
+	chain predefrag {
+		type filter hook output priority -401; policy accept;
+		meta mark & 0x20000000 == 0x20000000 ip frag-off & 0x1fff != 0 notrack
+		meta mark & 0x20000000 == 0x20000000 exthdr frag exists notrack
+		meta mark & 0x20000000 == 0x20000000 tcp flags & (syn | rst | ack) == 0 notrack
+	}
+}
+EOF
+'/bin/true' up nft 310
+# nft: remove
+nft -f - <<'EOF'
+add table inet geneva_310
+delete table inet geneva_310
+EOF
+'/bin/true' down nft 310
+[exit 0]
+### fw-ext-ipt
+$ $G fw print --ext -p 443 -4 --ext-first out=4,in=2 --ext-wan eth0,ppp0 --ext-notrack frag --ext-ttl-icmp --firewall iptables | sed -n '/apply/,/remove/p'
+# iptables: apply
+iptables -t mangle -D POSTROUTING -j GENEVA_310_OUT 2>/dev/null
+iptables -t mangle -F GENEVA_310_OUT 2>/dev/null
+iptables -t mangle -X GENEVA_310_OUT 2>/dev/null
+iptables -t mangle -D PREROUTING -j GENEVA_310_IN 2>/dev/null
+iptables -t mangle -F GENEVA_310_IN 2>/dev/null
+iptables -t mangle -X GENEVA_310_IN 2>/dev/null
+iptables -t raw -D OUTPUT -j GENEVA_310_NT 2>/dev/null
+iptables -t raw -F GENEVA_310_NT 2>/dev/null
+iptables -t raw -X GENEVA_310_NT 2>/dev/null
+iptables -t nat -D PREROUTING -j GENEVA_310_DNAT 2>/dev/null
+iptables -t nat -F GENEVA_310_DNAT 2>/dev/null
+iptables -t nat -X GENEVA_310_DNAT 2>/dev/null
+iptables -t nat -D POSTROUTING -j GENEVA_310_SNAT 2>/dev/null
+iptables -t nat -F GENEVA_310_SNAT 2>/dev/null
+iptables -t nat -X GENEVA_310_SNAT 2>/dev/null
+iptables -t mangle -D FORWARD -j GENEVA_310_FWD 2>/dev/null
+iptables -t mangle -F GENEVA_310_FWD 2>/dev/null
+iptables -t mangle -X GENEVA_310_FWD 2>/dev/null
+iptables -t mangle -N GENEVA_310_OUT
+iptables -t mangle -A GENEVA_310_OUT -m mark --mark 0x20000000/0x20000000 -j RETURN
+iptables -t mangle -A GENEVA_310_OUT -o eth0 -p tcp --dport 443 -m connbytes --connbytes 1:4 --connbytes-dir original --connbytes-mode packets -j CONNMARK --or-mark 0x20000000
+iptables -t mangle -A GENEVA_310_OUT -o eth0 -p tcp --dport 443 -m connbytes --connbytes 1:4 --connbytes-dir original --connbytes-mode packets -j NFQUEUE --queue-num 310 --queue-bypass
+iptables -t mangle -A GENEVA_310_OUT -o ppp0 -p tcp --dport 443 -m connbytes --connbytes 1:4 --connbytes-dir original --connbytes-mode packets -j CONNMARK --or-mark 0x20000000
+iptables -t mangle -A GENEVA_310_OUT -o ppp0 -p tcp --dport 443 -m connbytes --connbytes 1:4 --connbytes-dir original --connbytes-mode packets -j NFQUEUE --queue-num 310 --queue-bypass
+iptables -t mangle -I POSTROUTING -j GENEVA_310_OUT
+iptables -t mangle -N GENEVA_310_IN
+iptables -t mangle -A GENEVA_310_IN -p icmp -m icmp --icmp-type time-exceeded -m connmark --mark 0x20000000/0x20000000 -j DROP
+iptables -t mangle -A GENEVA_310_IN -m mark --mark 0x20000000/0x20000000 -j RETURN
+iptables -t mangle -A GENEVA_310_IN -i eth0 -p tcp --sport 443 -m connbytes --connbytes 1:2 --connbytes-dir reply --connbytes-mode packets -j CONNMARK --or-mark 0x20000000
+iptables -t mangle -A GENEVA_310_IN -i eth0 -p tcp --sport 443 -m connbytes --connbytes 1:2 --connbytes-dir reply --connbytes-mode packets -j NFQUEUE --queue-num 310 --queue-bypass
+iptables -t mangle -A GENEVA_310_IN -i ppp0 -p tcp --sport 443 -m connbytes --connbytes 1:2 --connbytes-dir reply --connbytes-mode packets -j CONNMARK --or-mark 0x20000000
+iptables -t mangle -A GENEVA_310_IN -i ppp0 -p tcp --sport 443 -m connbytes --connbytes 1:2 --connbytes-dir reply --connbytes-mode packets -j NFQUEUE --queue-num 310 --queue-bypass
+iptables -t mangle -I PREROUTING -j GENEVA_310_IN
+iptables -t raw -N GENEVA_310_NT
+iptables -t raw -A GENEVA_310_NT -m mark --mark 0x20000000/0x20000000 -f -j CT --notrack
+iptables -t raw -A GENEVA_310_NT -m mark --mark 0x20000000/0x20000000 -p tcp --tcp-flags SYN,RST,ACK NONE -j CT --notrack
+iptables -t raw -I OUTPUT -j GENEVA_310_NT
+# iptables: remove
+[exit 0]
+### fw-ext-wf
+$ $G fw print --ext --wf-tcp-out 80,443 --wf-udp-out 443,50000-50100 --wf-l3 ipv4 --wf-filter-lan 0; $G run --ext -s '\/' --wf-tcp-out 443 --wf-save $T/wf.txt && cat $T/wf.txt; echo; $G fw up --ext --wf-tcp-out 443; $G run --ext -s '\/' --wf-tcp-out 443
+# WinDivert filter
+!impostor
+and !loopback
+and ip
+and (!tcp or tcp.Syn or tcp.Rst or tcp.Fin or tcp.PayloadLength>0)
+and
+(
+ false or
+ tcp.PayloadLength>=12 and tcp.Payload32[0]==0x48545450 and tcp.Payload16[2]==0x2F31 and tcp.Payload[6]==0x2E and tcp.Payload16[4]==0x2033 and tcp.Payload[10]==0x30 and (tcp.Payload[11]==0x32 or tcp.Payload[11]==0x37) or
+ outbound and ((tcp.DstPort == 80) or (tcp.DstPort == 443)) or
+ inbound and (tcp.Syn or tcp.Rst or tcp.Fin) and ((tcp.SrcPort == 80) or (tcp.SrcPort == 443)) or
+ outbound and ((udp.DstPort == 443) or (udp.DstPort >= 50000 and udp.DstPort <= 50100))
+)
+!impostor
+and !loopback
+and (!tcp or tcp.Syn or tcp.Rst or tcp.Fin or tcp.PayloadLength>0)
+and
+(
+ false or
+ tcp.PayloadLength>=12 and tcp.Payload32[0]==0x48545450 and tcp.Payload16[2]==0x2F31 and tcp.Payload[6]==0x2E and tcp.Payload16[4]==0x2033 and tcp.Payload[10]==0x30 and (tcp.Payload[11]==0x32 or tcp.Payload[11]==0x37) or
+ outbound and ((tcp.DstPort == 443)) or
+ inbound and (tcp.Syn or tcp.Rst or tcp.Fin) and ((tcp.SrcPort == 443))
+)
+and
+(
+ outbound and (((ip.DstAddr < 10.0.0.0 or ip.DstAddr > 10.255.255.255) and (ip.DstAddr < 192.168.0.0 or ip.DstAddr > 192.168.255.255) and (ip.DstAddr < 172.16.0.0 or ip.DstAddr > 172.31.255.255) and (ip.DstAddr < 169.254.0.0 or ip.DstAddr > 169.254.255.255)) or ((ipv6.DstAddr < 2001::0 or ipv6.DstAddr >= 2001:1::0) and (ipv6.DstAddr < fc00::0 or ipv6.DstAddr >= fe00::0) and (ipv6.DstAddr < fe80::0 or ipv6.DstAddr >= fec0::0) and (ipv6.DstAddr < ff00::0 or ipv6.DstAddr >= ffff::0)))
+ or
+ inbound and (((ip.SrcAddr < 10.0.0.0 or ip.SrcAddr > 10.255.255.255) and (ip.SrcAddr < 192.168.0.0 or ip.SrcAddr > 192.168.255.255) and (ip.SrcAddr < 172.16.0.0 or ip.SrcAddr > 172.31.255.255) and (ip.SrcAddr < 169.254.0.0 or ip.SrcAddr > 169.254.255.255)) or ((ipv6.SrcAddr < 2001::0 or ipv6.SrcAddr >= 2001:1::0) and (ipv6.SrcAddr < fc00::0 or ipv6.SrcAddr >= fe00::0) and (ipv6.SrcAddr < fe80::0 or ipv6.SrcAddr >= fec0::0) and (ipv6.SrcAddr < ff00::0 or ipv6.SrcAddr >= ffff::0)))
+)
+
+geneva fw: the --wf-* filter is for WinDivert (Windows); only "print" works
+geneva run: the --wf-* filter is for WinDivert (Windows); --wf-save writes it anywhere
+[exit 2]
+### fw-ext-bad
+$ $G fw print --wf-tcp-out 443; $G fw print --ext -p 443 --wf-raw tcp --wf-tcp-out 443; $G fw print --ext -p 443 -i eth0 --ext-wan ppp0; $G fw print --ext -p 443 -i eth0 --ext-flowoffload software; $G fw print --ext -p 443 --ext-first out; $G fw print --ext -p 443 --fw-hook-pre hook.sh; $G fw print --ext --local-ports 30000 --ext-ttl-icmp; $G fw print --ext -p 443 --ext-notrack all --no-notrack
+geneva fw: --wf-tcp-out needs --ext
+geneva fw: --wf-raw replaces the filter: no --wf-tcp-out with it
+geneva fw: --ext-wan and --iface exclude each other
+geneva fw: --ext-flowoffload needs the WAN (--iface or --ext-wan) and the LAN (--ext-lan) interfaces
+geneva fw: --ext-first takes N or [tcp-|udp-]out=N,[tcp-|udp-]in=N,...
+geneva fw: --fw-hook-pre needs an absolute path without quotes
+geneva fw: --local-ports/--workers print the evaluator's rules, which have no --ext-ttl-icmp
+geneva fw: --no-notrack and --ext-notrack all|frag exclude each other
 [exit 2]

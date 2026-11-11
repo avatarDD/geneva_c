@@ -37,6 +37,7 @@ geneva run --ext -s '...'
 | X6b | списки профилей: `--hostlist*` (имена хостов с поддоменами, `^`, `!`), `--ipset*` (подсети IPv4/IPv6), gzip, перечитывание по изменению файла, SIGHUP и `reload_lists`; повторный поиск профиля по имени хоста | ниже |
 | X6c | автосписок `--hostlist-auto*` (неудачи TCP и UDP, RST клиенту, журнал решений), кэш адресов `ipcache`: имена из DNS-ответов и потоков, TTL первого ответа сервера для autottl | ниже |
 | X7a | эксплуатация: опции из файла `@FILE`, `--comment`, `--dry-run`, `--daemon`, `--pidfile`, `--user`/`--uid` (сброс root), seccomp, `sd_notify`, syslog, команды `ext_flows` и `ext_keys`, предупреждение о метке | ниже |
+| X7b | правила firewall как у zapret2: `--ext-first` по протоколам и направлениям, `--ext-wan`/`--ext-lan`, `--ext-notrack frag` (predefrag), `--ext-ttl-icmp`, `--ext-flowoffload`, хуки `--fw-hook-pre/post`; фильтр WinDivert winws2 `--wf-*` | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
 
@@ -903,6 +904,77 @@ SIGHUP помощник не слушает (Ctrl-C в терминале ухо
 `nobody` с двумя capability и seccomp обходит, `ext_flows` видит поток,
 после SIGKILL правила и pidfile сняты; `--daemon` возвращает 0, когда
 работает, и код ошибки запуска, если нет.
+
+## Правила firewall (X7b)
+
+Правила, которые в zapret2 ставят скрипты (`common/nft.sh`, `ipt.sh`), и
+фильтр WinDivert winws2. Всё — только с `--ext`, у `run` и `fw`; `geneva
+fw print --ext ...` показывает, что получится. Без этих опций правила
+прежние.
+
+| Опция | zapret2 | Что |
+|---|---|---|
+| `--ext-first SPEC` | `NFQWS2_TCP_PKT_OUT/IN`, `NFQWS2_UDP_PKT_OUT/IN` | `--first` отдельно по протоколам и направлениям: `tcp-out=20,tcp-in=10,udp-out=5,udp-in=3` (значения zapret2), `out=N`/`in=N` — оба протокола, просто `N` — всё; что не задано, берётся из `--first`. 0 — все пакеты. В правилах — connbytes/`ct packets`, на Windows считает движок |
+| `--ext-wan IF,..` | `IFACE_WAN` | как `--iface`, до 8 интерфейсов (в nft — множество, в iptables — правило на каждый; на Windows — индексы интерфейсов) |
+| `--ext-notrack all\|frag\|none` | predefrag (−401) | какие наши пакеты не попадают в conntrack: `all` — все (по умолчанию, как без `--ext`), `frag` — только IP-фрагменты и TCP без SYN, RST и ACK (`datanoack`), как с `DESYNC_MARK` у zapret2; `none` — как `--no-notrack` |
+| `--ext-ttl-icmp` | `FILTER_TTL_EXPIRED_ICMP=1` | фейк с малым TTL вызывает ICMP time-exceeded от роутеров по пути, и сокет клиента видит ошибку. Потоки, пакеты которых идут в очередь, получают ct mark (бит `--mark`), а входящие time-exceeded таких потоков отбрасываются (со счётчиком в nft) |
+| `--ext-flowoffload software\|hardware` | `FLOWOFFLOAD=software\|hardware` | nft: свой flowtable на устройствах `--iface`/`--ext-wan` и `--ext-lan` (`flags offload` у hardware); потоки к портам не выгружаются, пока очереди нужны их пакеты (все или первые N из `--ext-first`). Свой offload системы (fw4, `flow_offloading`) надо выключить: иначе он выгрузит поток раньше |
+| `--ext-lan IF,..` | `IFACE_LAN` | LAN-устройства flowtable |
+| `--fw-hook-pre FILE`, `--fw-hook-post FILE` | `INIT_FW_PRE/POST_UP/DOWN_HOOK` | Linux: запустить `FILE up\|down BACKEND QUEUE` до и после установки и снятия правил (абсолютный путь; ненулевой код — только предупреждение). Таблица nft `inet geneva_QUEUE` удаляется целиком, так что правила хука в ней снимаются сами |
+
+**WinDivert.** Опции winws2 `--wf-tcp-in/out`, `--wf-udp-in/out`,
+`--wf-icmp-in/out`, `--wf-ipp-in/out`, `--wf-iface`, `--wf-l3`,
+`--wf-tcp-empty`, `--wf-raw-part` (OR, повторяемая), `--wf-raw-filter`
+(AND), `--wf-filter-lan`, `--wf-filter-loopback`, `--wf-raw` (фильтр
+целиком), `--wf-priority` (= `--priority`), `--wf-save FILE` строят тот же
+фильтр, что `wf_make_filter` в `nfqws.c` (порты меняются местами с
+`--server-side`), и он заменяет фильтр из `-p/--proto/--dir`. `-p` тогда не
+нужен: направление пакета даёт WinDivert. `EXPR` можно взять из файла:
+`@FILE`. `--wf-save` пишет фильтр в файл и выходит с 0 на любой платформе;
+`geneva fw print --ext --wf-...` на Linux показывает фильтр. `run` с
+`--wf-*` на Linux — ошибка 2.
+
+Отличия от zapret2:
+
+- ct mark для `--ext-ttl-icmp` ставится на все пакеты, которые идут в
+  очередь (zapret2 — на пакеты, которые nfqws2 отправил сам): наши пакеты
+  по умолчанию не попадают в conntrack и не могут пометить поток. Поэтому
+  отбрасываются time-exceeded всех обрабатываемых потоков, а не только
+  тех, где был фейк. Если на узле что-то копирует ct mark в метку пакета
+  (`CONNMARK --restore-mark` без маски), выберите `--mark`, который не
+  задевает.
+- Отбрасывание в iptables — в цепочке `mangle PREROUTING` (zapret2 —
+  `INPUT` и `FORWARD`).
+- В iptables `raw` идёт после дефрагментации conntrack, поэтому
+  `--ext-notrack frag` там не мешает ядру собрать наши фрагменты (как и
+  у zapret2, у которого predefrag есть только в nft).
+- Один список интерфейсов на IPv4 и IPv6 (у zapret2 есть отдельный
+  `IFACE_WAN6`): перечислите в `--ext-wan` оба устройства.
+- `--ext-flowoffload` только в nft; `donttouch` — это просто без опции.
+- Хуки получают аргументы, а не переменные окружения, и запускаются
+  движком (zapret2 — скриптом запуска).
+- `--wf-dup-check` принимается и ничего не делает: WinDivert позволяет
+  несколько дескрипторов с одним фильтром, а geneva не проверяет дубли.
+- `--ext-lan`, `--fw-hook-*`, `--ext-notrack`, `--ext-ttl-icmp`,
+  `--ext-flowoffload` на Windows — ошибка 2.
+
+`geneva fw down` снимает правила с теми же опциями, что `up`: в iptables
+цепочки `--ext-ttl-icmp` живут в `GENEVA_Q_IN`, которая снимается всегда.
+
+Фича `ext_fw` в `geneva version --json`.
+
+**Проверка.** Юнит-тесты: разбор `--ext-first` и списков интерфейсов,
+правила nft и iptables для каждой опции, порядок хуков вокруг правил
+через подставной `iptables`, фильтр `--wf-*` по образцу winws2 (клиент и
+сервер, порты с `~` и диапазонами, ICMP, IP-протоколы, LAN, loopback,
+raw-части). Golden: `fw print` с опциями X7b для nft, iptables и
+WinDivert, ошибки. e2e `run.sh` (auto, iptables, nft): `--ext-notrack frag`
+с IP-фрагментацией, time-exceeded потока из очереди отброшен, чужого —
+нет, `--ext-first out=4` — движок видел не больше 4 исходящих пакетов,
+хуки до и после в нужном порядке, правила сняты. `--ext-flowoffload`
+живьём не проверяется: в ядре контейнеров разработки нет
+`nf_flow_table`; синтаксис flowtable проверен `nft`, правила — юнит- и
+golden-тестами, e2e на образе OpenWrt — на этапе X10 (zapret-gui).
 
 ## Код zapret2
 
