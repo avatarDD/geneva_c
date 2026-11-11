@@ -828,6 +828,8 @@ void xdet_counters(xdet *d, const xdet_ctr *c, uint64_t now)
              * a short one (an answer late, the next early) says little */
             w->rate[w->nrate++ % RATES] = (float)r;
             if (r > d->cap || now - d->t_cap > FREEZE_WINDOW) { /* C forgets after 10 minutes */
+                if (r > 2 * d->cap)
+                    LOGD("detect", "capacity C: %.0f B/s", r);
                 d->cap = r;
                 d->t_cap = now;
             }

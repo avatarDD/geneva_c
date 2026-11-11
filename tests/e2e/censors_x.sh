@@ -706,14 +706,30 @@ auto_case 12 "--freeze-bytes 20000" FREEZE_N 10.81.2.2 freeze
 throttle() { # once a fast download (the capacity), then a policed one
     if [ -z "${THR_FAST:-}" ]; then
         THR_FAST=1
-        ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null --max-time 10 --limit-rate 1000k \
-            http://10.81.2.2/huge.bin
+        ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null -w '%{speed_download}' --max-time 10 \
+            --limit-rate 1000k http://10.81.2.2/huge.bin > "$WORK/fast"
     fi
-    ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null --max-time 9 'http://10.81.2.2/huge.bin?ultrasurf'
+    ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null --max-time 12 'http://10.81.2.2/huge.bin?ultrasurf'
 }
-# 16 KB/s: under a quarter of C also where the lab's censor (every packet
-# through its queue) lets no flow past about 120 KB/s
-auto_case 13 "--rate 16000 --burst 8000" THROTTLE 10.81.2.2 throttle
+# The policer at an eighth of the speed of the fast download through the
+# lab censor, so that the plateau is under a quarter of C on any runner
+if on auto || on auto13; then
+    if start_censor 13; then
+        S=$(ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null -w '%{speed_download}' --max-time 10 \
+            --limit-rate 1000k http://10.81.2.2/huge.bin | cut -d. -f1)
+        kill "$CPID" 2>/dev/null
+        wait "$CPID" 2>/dev/null
+        CPID=
+        R=$((${S:-0} / 8))
+        echo "  (through the lab censor: $S B/s, the policer at $R B/s)"
+        if [ "$R" -ge 8000 ]; then
+            auto_case 13 "--rate $R --burst $((R / 2))" THROTTLE 10.81.2.2 throttle
+            echo "  (the fast download in it: $(cat "$WORK/fast" 2>/dev/null) B/s)"
+        else
+            bad "the lab censor lets only $S B/s through: too slow to tell a policer"
+        fi
+    fi
+fi
 # a query for a name: the forged answer comes first (another IP TTL)
 cat > "$WORK/dnsq.py" <<'EOF'
 import os, socket, sys
