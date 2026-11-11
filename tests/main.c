@@ -40,6 +40,7 @@ void suite_profile(void);
 void suite_lists(void);
 void suite_autolist(void);
 void suite_svc(void);
+void suite_fwx(void);
 
 int main(void)
 {
@@ -67,6 +68,7 @@ int main(void)
     suite_lists();
     suite_autolist();
     suite_svc();
+    suite_fwx();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }

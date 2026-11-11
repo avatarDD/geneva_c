@@ -36,6 +36,7 @@ const char *const ext_features[] = {
     "ext_lists",   /* X6b: --hostlist*, --ipset*, gzip, reload_lists */
     "ext_autolist", /* X6c: --hostlist-auto*, --ext-ipcache-* */
     "ext_service",  /* X7a: @FILE, --dry-run, --daemon, --pidfile, --user/--uid, seccomp, syslog, ctl ext_flows/ext_keys */
+    "ext_fw",       /* X7b: --ext-first, --ext-wan/--ext-lan, --ext-notrack, --ext-ttl-icmp, --ext-flowoffload, --fw-hook-*, --wf-* */
     0,
 };
 

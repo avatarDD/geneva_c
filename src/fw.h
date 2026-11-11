@@ -19,6 +19,8 @@
 
 typedef enum { FW_AUTO = 0, FW_IPTABLES, FW_NFT } fw_backend;
 
+#define FW_MAX_IFS 8 /* interfaces of --iface LIST and --ext-lan */
+
 typedef struct {
     fw_backend backend;
     uint16_t queue;
@@ -45,7 +47,20 @@ typedef struct {
                               * ANDed with that filter instead (evaluator slots) */
     const char *filter_file; /* where filter was read from (reload_filter) */
     int filter_narrow;
+    int filter_whole;        /* --ext --wf-*: filter is complete, loopback and all */
     int priority;            /* WinDivert handle priority, -30000..30000 */
+    /* --ext (docs/EXT.md, X7b): all zero without it, the rules as before */
+    int first_dir;           /* firstv replaces first: per protocol and direction */
+    int firstv[2][2];        /* [0 tcp, 1 udp][0 out, 1 in]: first N packets, 0 all */
+    const char *ifs[FW_MAX_IFS]; /* --iface LIST: these interfaces (nifs of them) */
+    int nifs;
+    const char *lan[FW_MAX_IFS]; /* --ext-lan: the flowtable's other devices */
+    int nlan;
+    int notrack_frag;        /* --ext-notrack frag: of our packets only IP fragments and
+                              * TCP without SYN, RST and ACK (zapret2's predefrag) */
+    int ttl_icmp;            /* --ext-ttl-icmp: drop ICMP time-exceeded of queued flows */
+    int offload;             /* --ext-flowoffload: 0 none, 1 software, 2 hardware (nft) */
+    const char *hook_pre, *hook_post; /* --fw-hook-pre/post: run with up|down */
 } fw_config;
 
 #define FW_FILTER_FILE_MAX 65536 /* bytes of a --filter-file */
@@ -60,6 +75,11 @@ typedef struct {
 void fw_config_default(fw_config *c);
 const char *fw_backend_name(fw_backend b);
 int fw_backend_parse(const char *s, fw_backend *out);
+
+/* The --first count of a protocol (udp: 0 TCP, 1 UDP) and direction (in:
+ * 0 out, 1 in); 0: every packet. fw_first_any: some count is set. */
+int fw_first(const fw_config *c, int udp, int in);
+int fw_first_any(const fw_config *c);
 
 /* Shell commands that apply (up = 1) or remove (up = 0) the rules with the
  * given backend (not FW_AUTO). */

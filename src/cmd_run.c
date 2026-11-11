@@ -11,6 +11,7 @@
 #include "ext_opt.h"
 #if GENEVA_EXT
 #  include "ext/ext.h"
+#  include "ext/fwx.h"
 #  include "ext/svc.h"
 #endif
 #include "engine.h"
@@ -42,8 +43,25 @@
     {"filter-file", 0, 1, "FILE", "Windows: read the --filter expression from FILE (up to 64 KB)"}, \
     {"priority", 0, 1, "N", "Windows: WinDivert handle priority, -30000..30000 (default 0)"}
 
-/* Fills the firewall part of the configuration. Returns 0 or prints an
- * error and returns -1. The expression of a --filter-file goes to *owned.
+#if GENEVA_EXT
+/* --ext --wf-save FILE: the filter is written, the command is done */
+static int wf_save(const char *cmd, const char *path, const char *filter)
+{
+    FILE *f = fopen(path, "wb");
+    int bad = !f || fputs(filter, f) < 0;
+    if (f && fclose(f))
+        bad = 1;
+    if (bad) {
+        fprintf(stderr, "geneva %s: cannot write %s\n", cmd, path);
+        return -1;
+    }
+    return 1;
+}
+#endif
+
+/* Fills the firewall part of the configuration. Returns 0, 1 when the
+ * command is done (--ext --wf-save), or prints an error and returns -1. The
+ * expression of a --filter-file (or of the --wf-* options) goes to *owned.
  * With eval (geneva fw for the evaluator) the ports come from elsewhere. */
 static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw, char **owned, int eval)
 {
@@ -63,6 +81,20 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw,
                         cmd, run_only[i]);
                 return -1;
             }
+        /* nor the --ext rules' (EXT_FW_OPTS) */
+        for (int i = 0; i < a->nopts; i++) {
+            static const char *const ext_fw[] = {"ext-first", "ext-wan", "ext-lan", "ext-notrack", "ext-ttl-icmp",
+                                                 "ext-flowoffload"};
+            const char *n = a->opts[i].def->name;
+            int bad = !strncmp(n, "wf-", 3) || !strncmp(n, "fw-hook-", 8);
+            for (size_t k = 0; k < ARRAY_LEN(ext_fw) && !bad; k++)
+                bad = !strcmp(n, ext_fw[k]);
+            if (bad) {
+                fprintf(stderr, "geneva %s: --local-ports/--workers print the evaluator's rules, which have no --%s\n",
+                        cmd, n);
+                return -1;
+            }
+        }
     } else if (arg_has(a, "server-port")) {
         if (ports_parse(arg_str(a, "server-port", ""), &c->ports) < 0) {
             fprintf(stderr, "geneva %s: bad --server-port (like 443 or 80,443 or 8000-8100)\n", cmd);
@@ -71,6 +103,8 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw,
 #if GENEVA_EXT
     } else if (ext_profiles()) {
         /* the ports of the profiles' --filter-tcp/--filter-udp, below */
+    } else if (ext_enabled() && (xfw_wf_captures(a) || arg_has(a, "wf-save"))) {
+        /* the --wf-* filter captures: WinDivert tells the direction */
 #endif
     } else {
         fprintf(stderr, "geneva %s: need --server-port PORTS (like 443 or 80,443 or 8000-8100)\n", cmd);
@@ -173,6 +207,24 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw,
         sb_free(&ferr);
         return -1;
     }
+#if GENEVA_EXT
+    if (ext_enabled() && !eval) {
+        const char *save = NULL;
+        if (xfw_parse(a, FW_WINDOWS, c, owned, &save, &ferr) < 0) {
+            fprintf(stderr, "geneva %s: %s\n", cmd, ferr.data);
+            sb_free(&ferr);
+            return -1;
+        }
+        sb_free(&ferr);
+        if (save)
+            return wf_save(cmd, save, c->filter);
+        if (c->offload && !*use_fw) {
+            fprintf(stderr, "geneva %s: --ext-flowoffload makes rules: not with --firewall none\n", cmd);
+            return -1;
+        }
+        return 0;
+    }
+#endif
     sb_free(&ferr);
     return 0;
 }
@@ -264,6 +316,7 @@ int cmd_run(int argc, char **argv)
         EXT_OPT,
         EXT_CTRACK_OPTS,
         EXT_PROFILE_OPTS,
+        EXT_FW_OPTS,
         EXT_RUN_OPTS,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
@@ -277,7 +330,7 @@ int cmd_run(int argc, char **argv)
     engine_opts o;
     char *filter_owned = NULL;
     int64_t v;
-    int rc;
+    int rc, r = 0;
 
     if (args_parse(&a, argc, argv, defs, err, sizeof(err)) < 0) {
         fprintf(stderr, "geneva run: %s\n", err);
@@ -315,8 +368,15 @@ int cmd_run(int argc, char **argv)
         fprintf(stderr, "geneva run: give exactly one of --strategy and --strategy-file\n");
         goto done;
     }
-    if (parse_fw(&a, "run", &o.fw, &o.apply_fw, &filter_owned, 0) < 0 || parse_logging(&a, "run") < 0)
+    if ((r = parse_fw(&a, "run", &o.fw, &o.apply_fw, &filter_owned, 0)) != 0 || parse_logging(&a, "run") < 0) {
+        if (r > 0)
+            rc = EXIT_OK; /* --wf-save */
         goto done;
+    }
+    if (!FW_WINDOWS && o.fw.filter_whole) {
+        fprintf(stderr, "geneva run: the --wf-* filter is for WinDivert (Windows); --wf-save writes it anywhere\n");
+        goto done;
+    }
 #if GENEVA_EXT
     if (ext_profiles()) {
         sbuf l;
@@ -345,7 +405,6 @@ int cmd_run(int argc, char **argv)
 #if GENEVA_EXT
     if (ext_enabled()) {
         sbuf e;
-        int r;
         sb_init(&e);
         r = xsvc_parse(&a, &svc, &e);
         if (r < 0)
@@ -404,13 +463,14 @@ int cmd_fw(int argc, char **argv)
         {"log-level", 'l', 1, "LEVEL", "debug shows every command"},
         EXT_OPT,
         EXT_PROFILE_OPTS,
+        EXT_FW_OPTS,
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
     };
     args_t a;
     char err[128];
     fw_config c;
-    int use_fw, rc = EXIT_USAGE, eval;
+    int use_fw, rc = EXIT_USAGE, eval, r;
     const char *act;
     char *filter_owned = NULL;
 
@@ -439,8 +499,11 @@ int cmd_fw(int argc, char **argv)
     }
     act = a.pos[0];
     eval = arg_has(&a, "local-ports") || arg_has(&a, "workers") || arg_has(&a, "probe");
-    if (parse_fw(&a, "fw", &c, &use_fw, &filter_owned, eval) < 0 || parse_logging(&a, "fw") < 0)
+    if ((r = parse_fw(&a, "fw", &c, &use_fw, &filter_owned, eval)) != 0 || parse_logging(&a, "fw") < 0) {
+        if (r > 0)
+            rc = EXIT_OK; /* --wf-save */
         goto done;
+    }
     if (eval) {
         /* the evaluator's engine: geneva eval/evolve's defaults */
         int64_t base, workers;
@@ -474,6 +537,16 @@ int cmd_fw(int argc, char **argv)
     }
     goto done;
 #endif
+    if (c.filter_whole) {
+        /* --ext --wf-*: the WinDivert filter, shown on any platform */
+        if (strcmp(act, "print")) {
+            fprintf(stderr, "geneva fw: the --wf-* filter is for WinDivert (Windows); only \"print\" works\n");
+            goto done;
+        }
+        printf("# WinDivert filter\n%s\n", c.filter);
+        rc = EXIT_OK;
+        goto done;
+    }
     if (!strcmp(act, "print")) {
         sbuf s;
         fw_backend b = c.backend == FW_AUTO ? FW_NFT : c.backend;
