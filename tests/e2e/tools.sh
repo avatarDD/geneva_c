@@ -72,7 +72,9 @@ done
 [ $fail = 0 ] && ok "the same subnets"
 
 echo "== resolve: the list's addresses, names, logs"
-printf 'localhost\n1.2.3.4\n1.2.3.4/24\n1.2.3.4/32\n1.2.3.4/40\n::1\n::1/64\nbad..name!\n\nlocalhost.\n' > "$W/names"
+# localhost only: the release's static libc and the runner's resolve other
+# names (localhost. with its dot) differently
+printf 'localhost\n1.2.3.4\n1.2.3.4/24\n1.2.3.4/32\n1.2.3.4/40\n::1\n::1/64\nbad..name!\n\n' > "$W/names"
 for fam in 4 6 46; do
     "$ZB/mdig" --family=$fam --threads=3 --log-failed="$W/zf" --log-resolved="$W/zr" < "$W/names" | sort > "$W/z"
     "$G" resolve --ext --family=$fam --threads=3 --log-failed="$W/gf" --log-resolved="$W/gr" < "$W/names" | sort > "$W/g"
