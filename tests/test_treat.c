@@ -72,10 +72,10 @@ static int connections(unsigned srv, int udp, unsigned good, int n, unsigned *po
         ct_flow f;
         int a;
         mkflow(&f, udp, srv, (*port)++);
-        a = xtreat_flow(&f, NULL, *now);
+        a = xtreat_flow(&f, NULL, *now, NULL);
         if (a < 0)
             return -1;
-        CHECK_INT(xtreat_flow(&f, NULL, *now), a); /* the connection keeps it */
+        CHECK_INT(xtreat_flow(&f, NULL, *now, NULL), a); /* the connection keeps it */
         *now += 100;
         outcome(&f, good >> a & 1, *now);
         if (strstr(EV, pat))
@@ -123,7 +123,7 @@ TEST(treat_apply)
     /* a port or a network is not treated; an unknown address is not */
     CHECK_INT(key("tcp/443", XK_PORT, 1, XC_RST_INJECT, now), 0);
     mkflow(&f, 0, 1, port);
-    CHECK_INT(xtreat_flow(&f, NULL, now), -1);
+    CHECK_INT(xtreat_flow(&f, NULL, now, NULL), -1);
 
     /* RST_INJECT: the TCP arms in turn; arm 3 works and is kept */
     CHECK_INT(key("10.9.1.2", XK_IP, 1, XC_RST_INJECT, now), 1);
@@ -136,21 +136,21 @@ TEST(treat_apply)
     /* every connection runs it now, the UDP ones nothing */
     for (int i = 0; i < 5; i++) {
         mkflow(&f, 0, 1, port++);
-        CHECK_INT(xtreat_flow(&f, NULL, now), 2);
+        CHECK_INT(xtreat_flow(&f, NULL, now, NULL), 2);
         outcome(&f, 1, now);
     }
     mkflow(&f, 1, 1, port++);
-    CHECK_INT(xtreat_flow(&f, NULL, now), -1);
+    CHECK_INT(xtreat_flow(&f, NULL, now, NULL), -1);
     /* healthy again: still in treatment (the policy keeps it impaired) */
     CHECK_INT(key("10.9.1.2", XK_IP, 0, XC_NONE, now), 1);
     /* another TCP class: the same arms, the arm stays */
     CHECK_INT(key("10.9.1.2", XK_IP, 1, XC_RETRANS, now), 1);
     mkflow(&f, 0, 1, port++);
-    CHECK_INT(xtreat_flow(&f, NULL, now), 2);
+    CHECK_INT(xtreat_flow(&f, NULL, now, NULL), 2);
     outcome(&f, 1, now);
     text(status, out, sizeof(out));
     CHECK_STR(out, "{\"treat\":{\"mode\":\"apply\",\"arms\":7,\"proposed\":0,\"trial\":0,\"treat\":1,"
-                   "\"untreatable\":0}}");
+                   "\"untreatable\":0,\"search\":0,\"ga\":false}}");
     text(xtreat_keys, out, sizeof(out));
     CHECK(strstr(out, "{\"key\":\"10.9.1.2\",\"level\":\"ip\",\"state\":\"treat\",\"class\":\"RETRANS\",\"arm\":3,") !=
           NULL);
@@ -169,7 +169,7 @@ TEST(treat_apply)
     CHECK(n >= 10 && n <= 40);
     CHECK(strstr(EV, "\"retry_s\":60,\"why\":\"every arm failed\"") != NULL);
     mkflow(&f, 0, 1, port++);
-    CHECK_INT(xtreat_flow(&f, NULL, now), -1);
+    CHECK_INT(xtreat_flow(&f, NULL, now, NULL), -1);
     CHECK_INT(key("10.9.1.2", XK_IP, 1, XC_RST_INJECT, now), 1); /* owned */
     sb_reset(&g_ev);
     xtreat_tick(now + 59000);
@@ -211,11 +211,11 @@ TEST(treat_apply)
     sb_reset(&g_ev);
     CHECK_INT(key("quic.example", XK_HOST, 1, XC_UDP_NOANSWER, now), 1);
     mkflow(&f, 1, 3, port++);
-    CHECK_INT(xtreat_flow(&f, "other.example", now), -1);
-    n = xtreat_flow(&f, "quic.example", now);
+    CHECK_INT(xtreat_flow(&f, "other.example", now, NULL), -1);
+    n = xtreat_flow(&f, "quic.example", now, NULL);
     CHECK(n == 5 || n == 6);
     mkflow(&f, 0, 3, port++);
-    CHECK_INT(xtreat_flow(&f, "quic.example", now), -1); /* TCP: no arm */
+    CHECK_INT(xtreat_flow(&f, "quic.example", now, NULL), -1); /* TCP: no arm */
 
     xtreat_stop();
     CHECK_INT(xtreat_mode(), XTR_OFF);
@@ -223,6 +223,43 @@ TEST(treat_apply)
     ev_set_tap(NULL, NULL);
     strategy_set_xact(NULL);
     sb_free(&g_ev);
+    sb_free(&e);
+}
+
+/* --ext-treat-arms: only these arms */
+TEST(treat_allow)
+{
+    sbuf e;
+    char out[2000];
+    ct_flow f;
+    sb_init(&e);
+    strategy_set_xact(&xact_ops);
+    CHECK_INT(xtreat_start(XTR_APPLY, &e), 0);
+    CHECK_INT(xtreat_allow("0", &e), -1);
+    CHECK_STR(e.data, "bad --ext-treat-arms 0 (arm numbers 1-7, comma-separated)");
+    CHECK_INT(xtreat_allow("8", &e), -1);
+    CHECK_INT(xtreat_allow("1,,2", &e), -1);
+    CHECK_INT(xtreat_allow("1x", &e), -1);
+    CHECK_INT(xtreat_allow("", &e), -1);
+    CHECK_INT(xtreat_allow("3,1,6", &e), 0);
+    CHECK_INT(key("10.9.12.2", XK_IP, 1, XC_RETRANS, 1000), 1);
+    for (unsigned p = 52000; p < 52020; p++) {
+        int a;
+        mkflow(&f, 0, 12, p);
+        a = xtreat_flow(&f, NULL, 1000, NULL);
+        CHECK(a == 0 || a == 2);
+    }
+    text(xtreat_keys, out, sizeof(out));
+    CHECK(strstr(out, "\"arms\":[{\"arm\":1,") != NULL);
+    CHECK(strstr(out, "{\"arm\":2,") == NULL);
+    CHECK(strstr(out, "{\"arm\":3,") != NULL);
+    /* UDP: arm 6 only; a class whose arms are all left out has none */
+    CHECK_INT(xtreat_allow("1", &e), 0);
+    CHECK_INT(key("10.9.13.2", XK_IP, 1, XC_UDP_NOANSWER, 1000), 1);
+    text(xtreat_keys, out, sizeof(out));
+    CHECK(strstr(out, "{\"key\":\"10.9.13.2\",\"level\":\"ip\",\"state\":\"untreatable\"") != NULL);
+    xtreat_stop();
+    strategy_set_xact(NULL);
     sb_free(&e);
 }
 
@@ -239,7 +276,7 @@ TEST(treat_provisional)
     CHECK_INT(xtreat_start(XTR_APPLY, &e), 0);
     CHECK_INT(key("10.9.9.2", XK_IP, 1, XC_FREEZE, 1000), 1);
     mkflow(&f, 0, 9, 50000);
-    a = xtreat_flow(&f, NULL, 1000);
+    a = xtreat_flow(&f, NULL, 1000, NULL);
     CHECK(a >= 0 && a < 5);
     memset(&ev, 0, sizeof(ev));
     ev.f = &f;
@@ -258,6 +295,129 @@ TEST(treat_provisional)
     strategy_set_xact(NULL);
     sb_free(&e);
 }
+
+#  ifndef _WIN32
+#    include <sys/stat.h>
+#    include <unistd.h>
+
+/* --ext-ga with a stand-in for geneva evolve: a script printing its line */
+static void fake_evolve(const char *path, const char *line)
+{
+    FILE *fp = fopen(path, "w");
+    fprintf(fp, "#!/bin/sh\nprintf '%%s\\n' '%s'\n", line);
+    fclose(fp);
+    chmod(path, 0755);
+}
+
+/* ticks until the search ends (its event) */
+static int ga_wait(uint64_t *now, const char *want)
+{
+    for (int i = 0; i < 500; i++) {
+        xtreat_tick(*now);
+        *now += 1000;
+        if (strstr(EV, want))
+            return 1;
+        usleep(10000);
+    }
+    return 0;
+}
+
+TEST(treat_ga)
+{
+    sbuf e;
+    xga_config gc;
+    char exe[64], text[256];
+    unsigned port = 51000;
+    uint64_t now = 1000000;
+    uint32_t ga = 0;
+    ct_flow f;
+    int n, fd;
+    sb_init(&e);
+    sb_init(&g_ev);
+    rng_global_seed(5);
+    ev_set_tap(tap, NULL);
+    strategy_set_xact(&xact_ops);
+    snprintf(exe, sizeof(exe), "/tmp/geneva-test-ga-XXXXXX");
+    fd = mkstemp(exe);
+    CHECK(fd >= 0);
+    close(fd);
+    fake_evolve(exe, "12.5\t1\t\\/ [TCP:flags:R]-drop-|");
+    CHECK_INT(xtreat_start(XTR_APPLY, &e), 0);
+    memset(&gc, 0, sizeof(gc));
+    snprintf(gc.exe, sizeof(gc.exe), "%s", exe);
+    gc.pop = 4, gc.gen = 1, gc.queue = 375;
+    CHECK_INT(xga_set(&gc, &e), 0);
+    CHECK_INT(xga_on(), 1);
+
+    /* every arm fails: the search instead of UNTREATABLE */
+    CHECK_INT(key("10.9.10.2", XK_IP, 1, XC_RETRANS, now), 1);
+    n = connections(10, 0, 0, 60, &port, &now, "search");
+    CHECK(n >= 10 && n <= 40);
+    CHECK(strstr(EV, "\"state\":\"search\",\"class\":\"RETRANS\",\"why\":\"every arm failed: the genetic") != NULL);
+    mkflow(&f, 0, 10, port++);
+    CHECK_INT(xtreat_flow(&f, NULL, now, NULL), -1); /* no arm meanwhile */
+    CHECK(ga_wait(&now, "the genetic search found an arm"));
+    CHECK(strstr(EV, "\"state\":\"trial\",\"class\":\"RETRANS\",\"why\":\"the genetic search found an arm\"") != NULL);
+    /* the found arm alone: the connections run it, it works, TREAT */
+    mkflow(&f, 0, 10, port++);
+    CHECK_INT(xtreat_flow(&f, NULL, now, &ga), XTR_GA_ARM);
+    CHECK(ga != 0);
+    CHECK_INT(xtreat_ga_text(ga, text, sizeof(text)), 1);
+    CHECK_STR(text, "\\/ [TCP:flags:R]-drop-|");
+    CHECK_INT(xtreat_ga_text(ga + 100, text, sizeof(text)), 0);
+    sb_reset(&g_ev);
+    n = connections(10, 0, 1u << XTR_GA_ARM, 10, &port, &now, "treat");
+    CHECK(n >= 3 && n <= 4);
+    CHECK(strstr(EV, "\"arm\":8,\"strategy\":\"\\\\/ [TCP:flags:R]-drop-|\"") != NULL);
+
+    /* a search that finds nothing: UNTREATABLE */
+    fake_evolve(exe, "-400\t1\t\\/");
+    sb_reset(&g_ev);
+    CHECK_INT(key("10.9.11.2", XK_IP, 1, XC_RETRANS, now), 1);
+    n = connections(11, 0, 0, 60, &port, &now, "search");
+    CHECK(n > 0);
+    CHECK(ga_wait(&now, "the genetic search found nothing"));
+    CHECK(strstr(EV, "\"state\":\"untreatable\",\"class\":\"RETRANS\",\"retry_s\":60,\"why\":\"the genetic search found nothing\"") != NULL);
+
+    /* propose: the found arm is a new proposal, nothing runs before ext_approve */
+    xtreat_stop();
+    CHECK_INT(xtreat_start(XTR_PROPOSE, &e), 0);
+    CHECK_INT(xga_set(&gc, &e), 0);
+    fake_evolve(exe, "12.5\t1\t\\/ [TCP:flags:R]-drop-|");
+    sb_reset(&g_ev);
+    CHECK_INT(key("10.9.12.2", XK_IP, 1, XC_RETRANS, now), 1);
+    {
+        const char *p = strstr(EV, "\"ev\":\"ext_proposal\"");
+        unsigned long long id = 0;
+        CHECK(p && (p = strstr(p, "\"id\":")) && sscanf(p + 5, "%llu", &id) == 1);
+        CHECK_INT(xtreat_decide(id, 1, NULL), 1);
+    }
+    n = connections(12, 0, 0, 60, &port, &now, "search");
+    CHECK(n > 0);
+    sb_reset(&g_ev);
+    CHECK(ga_wait(&now, "the genetic search found an arm: waits for ext_approve"));
+    CHECK(strstr(EV, "\"kind\":\"treat\",\"class\":\"RETRANS\",\"arms\":1,\"strategy\":\"\\\\/ [TCP:flags:R]-drop-|\"") != NULL);
+    mkflow(&f, 0, 12, port++);
+    CHECK_INT(xtreat_flow(&f, NULL, now, NULL), -1); /* not before the consent */
+    {
+        const char *p = strstr(EV, "\"ev\":\"ext_proposal\"");
+        unsigned long long id = 0;
+        CHECK(p && (p = strstr(p, "\"id\":")) && sscanf(p + 5, "%llu", &id) == 1);
+        CHECK_INT(xtreat_decide(id, 1, NULL), 1);
+    }
+    mkflow(&f, 0, 12, port++);
+    CHECK_INT(xtreat_flow(&f, NULL, now, &ga), XTR_GA_ARM);
+
+    xtreat_stop();
+    xga_set(NULL, NULL);
+    CHECK_INT(xga_on(), 0);
+    unlink(exe);
+    ev_set_tap(NULL, NULL);
+    strategy_set_xact(NULL);
+    sb_free(&g_ev);
+    sb_free(&e);
+}
+#  endif
 
 /* 4096 keys: no more until one is healthy again (its record makes room) */
 TEST(treat_full)
@@ -323,7 +483,7 @@ TEST(treat_propose)
     CHECK(strstr(EV, "\"key\":\"10.9.4.2\",\"kind\":\"treat\",\"class\":\"RETRANS\",\"arms\":5}") != NULL);
     CHECK(strstr(EV, "\"state\":\"proposed\"") != NULL);
     mkflow(&f, 0, 4, port++);
-    CHECK_INT(xtreat_flow(&f, NULL, now), -1);
+    CHECK_INT(xtreat_flow(&f, NULL, now, NULL), -1);
     /* a TCP class again: the same proposal */
     sb_reset(&g_ev);
     CHECK_INT(key("10.9.4.2", XK_IP, 1, XC_RST_IN, now), 1);
@@ -351,14 +511,14 @@ TEST(treat_propose)
 
     /* approved: the connections draw */
     mkflow(&f, 0, 4, port++);
-    CHECK(xtreat_flow(&f, NULL, now) >= 0);
+    CHECK(xtreat_flow(&f, NULL, now, NULL) >= 0);
     /* refused: no recheck, no new proposal for another class */
     sb_reset(&g_ev);
     xtreat_tick(now + 10000000);
     CHECK_INT(key("10.9.5.2", XK_IP, 1, XC_UDP_NOANSWER, now), 1);
     CHECK_STR(EV, "");
     mkflow(&f, 0, 5, port++);
-    CHECK_INT(xtreat_flow(&f, NULL, now), -1);
+    CHECK_INT(xtreat_flow(&f, NULL, now, NULL), -1);
     /* ... until healthy and impaired again */
     CHECK_INT(key("10.9.5.2", XK_IP, 0, XC_NONE, now), 0);
     CHECK_INT(key("10.9.5.2", XK_IP, 1, XC_RST_IN, now), 1);
@@ -379,7 +539,11 @@ void suite_treat(void)
 {
     RUN(treat_apply);
     RUN(treat_propose);
+    RUN(treat_allow);
     RUN(treat_provisional);
+#  ifndef _WIN32
+    RUN(treat_ga);
+#  endif
     RUN(treat_full);
 }
 

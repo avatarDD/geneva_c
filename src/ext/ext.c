@@ -496,6 +496,11 @@ typedef struct {
     strategy **pst; /* --ext-workers: the worker's copies of the profiles' strategies */
     strategy ***arms; /* ... and of their arms */
     strategy **tarms; /* ... and of the treatment's (--ext-auto apply) */
+    struct {
+        uint32_t id;
+        strategy *st;
+    } gac[4]; /* the keys' arms from --ext-ga, parsed by this worker */
+    unsigned gac_next;
 } xworker;
 
 /* prof_st with the worker's copies */
@@ -514,14 +519,38 @@ static strategy *wprof_st(const xworker *x, int i, strategy *cmd, const ct_flow 
 /* --ext-auto propose|apply: the treatment's arm for flow f of an impaired
  * key (the profile's strategy when the key is not in treatment or the
  * profile has its own tuner); 1 when st changed */
-static int flow_treat(const xworker *x, int i, ct_flow *f, strategy **st, uint64_t now)
+static int flow_treat(xworker *x, int i, ct_flow *f, strategy **st, uint64_t now)
 {
     int a;
+    uint32_t ga;
     if (!xtreat_mode() || !f || g_server_side || (i >= 0 && g_prof.v[i]->tune))
         return 0;
-    a = xtreat_flow(f, x->view.host, now);
+    a = xtreat_flow(f, x->view.host, now, &ga);
     if (a < 0)
         return 0;
+    if (a == XTR_GA_ARM) {
+        /* the key's arm from the genetic search: this worker's copy */
+        char text[1024];
+        sbuf e;
+        unsigned k;
+        for (k = 0; k < 4; k++)
+            if (x->gac[k].id == ga && x->gac[k].st) {
+                *st = x->gac[k].st;
+                return 1;
+            }
+        if (!xtreat_ga_text(ga, text, sizeof(text)))
+            return 0;
+        k = x->gac_next++ % 4;
+        strategy_free(x->gac[k].st);
+        sb_init(&e);
+        x->gac[k].st = strategy_parse(text, &e);
+        x->gac[k].id = ga;
+        sb_free(&e);
+        if (!x->gac[k].st)
+            return 0;
+        *st = x->gac[k].st;
+        return 1;
+    }
     *st = x->tarms ? x->tarms[a] : xtreat_arm((size_t)a);
     return 1;
 }
@@ -642,6 +671,8 @@ static void xw_close(eng_worker *w)
     for (size_t k = 0; x->tarms && k < xtreat_narms(); k++)
         strategy_free(x->tarms[k]);
     free(x->tarms);
+    for (size_t k = 0; k < 4; k++)
+        strategy_free(x->gac[k].st);
     free(x);
     w->x = NULL;
     if (g_threaded && w->id == 0) { /* the threads have ended: no hook runs any more */

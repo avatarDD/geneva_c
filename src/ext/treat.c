@@ -11,6 +11,12 @@
 #include "plat.h"
 #include "tuner.h"
 
+#ifdef _WIN32
+#  include <ws2tcpip.h>
+#else
+#  include <arpa/inet.h>
+#endif
+
 /* ---- the portfolio ------------------------------------------------------------- */
 
 /* The arms by class (bit XC_*), tried in this order of the index when
@@ -37,6 +43,9 @@ static const struct {
     {"[UDP:dport:443]-xsend{ipfrag;ipfrag_pos_udp=8}(drop,)-| \\/", UDP_CLASSES, 17},
 };
 #define NARMS (sizeof(portfolio) / sizeof(*portfolio))
+#define GA_ARM NARMS      /* the genetic search's arm of a key (--ext-ga) */
+#define NSLOT (NARMS + 1)
+typedef char narms_ok[NARMS == XTR_NARMS ? 1 : -1];
 
 #define MAX_KEYS 4096
 #define NBUCKETS 1024
@@ -52,15 +61,23 @@ static const struct {
 #define RETRY_S 60        /* the first recheck; doubled up to 64 times */
 #define RETRY_MAX 6
 
-enum { S_PROPOSED = 1, S_TRIAL, S_TREAT, S_UNTREATABLE };
-static const char *const state_name[] = {"", "proposed", "trial", "treat", "untreatable"};
+enum { S_PROPOSED = 1, S_TRIAL, S_TREAT, S_UNTREATABLE, S_SEARCH, S_N };
+static const char *const state_name[] = {"", "proposed", "trial", "treat", "untreatable", "search"};
 
 typedef struct trec {
     struct trec *next;
     char *name;
     int level, cls, state;
-    double A[NARMS], B[NARMS];
-    unsigned tries[NARMS], succ[NARMS];
+    double A[NSLOT], B[NSLOT];
+    unsigned tries[NSLOT], succ[NSLOT];
+    unsigned excl;  /* portfolio arms left out (the GA's arm alone after it) */
+    /* --ext-ga: the arm found, the probe's target (a TCP connection to 80
+     * or 443), the searches since the key was healthy */
+    char *ga_text;
+    uint32_t ga_id;
+    char ip[64], host[256];
+    uint16_t port;
+    int ga_tries;
     int treat;      /* the arm of TREAT (index) */
     double cusum;
     unsigned backoff;
@@ -86,9 +103,12 @@ static struct {
     trec *b[NBUCKETS];
     size_t n;
     tflow fl[NFLOWS];
+    uint32_t ga_seq;
+    trec *ga_rec;      /* the key of the running search */
     int live;          /* keys in TRIAL or TREAT ... */
     volatile int any;  /* ... > 0: the workers' check without the lock */
     int full_told;
+    unsigned allowed; /* --ext-treat-arms (bit i: arm i + 1) */
 } g;
 
 /* every change of a record's state (under the lock) */
@@ -129,11 +149,13 @@ int xtreat_start(int mode, sbuf *err)
     }
     plat_mutex_init(&g.lock);
     g.mode = mode;
+    g.allowed = (1u << NARMS) - 1;
     return 0;
 }
 
 void xtreat_stop(void)
 {
+    xga_stop();
     if (!g.mode)
         return;
     for (size_t i = 0; i < NARMS; i++)
@@ -141,6 +163,7 @@ void xtreat_stop(void)
     for (int i = 0; i < NBUCKETS; i++)
         for (trec *r = g.b[i], *n; r; r = n) {
             n = r->next;
+            free(r->ga_text);
             free(r->name);
             free(r);
         }
@@ -149,6 +172,28 @@ void xtreat_stop(void)
 }
 
 int xtreat_mode(void) { return g.mode; }
+
+int xtreat_allow(const char *list, sbuf *err)
+{
+    unsigned m = 0;
+    const char *p = list;
+    char *end;
+    while (*p) {
+        long n = strtol(p, &end, 10);
+        if (end == p || n < 1 || n > (long)NARMS || (*end && *end != ',')) {
+            sb_printf(err, "bad --ext-treat-arms %s (arm numbers 1-%d, comma-separated)", list, (int)NARMS);
+            return -1;
+        }
+        m |= 1u << (n - 1);
+        p = *end ? end + 1 : end;
+    }
+    if (!m) {
+        sb_printf(err, "bad --ext-treat-arms %s (arm numbers 1-%d, comma-separated)", list, (int)NARMS);
+        return -1;
+    }
+    g.allowed = m;
+    return 0;
+}
 size_t xtreat_narms(void) { return g.mode ? NARMS : 0; }
 strategy *xtreat_arm(size_t i) { return g.mode && i < NARMS ? g.arm[i] : NULL; }
 
@@ -160,21 +205,30 @@ static trec *find(const char *name)
     return NULL;
 }
 
-static int arm_of(const trec *r, size_t i) { return portfolio[i].classes >> r->cls & 1; }
+static int arm_of(const trec *r, size_t i)
+{
+    if (i == GA_ARM)
+        return r->ga_id != 0;
+    return (portfolio[i].classes >> r->cls & 1) && (g.allowed >> i & 1) && !(r->excl >> i & 1);
+}
 
+static int arm_proto(size_t i) { return i == GA_ARM ? 6 : portfolio[i].proto; }
+static const char *arm_text(const trec *r, size_t i) { return i == GA_ARM ? r->ga_text : portfolio[i].text; }
+
+/* the class's arms that --ext-treat-arms allows */
 static unsigned class_arms(int cls)
 {
     unsigned m = 0;
     for (size_t i = 0; i < NARMS; i++)
         m |= (unsigned)(portfolio[i].classes >> cls & 1) << i;
-    return m;
+    return m & g.allowed;
 }
 
 static size_t arms_of(int cls)
 {
     size_t n = 0;
-    for (size_t i = 0; i < NARMS; i++)
-        n += portfolio[i].classes >> cls & 1;
+    for (unsigned m = class_arms(cls); m; m &= m - 1)
+        n++;
     return n;
 }
 
@@ -186,6 +240,7 @@ typedef struct {
     unsigned retry_s;
     uint64_t pid;
     const char *why;
+    char strat[600];
 } tnews;
 
 static void news_of(tnews *nw, const trec *r, const char *why)
@@ -194,6 +249,10 @@ static void news_of(tnews *nw, const trec *r, const char *why)
     nw->state = r->state;
     nw->cls = r->cls;
     nw->arm = r->state == S_TREAT ? r->treat : -1;
+    if (r->state == S_PROPOSED && r->ga_id && r->excl)
+        nw->arm = GA_ARM; /* propose: the genetic search's arm waits for ext_approve */
+    if (nw->arm >= 0)
+        snprintf(nw->strat, sizeof(nw->strat), "%s", arm_text(r, (size_t)nw->arm));
     nw->retry_s = r->state == S_UNTREATABLE ? (unsigned)(RETRY_S << (r->backoff ? r->backoff - 1 : 0)) : 0;
     nw->pid = r->state == S_PROPOSED ? r->prop_id : 0;
     nw->why = why;
@@ -205,7 +264,7 @@ static void tell(const tnews *nw)
         return;
     if (nw->arm >= 0)
         LOGI("treat", "%s: %s on arm %d (%s): %s", nw->name, state_name[nw->state], nw->arm + 1,
-             portfolio[nw->arm].text, nw->why);
+             nw->strat, nw->why);
     else
         LOGI("treat", "%s: %s (%s): %s", nw->name, state_name[nw->state], xdet_class_name(nw->cls), nw->why);
     if (!ev_enabled())
@@ -217,7 +276,12 @@ static void tell(const tnews *nw)
         jw_kstr(&e.w, "key", nw->name);
         jw_kstr(&e.w, "kind", "treat");
         jw_kstr(&e.w, "class", xdet_class_name(nw->cls));
-        jw_kuint(&e.w, "arms", arms_of(nw->cls));
+        if (nw->arm == GA_ARM) {
+            jw_kuint(&e.w, "arms", 1);
+            jw_kstr(&e.w, "strategy", nw->strat);
+        } else {
+            jw_kuint(&e.w, "arms", arms_of(nw->cls));
+        }
         ev_emit(&e);
     }
     {
@@ -228,7 +292,7 @@ static void tell(const tnews *nw)
         jw_kstr(&e.w, "class", xdet_class_name(nw->cls));
         if (nw->arm >= 0) {
             jw_kint(&e.w, "arm", nw->arm + 1);
-            jw_kstr(&e.w, "strategy", portfolio[nw->arm].text);
+            jw_kstr(&e.w, "strategy", nw->strat);
         }
         if (nw->retry_s)
             jw_kuint(&e.w, "retry_s", nw->retry_s);
@@ -265,11 +329,12 @@ static int evict(void)
 {
     for (int i = 0; i < NBUCKETS; i++)
         for (trec **pp = &g.b[i], *r; (r = *pp) != NULL; pp = &r->next)
-            if (!r->state) {
+            if (!r->state && r != g.ga_rec) {
                 *pp = r->next;
                 for (int k = 0; k < NFLOWS; k++)
                     if (g.fl[k].r == r)
                         g.fl[k].r = NULL;
+                free(r->ga_text);
                 free(r->name);
                 free(r);
                 g.n--;
@@ -287,6 +352,7 @@ static void begin(trec *r, uint64_t now, tnews *nw)
 {
     r->backoff = 0;
     r->retry_at = 0;
+    r->excl = 0;
     if (!arms_of(r->cls)) {
         untreatable(r, now);
         news_of(nw, r, "no arm for the class");
@@ -336,6 +402,7 @@ int xtreat_key(const xdet_key_ev *ev, uint64_t now_ms)
         /* healthy without the treatment: it is no longer needed */
         set_state(r, 0);
         r->prop_id = 0;
+        r->ga_tries = 0;
     }
     owned = r && r->state;
     plat_mutex_unlock(&g.lock);
@@ -360,9 +427,9 @@ static int draw(const trec *r, int proto)
 {
     double best = -1;
     int arm = -1;
-    for (size_t i = 0; i < NARMS; i++) {
+    for (size_t i = 0; i < NSLOT; i++) {
         double x;
-        if (!arm_of(r, i) || (proto && portfolio[i].proto != proto))
+        if (!arm_of(r, i) || (proto && arm_proto(i) != proto))
             continue;
         x = xtune_beta(1.0 + r->A[i], 1.0 + r->B[i]);
         if (x > best)
@@ -381,11 +448,13 @@ static unsigned flow_slot(uint8_t ver, uint8_t proto, const uint8_t *cli, const 
     return (h ^ ver ^ (uint32_t)proto << 8) % NFLOWS;
 }
 
-int xtreat_flow(ct_flow *f, const char *host, uint64_t now_ms)
+int xtreat_flow(ct_flow *f, const char *host, uint64_t now_ms, uint32_t *ga)
 {
     trec *r;
     int arm = -1;
     (void)now_ms;
+    if (ga)
+        *ga = 0;
     if (!g.mode || !f || (f->proto != 6 && f->proto != 17) || !atomic_load_int(&g.any))
         return -1;
     plat_mutex_lock(&g.lock);
@@ -399,7 +468,7 @@ int xtreat_flow(ct_flow *f, const char *host, uint64_t now_ms)
             /* a treated key's arm, for the connections of its protocol
              * (an address's other protocol goes untreated) */
             if (r->state == S_TREAT)
-                arm = portfolio[r->treat].proto == f->proto ? r->treat : -1;
+                arm = arm_proto((size_t)r->treat) == f->proto ? r->treat : -1;
             else
                 arm = draw(r, f->proto);
             if (arm >= 0) {
@@ -417,8 +486,17 @@ int xtreat_flow(ct_flow *f, const char *host, uint64_t now_ms)
                 t->cport = f->cport;
                 t->sport = f->sport;
                 LOGD("treat", "%s: the connection from port %u runs arm %d", r->name, f->cport, arm + 1);
+                /* the genetic search's target, should it come to that */
+                if (f->proto == 6 && (f->sport == 80 || f->sport == 443)) {
+                    const char *h = host && *host ? host : f->chost;
+                    inet_ntop(f->ver == 6 ? AF_INET6 : AF_INET, f->srv, r->ip, sizeof(r->ip));
+                    snprintf(r->host, sizeof(r->host), "%s", h ? h : "");
+                    r->port = f->sport;
+                }
             }
         }
+        if (arm == (int)GA_ARM && ga)
+            *ga = r->ga_id;
     }
     plat_mutex_unlock(&g.lock);
     return arm;
@@ -427,14 +505,14 @@ int xtreat_flow(ct_flow *f, const char *host, uint64_t now_ms)
 /* P(each arm is the best one): the most likely and its probability */
 static int best_of(const trec *r, double *p)
 {
-    unsigned wins[NARMS] = {0};
+    unsigned wins[NSLOT] = {0};
     int top = -1;
     for (int k = 0; k < DRAWS; k++) {
         int a = draw(r, 0);
         if (a >= 0)
             wins[a]++;
     }
-    for (size_t i = 0; i < NARMS; i++)
+    for (size_t i = 0; i < NSLOT; i++)
         if (arm_of(r, i) && (top < 0 || wins[i] > wins[top]))
             top = (int)i;
     *p = top >= 0 ? (double)wins[top] / DRAWS : 0;
@@ -448,7 +526,7 @@ static int good_enough(const trec *r)
 {
     int top = -1;
     double m = 0;
-    for (size_t i = 0; i < NARMS; i++) {
+    for (size_t i = 0; i < NSLOT; i++) {
         double x = (1.0 + r->A[i]) / (2.0 + r->A[i] + r->B[i]);
         if (arm_of(r, i) && r->succ[i] >= MIN_SUCC && x >= GOOD && x > m)
             m = x, top = (int)i;
@@ -460,7 +538,7 @@ static void count(trec *r, int arm, int ok, uint64_t now, tnews *nw)
 {
     double p;
     int best;
-    for (size_t i = 0; i < NARMS; i++) {
+    for (size_t i = 0; i < NSLOT; i++) {
         r->A[i] *= GAMMA;
         r->B[i] *= GAMMA;
     }
@@ -501,12 +579,18 @@ static void count(trec *r, int arm, int ok, uint64_t now, tnews *nw)
     {
         unsigned succ = 0;
         int all = 1;
-        for (size_t i = 0; i < NARMS; i++)
+        for (size_t i = 0; i < NSLOT; i++)
             if (arm_of(r, i)) {
                 succ += r->succ[i];
                 all &= r->tries[i] >= TRIES;
             }
-        if (all && !succ) {
+        if (all && !succ && xga_on() && !r->ga_tries && r->port) {
+            /* --ext-ga: the genetic search for this key (xtreat_tick) */
+            set_state(r, S_SEARCH);
+            r->ga_tries++;
+            r->khash++;
+            news_of(nw, r, "every arm failed: the genetic search waits its turn");
+        } else if (all && !succ) {
             untreatable(r, now);
             news_of(nw, r, "every arm failed");
         }
@@ -536,18 +620,116 @@ void xtreat_outcome(const xdet_flow_ev *ev, uint64_t now_ms)
     tell(&nw);
 }
 
+/* --ext-ga: the running search ended, or the next one starts */
+static void ga_step(uint64_t now, tnews *nw)
+{
+    char best[1024], probe[8] = "", host[256] = "", ip[64] = "";
+    unsigned port = 0;
+    double fit;
+    trec *r = NULL;
+    if (xga_running()) {
+        if (!xga_poll(best, sizeof(best), &fit))
+            return;
+        plat_mutex_lock(&g.lock);
+        r = g.ga_rec;
+        g.ga_rec = NULL;
+        if (r && r->state == S_SEARCH) {
+            sbuf e;
+            strategy *st;
+            sb_init(&e);
+            st = best[0] && fit > 0 ? strategy_parse(best, &e) : NULL;
+            if (st) {
+                /* the key tries the found arm alone */
+                strategy_free(st);
+                free(r->ga_text);
+                r->ga_text = xstrdup(best);
+                r->ga_id = ++g.ga_seq;
+                r->excl = class_arms(r->cls);
+                if (g.mode == XTR_PROPOSE) {
+                    /* a new strategy: it waits for the user's consent */
+                    set_state(r, S_PROPOSED);
+                    r->prop_id = xtune_new_id();
+                    news_of(nw, r, "the genetic search found an arm: waits for ext_approve");
+                } else {
+                    trial(r);
+                    news_of(nw, r, "the genetic search found an arm");
+                }
+                LOGI("treat", "%s: the genetic search found %s (fitness %g)", r->name, best, fit);
+            } else {
+                untreatable(r, now);
+                news_of(nw, r, "the genetic search found nothing");
+            }
+            sb_free(&e);
+        }
+        plat_mutex_unlock(&g.lock);
+        return;
+    }
+    plat_mutex_lock(&g.lock);
+    for (int i = 0; i < NBUCKETS && !r; i++)
+        for (trec *x = g.b[i]; x && !r; x = x->next)
+            if (x->state == S_SEARCH)
+                r = x;
+    if (r) {
+        g.ga_rec = r;
+        snprintf(probe, sizeof(probe), "%s", r->port == 443 ? "tls" : "http");
+        snprintf(host, sizeof(host), "%s", r->host[0] ? r->host : r->ip);
+        snprintf(ip, sizeof(ip), "%s", r->ip);
+        port = r->port;
+    }
+    plat_mutex_unlock(&g.lock);
+    if (r) {
+        sbuf e;
+        sb_init(&e);
+        if (xga_launch(probe, host, ip, port, &e) < 0) {
+            LOGW("treat", "%s: the genetic search did not start: %s", host, e.data ? e.data : "");
+            plat_mutex_lock(&g.lock);
+            g.ga_rec = NULL;
+            if (r->state == S_SEARCH) {
+                untreatable(r, now);
+                news_of(nw, r, "the genetic search did not start");
+            }
+            plat_mutex_unlock(&g.lock);
+        } else {
+            plat_mutex_lock(&g.lock);
+            if (r->state == S_SEARCH)
+                news_of(nw, r, "the genetic search runs");
+            plat_mutex_unlock(&g.lock);
+        }
+        sb_free(&e);
+    }
+}
+
+int xtreat_ga_text(uint32_t id, char *out, size_t cap)
+{
+    int found = 0;
+    if (!g.mode || !id)
+        return 0;
+    plat_mutex_lock(&g.lock);
+    for (int i = 0; i < NBUCKETS && !found; i++)
+        for (trec *r = g.b[i]; r && !found; r = r->next)
+            if (r->ga_id == id) {
+                snprintf(out, cap, "%s", r->ga_text);
+                found = 1;
+            }
+    plat_mutex_unlock(&g.lock);
+    return found;
+}
+
 void xtreat_tick(uint64_t now_ms)
 {
-    tnews nw[4];
+    tnews nw[5];
     size_t k = 0;
     if (!g.mode)
         return;
     memset(nw, 0, sizeof(nw));
+    if (xga_on())
+        ga_step(now_ms, &nw[4]);
     plat_mutex_lock(&g.lock);
     for (int i = 0; i < NBUCKETS && k < 4; i++)
         for (trec *r = g.b[i]; r && k < 4; r = r->next)
             if (r->state == S_UNTREATABLE && now_ms >= r->retry_at) {
                 if (arms_of(r->cls)) {
+                    r->excl = 0; /* the portfolio again, with the GA's arm if any */
                     trial(r);
                     news_of(&nw[k++], r, "the recheck");
                 } else {
@@ -558,13 +740,14 @@ void xtreat_tick(uint64_t now_ms)
     plat_mutex_unlock(&g.lock);
     for (size_t i = 0; i < k; i++)
         tell(&nw[i]);
+    tell(&nw[4]);
 }
 
 /* ---- ctl --------------------------------------------------------------------------------- */
 
 void xtreat_status(jw *w)
 {
-    size_t n[5] = {0};
+    size_t n[S_N] = {0};
     if (!g.mode)
         return;
     plat_mutex_lock(&g.lock);
@@ -579,6 +762,8 @@ void xtreat_status(jw *w)
     jw_kuint(w, "trial", n[S_TRIAL]);
     jw_kuint(w, "treat", n[S_TREAT]);
     jw_kuint(w, "untreatable", n[S_UNTREATABLE]);
+    jw_kuint(w, "search", n[S_SEARCH]);
+    jw_kbool(w, "ga", xga_on());
     jw_obj_end(w);
     plat_mutex_unlock(&g.lock);
 }
@@ -603,11 +788,13 @@ void xtreat_keys(jw *w, size_t max)
             jw_kstr(w, "class", xdet_class_name(r->cls));
             if (r->state == S_TREAT) {
                 jw_kint(w, "arm", r->treat + 1);
-                jw_kstr(w, "strategy", portfolio[r->treat].text);
+                jw_kstr(w, "strategy", arm_text(r, (size_t)r->treat));
             }
+            if (r->ga_id)
+                jw_kstr(w, "ga", r->ga_text);
             jw_key(w, "arms");
             jw_arr(w);
-            for (size_t a = 0; a < NARMS; a++)
+            for (size_t a = 0; a < NSLOT; a++)
                 if (arm_of(r, a)) {
                     jw_obj(w);
                     jw_kint(w, "arm", (int64_t)a + 1);
@@ -635,7 +822,12 @@ void xtreat_proposals(jw *w)
                 jw_kstr(w, "key", r->name);
                 jw_kstr(w, "kind", "treat");
                 jw_kstr(w, "class", xdet_class_name(r->cls));
-                jw_kuint(w, "arms", arms_of(r->cls));
+                if (r->ga_id && r->excl) {
+                    jw_kuint(w, "arms", 1);
+                    jw_kstr(w, "strategy", r->ga_text);
+                } else {
+                    jw_kuint(w, "arms", arms_of(r->cls));
+                }
                 jw_obj_end(w);
             }
     plat_mutex_unlock(&g.lock);

@@ -1169,17 +1169,20 @@ TEST(detect_fw)
 
 static const optdef g_defs[] = {
     EXT_AUTO_OPTS,
+    {"ext-seccomp", 0, 2, "0|1", NULL},
+    {"user", 0, 1, "NAME", NULL},
     {NULL, 0, 0, NULL, NULL},
 };
 
-static int auto_parse(fw_config *c, sbuf *err, const char *w0, const char *w1, const char *w2, const char *w3)
+static int auto_parse6(fw_config *c, sbuf *err, const char *w0, const char *w1, const char *w2, const char *w3,
+                       const char *w4, const char *w5)
 {
-    const char *words[] = {"x", w0, w1, w2, w3};
-    char *argv[6], e[128];
+    const char *words[] = {"x", w0, w1, w2, w3, w4, w5};
+    char *argv[8], e[128];
     int argc = 1, r;
     args_t a;
     argv[0] = (char *)words[0];
-    for (int i = 1; i < 5 && words[i]; i++)
+    for (int i = 1; i < 7 && words[i]; i++)
         argv[argc++] = (char *)words[i];
     argv[argc] = NULL;
     sb_reset(err);
@@ -1191,6 +1194,11 @@ static int auto_parse(fw_config *c, sbuf *err, const char *w0, const char *w1, c
     r = xauto_parse(&a, c, err);
     args_free(&a);
     return r;
+}
+
+static int auto_parse(fw_config *c, sbuf *err, const char *w0, const char *w1, const char *w2, const char *w3)
+{
+    return auto_parse6(c, err, w0, w1, w2, w3, NULL, NULL);
 }
 
 TEST(detect_options)
@@ -1226,6 +1234,33 @@ TEST(detect_options)
     CHECK_INT(xtreat_mode(), XTR_PROPOSE);
     CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", NULL, NULL), 0);
     CHECK_INT(xtreat_mode(), XTR_OFF);
+    /* --ext-ga: the treatment's, starts geneva evolve (Linux, no seccomp) */
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", "--ext-ga", NULL), -1);
+    CHECK_STR(e.data, "--ext-ga is for --ext-auto propose or apply");
+    CHECK_INT(auto_parse(&c, &e, "--ext-ga", NULL, NULL, NULL), -1);
+    CHECK_STR(e.data, "--ext-ga is for --ext-auto");
+    if (!FW_WINDOWS) {
+        CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-ga", NULL), -1);
+        CHECK_STR(e.data, "--ext-ga starts geneva evolve: it needs --ext-seccomp 0");
+        CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga", "--ext-seccomp=0", NULL, NULL), 0);
+        CHECK_INT(xga_on(), 1);
+        CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga=20:3", "--ext-seccomp=0", NULL, NULL), 0);
+        CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga=20:x", "--ext-seccomp=0", NULL, NULL), -1);
+        CHECK_STR(e.data, "bad --ext-ga 20:x (POP:GEN, population 2-1000, generations 1-100)");
+        CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga=1", "--ext-seccomp=0", NULL, NULL), -1);
+        CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga", "--ext-seccomp=0", "--user", "nobody"), -1);
+        CHECK_STR(e.data, "--ext-ga: the search needs root, not with --user or --uid");
+    } else {
+        CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-ga", NULL), -1);
+        CHECK_STR(e.data, "--ext-ga is Linux-only");
+    }
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", "--ext-treat-arms", "1"), -1);
+    CHECK_STR(e.data, "--ext-treat-arms is for --ext-auto propose or apply");
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-treat-arms", "1,9"), -1);
+    CHECK_STR(e.data, "bad --ext-treat-arms 1,9 (arm numbers 1-7, comma-separated)");
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-treat-arms", "1,5"), 0);
+    xauto_reset();
+    CHECK_INT(xga_on(), 0);
     strategy_set_xact(NULL);
     CHECK_INT(auto_parse(&c, &e, "--ext-auto", "watch", NULL, NULL), -1);
     CHECK_STR(e.data, "bad --ext-auto watch (observe, propose, apply)");
