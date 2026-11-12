@@ -72,6 +72,7 @@ typedef struct trec {
 /* a connection's arm, for its outcome (by the client's tuple) */
 typedef struct {
     trec *r;
+    uint32_t epoch; /* the record's khash when drawn: older outcomes do not count */
     int arm;
     uint8_t ver, proto;
     uint8_t cli[16], srv[16];
@@ -85,8 +86,21 @@ static struct {
     trec *b[NBUCKETS];
     size_t n;
     tflow fl[NFLOWS];
-    uint64_t treated, untreatable; /* transitions, for the status */
+    int live;          /* keys in TRIAL or TREAT ... */
+    volatile int any;  /* ... > 0: the workers' check without the lock */
+    int full_told;
 } g;
+
+/* every change of a record's state (under the lock) */
+static void set_state(trec *r, int st)
+{
+    int was = r->state == S_TRIAL || r->state == S_TREAT, is = st == S_TRIAL || st == S_TREAT;
+    r->state = st;
+    if (was != is) {
+        g.live += is - was;
+        atomic_store_int(&g.any, g.live > 0);
+    }
+}
 
 static uint32_t hash32(const char *s)
 {
@@ -227,7 +241,7 @@ static void tell(const tnews *nw)
 
 static void trial(trec *r)
 {
-    r->state = S_TRIAL;
+    set_state(r, S_TRIAL);
     memset(r->A, 0, sizeof(r->A));
     memset(r->B, 0, sizeof(r->B));
     memset(r->tries, 0, sizeof(r->tries));
@@ -238,12 +252,34 @@ static void trial(trec *r)
 
 static void untreatable(trec *r, uint64_t now)
 {
-    r->state = S_UNTREATABLE;
+    set_state(r, S_UNTREATABLE);
     if (r->backoff < RETRY_MAX + 1)
         r->backoff++;
     r->retry_at = now + ((uint64_t)RETRY_S * 1000 << (r->backoff - 1));
     r->khash++;
-    g.untreatable++;
+}
+
+/* A full table: a record out of the treatment (healthy again) makes room,
+ * 1; 0: every key is in it */
+static int evict(void)
+{
+    for (int i = 0; i < NBUCKETS; i++)
+        for (trec **pp = &g.b[i], *r; (r = *pp) != NULL; pp = &r->next)
+            if (!r->state) {
+                *pp = r->next;
+                for (int k = 0; k < NFLOWS; k++)
+                    if (g.fl[k].r == r)
+                        g.fl[k].r = NULL;
+                free(r->name);
+                free(r);
+                g.n--;
+                return 1;
+            }
+    if (!g.full_told) {
+        g.full_told = 1;
+        LOGW("treat", "%d keys in treatment: no more until one is healthy again", MAX_KEYS);
+    }
+    return 0;
 }
 
 /* the key is new to the treatment, or its class changed */
@@ -255,7 +291,7 @@ static void begin(trec *r, uint64_t now, tnews *nw)
         untreatable(r, now);
         news_of(nw, r, "no arm for the class");
     } else if (g.mode == XTR_PROPOSE) {
-        r->state = S_PROPOSED;
+        set_state(r, S_PROPOSED);
         r->prop_id = xtune_new_id();
         news_of(nw, r, "waits for ext_approve");
     } else {
@@ -274,7 +310,7 @@ int xtreat_key(const xdet_key_ev *ev, uint64_t now_ms)
     memset(&nw, 0, sizeof(nw));
     plat_mutex_lock(&g.lock);
     r = find(ev->key);
-    if (!r && ev->impaired && g.n < MAX_KEYS) {
+    if (!r && ev->impaired && (g.n < MAX_KEYS || evict())) {
         unsigned h = hash32(ev->key) % NBUCKETS;
         r = xcalloc(1, sizeof(*r));
         r->name = xstrdup(ev->key);
@@ -298,7 +334,7 @@ int xtreat_key(const xdet_key_ev *ev, uint64_t now_ms)
             begin(r, now_ms, &nw);
     } else if (r && !ev->impaired && (r->state == S_PROPOSED || r->state == S_UNTREATABLE)) {
         /* healthy without the treatment: it is no longer needed */
-        r->state = 0;
+        set_state(r, 0);
         r->prop_id = 0;
     }
     owned = r && r->state;
@@ -350,10 +386,10 @@ int xtreat_flow(ct_flow *f, const char *host, uint64_t now_ms)
     trec *r;
     int arm = -1;
     (void)now_ms;
-    if (!g.mode || !f || (f->proto != 6 && f->proto != 17))
+    if (!g.mode || !f || (f->proto != 6 && f->proto != 17) || !atomic_load_int(&g.any))
         return -1;
     plat_mutex_lock(&g.lock);
-    r = g.n ? rec_of(f, host && *host ? host : f->chost) : NULL;
+    r = rec_of(f, host && *host ? host : f->chost);
     if (r) {
         uint32_t kh = hash32(r->name) + r->khash;
         if (f->xr_arm && f->xr_khash == kh) {
@@ -372,6 +408,7 @@ int xtreat_flow(ct_flow *f, const char *host, uint64_t now_ms)
                 /* the connection's outcome comes by its tuple */
                 t = &g.fl[flow_slot(f->ver, f->proto, f->cli, f->srv, f->cport, f->sport)];
                 t->r = r;
+                t->epoch = r->khash;
                 t->arm = arm;
                 t->ver = f->ver;
                 t->proto = f->proto;
@@ -454,11 +491,10 @@ static void count(trec *r, int arm, int ok, uint64_t now, tnews *nw)
     if (best < 0 || p < P_BEST || r->succ[best] < MIN_SUCC)
         best = good_enough(r);
     if (best >= 0 && r->succ[best] >= MIN_SUCC) {
-        r->state = S_TREAT;
+        set_state(r, S_TREAT);
         r->treat = best;
         r->cusum = 0;
         r->khash++;
-        g.treated++;
         news_of(nw, r, "the best arm");
         return;
     }
@@ -490,7 +526,7 @@ void xtreat_outcome(const xdet_flow_ev *ev, uint64_t now_ms)
     if (t->r && t->ver == f->ver && t->proto == f->proto && t->cport == f->cport && t->sport == f->sport &&
         !memcmp(t->cli, f->cli, 16) && !memcmp(t->srv, f->srv, 16)) {
         LOGD("treat", "%s: arm %d %s", t->r->name, t->arm + 1, ev->ok ? "succeeded" : "failed");
-        if (t->r->state == S_TRIAL || t->r->state == S_TREAT)
+        if ((t->r->state == S_TRIAL || t->r->state == S_TREAT) && t->epoch == t->r->khash)
             count(t->r, t->arm, ev->ok, now_ms, &nw);
         t->r = NULL;
     }
@@ -515,7 +551,6 @@ void xtreat_tick(uint64_t now_ms)
                 } else {
                     untreatable(r, now_ms);
                     news_of(&nw[k++], r, "still no arm for the class");
-                    g.untreatable--; /* not a new verdict */
                 }
             }
     plat_mutex_unlock(&g.lock);
@@ -625,7 +660,7 @@ int xtreat_decide(uint64_t id, int approve, jw *w)
             news_of(&nw, found, "approved");
         } else {
             /* refused: the key stays as it is; impaired, untreated */
-            found->state = S_UNTREATABLE;
+            set_state(found, S_UNTREATABLE);
             found->backoff = RETRY_MAX + 1;
             found->retry_at = UINT64_MAX;
             news_of(&nw, found, "refused");

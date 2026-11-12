@@ -226,6 +226,27 @@ TEST(treat_apply)
     sb_free(&e);
 }
 
+/* 4096 keys: no more until one is healthy again (its record makes room) */
+TEST(treat_full)
+{
+    sbuf e;
+    char k[32];
+    sb_init(&e);
+    strategy_set_xact(&xact_ops);
+    CHECK_INT(xtreat_start(XTR_APPLY, &e), 0);
+    for (int i = 0; i < 4096; i++) {
+        snprintf(k, sizeof(k), "10.8.%d.%d", i / 256, i % 256);
+        CHECK_INT(key(k, XK_IP, 1, XC_BLACKHOLE_SYN, 1000), 1);
+    }
+    CHECK_INT(key("10.7.0.1", XK_IP, 1, XC_BLACKHOLE_SYN, 1000), 0);
+    CHECK_INT(key("10.8.3.3", XK_IP, 0, XC_NONE, 1000), 0);
+    CHECK_INT(key("10.7.0.1", XK_IP, 1, XC_BLACKHOLE_SYN, 1000), 1);
+    CHECK_INT(key("10.7.0.2", XK_IP, 1, XC_BLACKHOLE_SYN, 1000), 0);
+    xtreat_stop();
+    strategy_set_xact(NULL);
+    sb_free(&e);
+}
+
 /* ctl: the reply's text */
 static int tctl(const char *cmd, const char *req, char *out, size_t cap)
 {
@@ -325,6 +346,7 @@ void suite_treat(void)
 {
     RUN(treat_apply);
     RUN(treat_propose);
+    RUN(treat_full);
 }
 
 #else

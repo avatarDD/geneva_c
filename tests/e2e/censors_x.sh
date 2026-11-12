@@ -935,7 +935,7 @@ treat_case() {
     name=$1 copts=$2 key=$3 req=$4 want_ok=$5
     shift 5
     on treat || on "treat$name" || return
-    echo "== --ext-auto apply against censor $name"
+    echo "== --ext-auto apply against censor $name${*:+ $*}"
     start_censor $name $copts || return
     if tune_start 80,443 --proto tcp,udp --ext-auto apply -s '\/' --rng-seed 1 "$@"; then
         n=0
@@ -967,6 +967,8 @@ udpn() { # the echoes of the second half of a QUIC flow of four datagrams (the d
     ip netns exec "$NC" python3 "$WORK/udp.py" 10.81.2.2 "$DATA/quic_initial_www_google_com.bin" $UDPN
 }
 treat_case 14 "" ultrasurf.example 'https ultrasurf.example' 0
+# two workers: each has its own copies of the arms
+treat_case 14 "" ultrasurf.example 'https ultrasurf.example' 0 --ext-workers 2
 treat_case 15 "" ultrasurf.example 'https ultrasurf.example' 0
 treat_case 16 "--forbidden google" 10.81.2.2 udpn 2
 treat_case 18 "" ultrasurf.example "http /secret.html -H 'Host: ultrasurf.example'" "200 27"
