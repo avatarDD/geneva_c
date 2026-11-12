@@ -1147,7 +1147,7 @@ int engine_run(engine_opts *o)
         }
         if (r > 0 && nctl)
             ctl_dispatch(e.ctl, pfd + nbe, nctl, on_control, &e);
-        if (r > 0 && nx)
+        if (nx) /* also without events: their timers */
             e.o->ext->ready(&e, pfd + nbe + nctl, nx);
         engine_run_timers(&e, 0);
         for (unsigned i = 0; i < e.nw; i++) {

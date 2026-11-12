@@ -48,9 +48,10 @@
 /* --ext-auto (run; src/ext/auto.h) */
 #define EXT_AUTO_OPTS                                                                                         \
     {"ext-auto", 0, 1, "observe",                                                                             \
-     EXT_HELP("Linux: watch the first packets of every flow (any port, NFLOG) and tell of blocked keys "     \
-              "(port, /24 or /48, address, host): events ext_flow, ext_impaired, ext_class, ctl ext_status; " \
-              "traffic is not changed")},                                                                     \
+     EXT_HELP("Linux: watch the first packets of every flow (any port, NFLOG) and the conntrack's "        \
+              "counters (ctnetlink, once a second: freezes, throttling), tell of blocked keys "             \
+              "(port, /24 or /48, address, host): events ext_flow, ext_impaired, ext_class, ext_link, "      \
+              "ctl ext_status; traffic is not changed")},                                                   \
     {"ext-nflog-group", 0, 1, "N", EXT_HELP("the NFLOG group of --ext-auto (the queue number)")},              \
     {"ext-observe-first", 0, 1, "N",                                                                          \
      EXT_HELP("--ext-auto: packets of each direction observed per flow (16)")}

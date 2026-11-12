@@ -143,7 +143,8 @@ struct ext_hooks {
     int (*control)(engine *e, const char *cmd, const json_val *req, jw *w, sbuf *err);
     /* Sockets of their own (--ext-auto's observation), polled by the main
      * loop with the engine's lock held: pollfds puts up to max of them in
-     * fds and returns how many; ready gets them back after the poll. */
+     * fds and returns how many; ready gets them back after every poll
+     * (at least once a second, with or without events). */
     size_t (*pollfds)(engine *e, plat_pollfd *fds, size_t max);
     void (*ready)(engine *e, const plat_pollfd *fds, size_t n);
 };

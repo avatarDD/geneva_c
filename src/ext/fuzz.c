@@ -11,6 +11,7 @@
 #include "args.h"
 #include "ext/blob.h"
 #include "ext/cfgfile.h"
+#include "ext/ctnl.h"
 #include "ext/ctrack.h"
 #include "ext/detect.h"
 #include "ext/ext.h"
@@ -1139,7 +1140,25 @@ static void s_spec(xfuzz_add_fn add, void *ud)
 typedef struct {
     xdet *d;
     uint64_t now;
+    const uint8_t *in; /* the input: the counters of the watched flows */
+    size_t n, pos;
+    uint64_t rb;
 } obs_ctx;
+
+/* the watched flows' counters, made of the input's bytes */
+static void obs_req(void *ud, const xdet_tuple *t)
+{
+    obs_ctx *o = ud;
+    xdet_ctr c;
+    uint8_t b = o->n ? o->in[o->pos++ % o->n] : 0;
+    memset(&c, 0, sizeof(c));
+    c.t = *t;
+    c.found = b != 0xff;
+    c.open = !(b & 0x80);
+    o->rb += (uint64_t)(b & 0x3f) << (b & 0x40 ? 12 : 6);
+    c.rbytes = o->rb;
+    xdet_counters(o->d, &c, o->now + (b & 7) * 100);
+}
 
 static void obs_pkt(const nflog_msg *m, void *ud)
 {
@@ -1165,12 +1184,19 @@ static void t_observe(const uint8_t *d, size_t n)
     xdet_config_default(&c);
     ct_config_default(&ct);
     c.max_keys = 16; /* the full table too */
+    memset(&o, 0, sizeof(o));
     o.d = xdet_new(&c, &ct, NULL);
     o.now = 1000;
-    /* the input is one NFLOG datagram; read twice, so its flows go on */
+    o.in = d;
+    o.n = n;
+    /* the input is one NFLOG datagram; read twice, so its flows go on,
+     * then the volume watch over 12 seconds */
     for (int k = 0; k < 2; k++)
         (void)nflog_parse(d, n, obs_pkt, &o);
+    for (int k = 0; k < 12; k++, o.now += 1000)
+        xdet_tick(o.d, o.now, obs_req, &o);
     xdet_get_stats(o.d, &st);
+    XFUZZ_CHECK(st.watched <= c.watch_max && st.capacity >= 0);
     XFUZZ_CHECK(st.flows_ok + st.flows_failed <= st.packets);
     XFUZZ_CHECK(st.impaired <= st.keys && st.keys <= c.max_keys);
     sb_init(&w);
@@ -1232,9 +1258,78 @@ static void s_observe(xfuzz_add_fn add, void *ud)
             n = mk_pkt(pk, sizeof(pk), v6, 17, 40001, 443, 0, pl, 64);
             obs_msg(&b, pk, n);
         }
+        /* DNS: a query, a stub answer, a second answer */
+        {
+            static const uint8_t ans[] = {0x12, 0x34, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0, 1, 'a', 2, 'r', 'u',
+                                          0,    0,    1,    0,    1, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60,
+                                          0,    4,    127,  0,    0, 1};
+            n = mk_pkt(pk, sizeof(pk), v6, 17, 40002, 53, 0, ans, 20);
+            obs_msg(&b, pk, n);
+            for (int i = 0; i < 2; i++) {
+                n = mk_pkt(pk, sizeof(pk), v6, 17, 53, 40002, 0, ans, sizeof(ans));
+                if (n && !v6) {
+                    uint8_t t[4];
+                    memcpy(t, pk + 12, 4), memcpy(pk + 12, pk + 16, 4), memcpy(pk + 16, t, 4);
+                    pk[8] = (uint8_t)(50 + i);
+                }
+                obs_msg(&b, pk, n);
+            }
+        }
         add(ud, (const uint8_t *)b.data, b.len);
         sb_free(&b);
     }
+}
+
+/* ---- ctnl: ctnetlink answers -------------------------------------------------------- */
+
+static const ctnl_tuple *ctnl_lookup(uint32_t seq, void *ctx)
+{
+    return seq & 1 ? ctx : NULL;
+}
+
+static void ctnl_ent(const ctnl_entry *e, void *ctx)
+{
+    (void)ctx;
+    XFUZZ_CHECK(e->t.ver == 0 || e->t.ver == 4 || e->t.ver == 6);
+    XFUZZ_CHECK(e->found || e->t.sport == 40000);
+}
+
+static void t_ctnl(const uint8_t *d, size_t n)
+{
+    ctnl_tuple t;
+    uint8_t m[160];
+    memset(&t, 0, sizeof(t));
+    t.ver = 4, t.proto = 6, t.sport = 40000, t.dport = 443;
+    XFUZZ_CHECK(ctnl_parse(d, n, ctnl_lookup, ctnl_ent, &t) <= (int)(n / 16));
+    /* a tuple from the input builds a request that fits */
+    if (n >= sizeof(t)) {
+        memcpy(&t, d, sizeof(t));
+        XFUZZ_CHECK(ctnl_build_get(m, sizeof(m), &t, 1) <= sizeof(m));
+    }
+}
+
+static void s_ctnl(xfuzz_add_fn add, void *ud)
+{
+    ctnl_tuple t;
+    uint8_t m[256];
+    size_t n;
+    uint16_t ty = 0x100;
+    static const uint8_t ctr[] = {28, 0, 10, 0x80, 12, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 9,
+                                  12, 0, 2,  0,    0, 0, 0, 0, 0, 0, 0x30, 0x39};
+    static const uint8_t err[36] = {36, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0xfe, 0xff, 0xff, 0xff};
+    memset(&t, 0, sizeof(t));
+    t.ver = 4, t.proto = 6, t.sport = 40000, t.dport = 443;
+    t.src[0] = 10, t.src[3] = 1, t.dst[0] = 10, t.dst[3] = 2;
+    n = ctnl_build_get(m, sizeof(m), &t, 1);
+    memcpy(m + 4, &ty, 2); /* IPCTNL_MSG_CT_NEW, as the kernel answers */
+    memcpy(m + n, ctr, sizeof(ctr));
+    n += sizeof(ctr);
+    {
+        uint32_t l = (uint32_t)n;
+        memcpy(m, &l, 4);
+    }
+    add(ud, m, n);
+    add(ud, err, sizeof(err));
 }
 
 /* ---- the table ------------------------------------------------------------------- */
@@ -1252,7 +1347,8 @@ static const xfuzz_target targets[] = {
     {"lists", "host lists and IP sets", t_lists, s_lists},
     {"profile", "the profile file of --ext-profile", t_profile, s_profile},
     {"spec", "option values: markers, ranges, ports, filters, @FILE words", t_spec, s_spec},
-    {"observe", "NFLOG datagrams and the detector of --ext-auto", t_observe, s_observe},
+    {"observe", "NFLOG datagrams, the counters and the detector of --ext-auto", t_observe, s_observe},
+    {"ctnl", "ctnetlink answers with the counters of a flow", t_ctnl, s_ctnl},
 };
 
 const xfuzz_target *xfuzz_targets(size_t *n)

@@ -35,7 +35,12 @@ void xauto_reset(void);
 int xauto_open(sbuf *err);
 void xauto_close(void);
 size_t xauto_pollfds(plat_pollfd *fds, size_t max);
+/* after every poll of the main loop (fds may have no events): the
+ * observation's sockets, and about once a second xauto_tick */
 void xauto_ready(const plat_pollfd *fds, size_t n);
+/* the volume watch (ctnetlink requests) and LINK_DEGRADED, at most once a
+ * second; for tests */
+void xauto_tick(uint64_t now_ms);
 
 /* One observed packet (the bytes of an IP packet) at now_ms; for tests and
  * for the NFLOG reader */

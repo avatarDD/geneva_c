@@ -44,7 +44,7 @@ TEST(fuzz_table)
     size_t n;
     const xfuzz_target *t = xfuzz_targets(&n);
     static const char *const want[] = {"pkt", "strategy", "apply", "pcap", "json", "l7",
-                                       "tls", "quic", "inflate", "lists", "profile", "spec", "observe"};
+                                       "tls", "quic", "inflate", "lists", "profile", "spec", "observe", "ctnl"};
     CHECK_INT((int)n, (int)ARRAY_LEN(want));
     for (size_t i = 0; i < n && i < ARRAY_LEN(want); i++) {
         CHECK_STR(t[i].name, want[i]);

@@ -65,6 +65,7 @@ ip netns exec "$NR" sysctl -qw net.ipv4.ip_forward=1
 mkdir "$WORK/www"
 echo "the page behind the censor" > "$WORK/www/secret.html"
 head -c 300000 /dev/zero > "$WORK/www/big.bin"
+head -c 8000000 /dev/zero > "$WORK/www/huge.bin"
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=lab -keyout "$WORK/key.pem" \
     -out "$WORK/cert.pem" >/dev/null 2>&1 || { echo "openssl failed"; exit 1; }
 # HTTP on 80, HTTPS on 443 (any name), and a UDP echo on 443 for QUIC
@@ -92,7 +93,23 @@ def echo():
         d, a = u.recvfrom(65535)
         u.sendto(d[:64], a)
 threading.Thread(target=serve, args=(80, False), daemon=True).start()
+def dns():
+    # every A query: 10.81.2.80 (the names may be compressed)
+    u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    u.bind(("0.0.0.0", 53))
+    while True:
+        q, a = u.recvfrom(4096)
+        if len(q) < 12:
+            continue
+        off = 12
+        while off < len(q) and q[off] and not q[off] & 0xc0:
+            off += 1 + q[off]
+        end = off + (2 if off < len(q) and q[off] & 0xc0 else 1) + 4
+        r = q[:2] + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00" + q[12:end]
+        r += b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04" + bytes([10, 81, 2, 80])
+        u.sendto(r, a)
 threading.Thread(target=echo, daemon=True).start()
+threading.Thread(target=dns, daemon=True).start()
 serve(443, True)
 EOF
 ip netns exec "$NS" python3 "$WORK/srv.py" "$WORK" > "$WORK/srv.log" 2>&1 &
@@ -615,6 +632,7 @@ auto_impaired() { # class: the keys that went impaired with it
 }
 auto_start() {
     : > "$WORK/auto.jsonl"
+    : > "$WORK/auto.log"
     ip netns exec "$NC" "$GENEVA" run --ext --ext-auto observe -s '\/' -p 1 --firewall "${AUTO_FW:-auto}" \
         --events "$WORK/auto.jsonl" --log-file "$WORK/auto.log" --log-level debug --quiet \
         --control "unix:$WORK/auto.sock" &
@@ -652,6 +670,8 @@ auto_case() {
             ok "$key impaired: $cls after $n flow(s)"
         else
             bad "no $cls for $key after $n flows" "$WORK/auto.jsonl"
+            grep -E "detect|auto:" "$WORK/auto.log" | grep -v "rates of" | head -30 | sed 's/^/       /'
+            grep "rates of" "$WORK/auto.log" | head -8 | sed 's/^/       /'
         fi
         # no key of these flows got another class
         grep '"impaired":true' "$WORK/auto.jsonl" | grep -v "\"class\":\"$cls\"" > "$WORK/other"
@@ -680,6 +700,52 @@ auto_case 15 "" RETRANS ultrasurf.example 'https ultrasurf.example'
 auto_case 16 "--forbidden google" UDP_NOANSWER udp/443 udp4
 auto_case 17 "--block-ip 10.81.2.3 --port 80,443" BLACKHOLE_SYN 10.81.2.3 'https lab.example 10.81.2.3'
 auto_case 18 "" REDIRECT ultrasurf.example "http /secret.html -H 'Host: ultrasurf.example'"
+# the volume classes (X9b): the conntrack's counters through ctnetlink
+freeze() { # a download that stays open after the freeze
+    ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null --max-time 7 'http://10.81.2.2/big.bin?ultrasurf'
+}
+auto_case 12 "--freeze-bytes 20000" FREEZE_N 10.81.2.2 freeze
+throttle() { # once a fast download (the capacity), then a policed one
+    if [ -z "${THR_FAST:-}" ]; then
+        THR_FAST=1
+        ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null -w '%{speed_download}' --max-time 10 \
+            --limit-rate 1000k http://10.81.2.2/huge.bin > "$WORK/fast"
+    fi
+    ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null --max-time 12 'http://10.81.2.2/huge.bin?ultrasurf'
+}
+# The policer at an eighth of the speed of the fast download through the
+# lab censor, so that the plateau is under a quarter of C on any runner
+if on auto || on auto13; then
+    if start_censor 13; then
+        S=$(ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null -w '%{speed_download}' --max-time 10 \
+            --limit-rate 1000k http://10.81.2.2/huge.bin | cut -d. -f1)
+        kill "$CPID" 2>/dev/null
+        wait "$CPID" 2>/dev/null
+        CPID=
+        R=$((${S:-0} / 8))
+        echo "  (through the lab censor: $S B/s, the policer at $R B/s)"
+        if [ "$R" -ge 8000 ]; then
+            auto_case 13 "--rate $R --burst $((R / 2))" THROTTLE 10.81.2.2 throttle
+            echo "  (the fast download in it: $(cat "$WORK/fast" 2>/dev/null) B/s)"
+        else
+            bad "the lab censor lets only $S B/s through: too slow to tell a policer"
+        fi
+    fi
+fi
+# a query for a name: the forged answer comes first (another IP TTL)
+cat > "$WORK/dnsq.py" <<'EOF'
+import os, socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(1)
+name = b"".join(bytes([len(l)]) + l.encode() for l in sys.argv[2].split(".")) + b"\0"
+s.sendto(os.urandom(2) + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" + name + b"\x00\x01\x00\x01", (sys.argv[1], 53))
+try:
+    print(".".join(str(b) for b in s.recv(512)[-4:]))
+except socket.timeout:
+    print("timeout")
+EOF
+dnsq() { ip netns exec "$NC" python3 "$WORK/dnsq.py" 10.81.2.2 "$1"; }
+auto_case dns "" DNS_POISON udp/53 'dnsq ultrasurf.example'
 if on auto || on autonone; then
     echo "== --ext-auto observe without a censor: no class"
     if auto_start; then
@@ -687,6 +753,7 @@ if on auto || on autonone; then
             http /big.bin > /dev/null
             https lab.example > /dev/null
             ip netns exec "$NC" python3 "$WORK/udp.py" 10.81.2.2 "$DATA/quic_initial_vk_com.bin" $((40050 + i)) > /dev/null
+            dnsq lab.example > /dev/null
         done
         ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null --max-time 10 --limit-rate 100k http://10.81.2.2/big.bin
         sleep 0.5

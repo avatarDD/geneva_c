@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ctnl.h"
 #include "detect.h"
 #include "log.h"
 #include "nflog.h"
@@ -26,8 +27,9 @@ static struct {
     int first;
     xdet_config dc;
     nflog *nl;
+    ctnl *cn;      /* the conntrack's counters (NULL: no volume classes) */
     xdet *d;
-    uint64_t lost, bad;
+    uint64_t lost, bad, t_tick;
 } g;
 
 int xauto_on(void) { return g.on; }
@@ -139,13 +141,30 @@ static void on_key(void *ud, const xdet_key_ev *ev)
     }
 }
 
+static void on_link(void *ud, int degraded, unsigned bad, unsigned active)
+{
+    (void)ud;
+    if (degraded)
+        LOGW("auto", "%u of %u addresses failed lately: the own link is likely degraded", bad, active);
+    else
+        LOGI("auto", "the link looks fine again (%u of %u addresses failed lately)", bad, active);
+    if (ev_enabled()) {
+        ev_t e;
+        ev_begin(&e, "ext_link");
+        jw_kbool(&e.w, "degraded", degraded);
+        jw_kuint(&e.w, "bad", bad);
+        jw_kuint(&e.w, "active", active);
+        ev_emit(&e);
+    }
+}
+
 /* ---- the observer ------------------------------------------------------------ */
 
 static void ensure_detector(void)
 {
     if (!g.d) {
         ct_config ct;
-        xdet_sink s = {on_flow, on_key, NULL};
+        xdet_sink s = {on_flow, on_key, on_link, NULL};
         ct_config_default(&ct);
         g.d = xdet_new(&g.dc, &ct, &s);
     }
@@ -172,6 +191,15 @@ int xauto_open(sbuf *err)
     if (!g.nl)
         return -1;
     ensure_detector();
+    {
+        sbuf e;
+        sb_init(&e);
+        g.cn = ctnl_open(&e);
+        if (!g.cn)
+            LOGW("auto", "%s: no FREEZE_N and THROTTLE", e.len ? e.data : "ctnetlink");
+        sb_free(&e);
+    }
+    g.t_tick = 0;
     LOGI("auto", "observing the first %d packets of each flow (NFLOG group %u)", g.first, g.group);
     return 0;
 }
@@ -181,18 +209,25 @@ void xauto_close(void)
     if (g.nl)
         nflog_close(g.nl);
     g.nl = NULL;
+    ctnl_close(g.cn);
+    g.cn = NULL;
     xdet_free(g.d);
     g.d = NULL;
 }
 
 size_t xauto_pollfds(plat_pollfd *fds, size_t max)
 {
+    size_t n = 0;
     if (!g.nl || !max)
         return 0;
-    memset(fds, 0, sizeof(*fds));
-    fds->fd = nflog_fd(g.nl);
-    fds->events = POLLIN;
-    return 1;
+    memset(fds, 0, sizeof(*fds) * (max < 2 ? 1 : 2));
+    fds[n].fd = nflog_fd(g.nl);
+    fds[n++].events = POLLIN;
+    if (g.cn && max >= 2) {
+        fds[n].fd = ctnl_fd(g.cn);
+        fds[n++].events = POLLIN;
+    }
+    return n;
 }
 
 static void on_msg(const nflog_msg *m, void *ctx)
@@ -201,10 +236,75 @@ static void on_msg(const nflog_msg *m, void *ctx)
     xauto_feed(m->data, m->len, plat_now_ms());
 }
 
+static void on_ctr(const ctnl_entry *e, void *ctx)
+{
+    xdet_ctr c;
+    (void)ctx;
+    memset(&c, 0, sizeof(c));
+    c.t.ver = e->t.ver;
+    c.t.proto = e->t.proto;
+    memcpy(c.t.cli, e->t.src, 16);
+    memcpy(c.t.srv, e->t.dst, 16);
+    c.t.cport = e->t.sport;
+    c.t.sport = e->t.dport;
+    c.found = e->found;
+    c.open = e->found && (e->t.proto != 6 || e->tcp_state == CTNL_TCP_ESTABLISHED);
+    c.rbytes = e->rbytes;
+    xdet_counters(g.d, &c, plat_now_ms());
+}
+
+static void on_req(void *ud, const xdet_tuple *t)
+{
+    ctnl_tuple c;
+    int *full = ud;
+    if (*full || !g.cn)
+        return;
+    memset(&c, 0, sizeof(c));
+    c.ver = t->ver;
+    c.proto = t->proto;
+    memcpy(c.src, t->cli, 16);
+    memcpy(c.dst, t->srv, 16);
+    c.sport = t->cport;
+    c.dport = t->sport;
+    if (ctnl_request(g.cn, &c) < 0)
+        *full = 1; /* the rest next second */
+}
+
+void xauto_tick(uint64_t now)
+{
+    int full = 0;
+    /* the loop wakes at least once a second: a little short of 1000 ms
+     * keeps the windows near one second instead of two */
+    if (!g.d || (g.t_tick && now - g.t_tick < 950))
+        return;
+    g.t_tick = now;
+    xdet_tick(g.d, now, g.cn ? on_req : NULL, &full);
+}
+
+static void read_counters(void)
+{
+    for (int i = 0; g.cn && i < 64; i++) {
+        int r = ctnl_read(g.cn, on_ctr, NULL);
+        if (r <= 0) {
+            if (r < 0) {
+                LOGW("auto", "ctnetlink read failed: no FREEZE_N and THROTTLE from now on");
+                ctnl_close(g.cn);
+                g.cn = NULL;
+            }
+            break;
+        }
+    }
+}
+
 void xauto_ready(const plat_pollfd *fds, size_t n)
 {
     uint64_t lost = 0;
-    if (!g.nl || !n || !(fds->revents & (POLLIN | POLLERR)))
+    if (!g.nl || !n)
+        return;
+    if (n > 1 && fds[1].revents & (POLLIN | POLLERR))
+        read_counters();
+    xauto_tick(plat_now_ms());
+    if (!g.nl || !(fds->revents & (POLLIN | POLLERR)))
         return;
     /* a bounded batch: the queue and the control socket wait meanwhile */
     for (int i = 0; i < 64; i++) {
@@ -241,6 +341,10 @@ void xauto_status(jw *w)
     jw_kuint(w, "flows_ok", s.flows_ok);
     jw_kuint(w, "flows_failed", s.flows_failed);
     jw_kuint(w, "keys", s.keys);
+    jw_kbool(w, "counters", g.cn != NULL);
+    jw_kuint(w, "watched", s.watched);
+    jw_kuint(w, "capacity", (uint64_t)s.capacity);
+    jw_kbool(w, "link_degraded", s.link_degraded);
     jw_key(w, "impaired");
     if (g.d)
         xdet_keys_json(g.d, w, 1);
