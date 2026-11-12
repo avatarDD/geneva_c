@@ -324,6 +324,8 @@ struct vwatch {
     float rate[RATES];       /* the last windows' rates (a ring) */
     int nrate, data_windows; /* windows with data so far (the first is left out) */
     uint8_t freeze_done, throttle_done, done;
+    uint8_t self_closed;     /* self_count: a FIN or RST seen */
+    uint64_t self_rb;        /* self_count: the server's bytes seen */
 };
 
 static vwatch *vw_of(ct_flow *f) { return (vwatch *)f->xa; }
@@ -743,6 +745,15 @@ void xdet_packet(xdet *d, const gpkt *p, uint64_t now)
     if (!f)
         return;
     fs = fs_of(f);
+    if (d->c.self_count && f->xa) {
+        /* what the conntrack's counters would say: IP bytes from the
+         * server, and whether the flow still lives */
+        vwatch *w = vw_of(f);
+        if (reverse)
+            w->self_rb += p->ipver == 6 ? (uint64_t)p->plen + 40 : p->iplen;
+        if (p->l4 == LAYER_TCP && (p->tcpflags & 0x05))
+            w->self_closed = 1;
+    }
     if (fs->decided && !(f->proto == 17 && f->sport == 53 && fs->ok && !fs->redecided))
         return; /* (a DNS answer that came first may still prove poisoned) */
     if (!unicast(f)) {
@@ -760,6 +771,19 @@ void xdet_packet(xdet *d, const gpkt *p, uint64_t now)
         icmp_packet(d, f, p, now);
 }
 
+void xdet_packet_dir(xdet *d, const gpkt *p, uint64_t now, int out)
+{
+    /* an ICMP error the PC sends is about a flow of another's; one that
+     * comes in finds its flow by the packet inside */
+    if ((p->l4 == LAYER_NONE && out) ||
+        (p->l4 != LAYER_NONE && !ctrack_find(d->ct, p, NULL) &&
+         (!out || (p->l4 == LAYER_TCP && (p->tcpflags & 0x12) == 0x12)))) {
+        d->packets++;
+        return;
+    }
+    xdet_packet(d, p, now);
+}
+
 /* ---- volume -------------------------------------------------------------------- */
 
 static int cmp_float(const void *a, const void *b)
@@ -768,29 +792,78 @@ static int cmp_float(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-/* THROTTLE: a flat plateau far under C over the last throttle_windows
- * windows (a burst or a stall earlier in the flow ages out) */
-static void check_throttle(xdet *d, ct_flow *f, vwatch *w, uint64_t now)
+/* the median, coefficient of variation and maximum of a flow's last n
+ * rate windows; 0 when it has fewer */
+static int rates_of(const vwatch *w, int n, double *med, double *cv, double *max)
 {
     float v[RATES];
-    double med, mean = 0, var = 0;
-    int n = d->c.throttle_windows < RATES ? d->c.throttle_windows : RATES;
-    if (w->throttle_done || n < 1 || w->nrate < n || w->rbytes < d->c.throttle_min_bytes || d->cap <= 0)
-        return;
+    double mean = 0, var = 0;
+    if (n < 1 || n > RATES || w->nrate < n)
+        return 0;
     for (int i = 0; i < n; i++)
         v[i] = w->rate[(w->nrate - 1 - i) % RATES];
     qsort(v, (size_t)n, sizeof(v[0]), cmp_float);
-    med = n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2;
+    *med = n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2;
     for (int i = 0; i < n; i++)
         mean += v[i];
     mean /= n;
     for (int i = 0; i < n; i++)
         var += (v[i] - mean) * (v[i] - mean);
     var /= n;
-    LOGD("detect", "rates of a flow: %d windows, median %.0f B/s, cv %.2f, max %.0f, C %.0f", n, med,
-         mean > 0 ? sqrt(var) / mean : 0, (double)v[n - 1], d->cap);
-    if (med <= 0 || med >= d->c.throttle_rho * d->cap || sqrt(var) / mean >= d->c.throttle_cv || v[n - 1] > 2 * med)
+    *cv = mean > 0 ? sqrt(var) / mean : 0;
+    *max = v[n - 1];
+    return 1;
+}
+
+static int is_plateau(const xdet *d, double med, double cv, double max)
+{
+    return med > 0 && med < d->c.throttle_rho * d->cap && cv < d->c.throttle_cv && max <= 2 * med;
+}
+
+static int same_net(const ct_flow *a, const ct_flow *b)
+{
+    if (a->ver != b->ver)
+        return 0;
+    return a->ver == 6 ? !memcmp(a->srv, b->srv, 6) : !memcmp(a->srv, b->srv, 3);
+}
+
+/* a flow to another network, live now, on a plateau like med: the own
+ * link (or the PC) is the bottleneck, not a censor of this flow's keys */
+static const ct_flow *parallel_plateau(const xdet *d, const ct_flow *f, double med, uint64_t now)
+{
+    int n = d->c.throttle_windows < RATES ? d->c.throttle_windows : RATES;
+    for (size_t i = 0; i < d->nwatch; i++) {
+        const ct_flow *o = d->watch[i];
+        const vwatch *w = vw_of((ct_flow *)o);
+        double m, cv, mx;
+        /* a flow that began a little later has fewer windows: two do */
+        if (o == f || same_net(o, f) || w->done || now - w->t_change > 2000 || w->nrate < 2 ||
+            w->rbytes < d->c.throttle_min_bytes / 4 || !rates_of(w, w->nrate < n ? w->nrate : n, &m, &cv, &mx))
+            continue;
+        if (is_plateau(d, m, cv, mx) && m >= med / 2 && m <= med * 2)
+            return o;
+    }
+    return NULL;
+}
+
+/* THROTTLE: a flat plateau far under C over the last throttle_windows
+ * windows (a burst or a stall earlier in the flow ages out) */
+static void check_throttle(xdet *d, ct_flow *f, vwatch *w, uint64_t now)
+{
+    double med, cv, mx;
+    const ct_flow *o;
+    int n = d->c.throttle_windows < RATES ? d->c.throttle_windows : RATES;
+    if (w->throttle_done || w->rbytes < d->c.throttle_min_bytes || d->cap <= 0 || !rates_of(w, n, &med, &cv, &mx))
         return;
+    LOGD("detect", "rates of a flow: %d windows, median %.0f B/s, cv %.2f, max %.0f, C %.0f", n, med, cv, mx,
+         d->cap);
+    if (!is_plateau(d, med, cv, mx))
+        return;
+    if ((o = parallel_plateau(d, f, med, now)) != NULL) {
+        LOGD("detect", "the flow from port %u plateaus like the one from port %u to another network: the link",
+             f->cport, o->cport);
+        return;
+    }
     w->throttle_done = 1;
     {
         char why[128];
@@ -807,19 +880,10 @@ static void check_throttle(xdet *d, ct_flow *f, vwatch *w, uint64_t now)
     }
 }
 
-void xdet_counters(xdet *d, const xdet_ctr *c, uint64_t now)
+static void counters_of(xdet *d, ct_flow *f, const xdet_ctr *c, uint64_t now)
 {
-    ct_flow *f = NULL;
-    vwatch *w;
-    for (size_t i = 0; i < d->nwatch; i++) {
-        ct_flow *x = d->watch[i];
-        if (x->ver == c->t.ver && x->proto == c->t.proto && x->cport == c->t.cport && x->sport == c->t.sport &&
-            !memcmp(x->cli, c->t.cli, x->ver == 6 ? 16 : 4) && !memcmp(x->srv, c->t.srv, x->ver == 6 ? 16 : 4)) {
-            f = x;
-            break;
-        }
-    }
-    if (!f || !(w = vw_of(f)) || w->done)
+    vwatch *w = vw_of(f);
+    if (!w || w->done)
         return;
     if (c->found && c->rbytes != w->rbytes) {
         uint64_t dt = now > w->t_sample ? now - w->t_sample : 1;
@@ -862,6 +926,20 @@ void xdet_counters(xdet *d, const xdet_ctr *c, uint64_t now)
     }
 }
 
+void xdet_counters(xdet *d, const xdet_ctr *c, uint64_t now)
+{
+    if (d->c.self_count)
+        return;
+    for (size_t i = 0; i < d->nwatch; i++) {
+        ct_flow *x = d->watch[i];
+        if (x->ver == c->t.ver && x->proto == c->t.proto && x->cport == c->t.cport && x->sport == c->t.sport &&
+            !memcmp(x->cli, c->t.cli, x->ver == 6 ? 16 : 4) && !memcmp(x->srv, c->t.srv, x->ver == 6 ? 16 : 4)) {
+            counters_of(d, x, c, now);
+            return;
+        }
+    }
+}
+
 /* LINK_DEGRADED over the address keys */
 static void check_link(xdet *d, uint64_t now)
 {
@@ -891,7 +969,14 @@ void xdet_tick(xdet *d, uint64_t now, void (*req)(void *ud, const xdet_tuple *t)
             watch_drop(d, f); /* the last one moved here */
             continue;
         }
-        if (req) {
+        if (d->c.self_count) {
+            xdet_ctr c;
+            memset(&c, 0, sizeof(c));
+            c.found = 1;
+            c.open = !w->self_closed;
+            c.rbytes = w->self_rb;
+            counters_of(d, f, &c, now);
+        } else if (req) {
             xdet_tuple t;
             memset(&t, 0, sizeof(t));
             t.ver = f->ver;

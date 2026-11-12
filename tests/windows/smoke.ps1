@@ -264,6 +264,35 @@ if (!$A -or !$B) {
     Check ((Fetch) -match '^[23]') "HTTP works after the filter tests"
 }
 
+# ---- X9c: --ext-auto observe through a WinDivert sniff handle ----
+# The engine leaves port 80 alone (empty strategy); the observer sees every
+# flow of the PC. Two connections to an address that never answers
+# (TEST-NET-1) make its key impaired with BLACKHOLE_SYN.
+$EventsA = Join-Path $Work "auto.jsonl"
+$LogA = Join-Path $Work "auto.log"
+$p = Start-Engine @("--ext", "--ext-auto", "observe", "-s", "\/", "-p", "80", "-c", $Ctl) $EventsA $LogA
+try {
+    Check (Wait-Event "ready" 20) "--ext-auto: engine is ready"
+    Check ((Fetch) -match '^[23]') "--ext-auto: HTTP works"
+    & curl.exe -s -o NUL --max-time 10 https://example.com/ | Out-Null
+    for ($i = 0; $i -lt 2; $i++) { & curl.exe -s -o NUL --max-time 7 http://192.0.2.1:8443/ | Out-Null }
+    Start-Sleep -Seconds 2
+    $x = Ctl @("ext_status")
+    Check ($x.auto -eq "observe" -and $x.source -eq "windivert" -and $x.observing) "--ext-auto: observing through windivert"
+    Check ($x.packets -gt 10 -and $x.flows_ok -ge 2) "--ext-auto: packets $($x.packets), flows ok $($x.flows_ok)"
+    Check ($x.counters) "--ext-auto: the detector counts the bytes"
+    $imp = Events | Where-Object { $_.ev -eq "ext_impaired" -and $_.key -eq "192.0.2.1" }
+    Check ($imp -and $imp.class -in @("BLACKHOLE_SYN", "ICMP_PROHIBIT")) "--ext-auto: 192.0.2.1 impaired ($($imp.class))"
+    $bad = Events | Where-Object { $_.ev -eq "ext_impaired" -and $_.impaired -and $_.key -notlike "192.0.2.*" -and $_.key -ne "tcp/8443" }
+    Check (!$bad) "--ext-auto: nothing else impaired ($(($bad | ForEach-Object { $_.key }) -join ', '))"
+    $r = Ctl @("stop")
+    Check ($p.WaitForExit(15000) -and $p.ExitCode -eq 0) "--ext-auto: engine exits with 0"
+} finally {
+    if (!$p.HasExited) { $p.Kill(); $p.WaitForExit() }
+    if ($script:Failed) { Write-Host "---- --ext-auto engine log"; if (Test-Path $LogA) { Get-Content $LogA | Select-Object -Last 80 } }
+}
+$script:Events = $null
+
 # The evaluator: probes from its own port block, strategies through the
 # embedded engine (geneva eval prints "fitness<TAB>strategy").
 Check ((Eval @("--no-engine")) -eq 0) "eval: http baseline succeeds"

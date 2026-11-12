@@ -48,13 +48,14 @@
 /* --ext-auto (run; src/ext/auto.h) */
 #define EXT_AUTO_OPTS                                                                                         \
     {"ext-auto", 0, 1, "observe",                                                                             \
-     EXT_HELP("Linux: watch the first packets of every flow (any port, NFLOG) and the conntrack's "        \
-              "counters (ctnetlink, once a second: freezes, throttling), tell of blocked keys "             \
-              "(port, /24 or /48, address, host): events ext_flow, ext_impaired, ext_class, ext_link, "      \
-              "ctl ext_status; traffic is not changed")},                                                   \
-    {"ext-nflog-group", 0, 1, "N", EXT_HELP("the NFLOG group of --ext-auto (the queue number)")},              \
+     EXT_HELP("watch the PC's own flows on any port and tell of blocked keys (port, /24 or /48, "           \
+              "address, host): Linux sees the first packets (NFLOG) and the conntrack's counters "          \
+              "(ctnetlink, once a second: freezes, throttling); Windows every packet (a WinDivert "         \
+              "sniff handle, the bytes counted itself); events ext_flow, ext_impaired, ext_class, "         \
+              "ext_link, ctl ext_status; traffic is not changed")},                                         \
+    {"ext-nflog-group", 0, 1, "N", EXT_HELP("Linux: the NFLOG group of --ext-auto (the queue number)")},       \
     {"ext-observe-first", 0, 1, "N",                                                                          \
-     EXT_HELP("--ext-auto: packets of each direction observed per flow (16)")}
+     EXT_HELP("Linux: --ext-auto's packets of each direction observed per flow (16)")}
 
 /* The firewall's (run and fw): zapret2's rules and winws2's --wf-* filter,
  * with --ext (src/ext/fwx.c) */
