@@ -238,6 +238,12 @@
   `treat.search`/`treat.ga` в `ext_status`, `ga` в `ext_keys`.
   `--ext-treat-arms N,..` ограничивает портфель. e2e `censors_x.sh
   treat treatga`.
+- X12a: `geneva resolve --ext` (перенос `mdig` zapret2: имена со stdin
+  в адреса, потоки, `--family 4|6|46`, повторы `EAI_AGAIN`, журналы,
+  `--dns-make-query`/`--dns-parse-query`) и `geneva ip2net --ext` (перенос
+  `ip2net`: адреса в подсети, `--prefix-length`, `--v4-threshold`,
+  `--v6-threshold`). `tests/e2e/tools.sh` сверяет их с бинарниками
+  релиза zapret2.
 
 ## v1.2.0
 

@@ -47,6 +47,7 @@ void suite_detect(void);
 void suite_surgical(void);
 void suite_tuner(void);
 void suite_treat(void);
+void suite_tools(void);
 
 int main(void)
 {
@@ -81,6 +82,7 @@ int main(void)
     suite_surgical();
     suite_tuner();
     suite_treat();
+    suite_tools();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }

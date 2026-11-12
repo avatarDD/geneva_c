@@ -48,6 +48,8 @@ geneva run --ext -s '...'
 | X11a | автотюнер: руки профиля `--ext-arm`, селектор `rr` (семантика `circular` zapret2), `--ext-state` | ниже |
 | X11b | селектор `ts` (Thompson sampling), согласие `propose`, команды `ext_approve`, `ext_reject`, `ext_proposals` | ниже |
 | X11c | лечение `--ext-auto propose\|apply`: портфель рук по классу блокировки, Thompson sampling по соединениям ключа, CUSUM, `UNTREATABLE` с перепроверкой | ниже |
+| X11d | лечение `FREEZE_N` и `THROTTLE` (строгий успех), генетический поиск `--ext-ga` для ключей без рабочей руки, `--ext-treat-arms` | ниже |
+| X12a | `geneva resolve` (mdig zapret2) и `geneva ip2net` (ip2net zapret2) | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
 
@@ -1827,11 +1829,60 @@ failed: the genetic search waits its turn», «the genetic search runs»),
 1,3,4: все проваливаются, ключ в `search`, `--ext-ga=4:1` находит руку,
 после выхода ни evolve, ни правил).
 
+## Списки адресов: `geneva resolve`, `geneva ip2net` (X12a)
+
+```
+geneva resolve --ext --family 46 --threads 20 < domains.txt > ips.txt
+geneva ip2net --ext -4 < ips.txt > nets4.txt
+```
+
+Перенос `mdig` и `ip2net` zapret2: тот же ввод, тот же вывод, те же
+умолчания. Скрипты загрузки списков (antifilter, antizapret и т.п.)
+остаются в zapret-gui (решение 11.6).
+
+**`geneva resolve --ext`** читает имена со stdin, по одному в строке, и
+печатает их адреса системным резолвером (`getaddrinfo`), по строке на
+адрес. Адрес или подсеть нужного семейства из списка выводится как есть
+(`/32` и `/128` отбрасываются), неверное имя пропускается.
+
+| Опция | Что | По умолчанию |
+|---|---|---|
+| `--family 4\|6\|46` | адреса IPv4, IPv6 или оба | `4` |
+| `--threads N` | потоков, 1–100 (порядок строк тогда произвольный) | 1 |
+| `--eagain N`, `--eagain-delay MS` | повторы при `EAI_AGAIN` и пауза | 10, 500 |
+| `--verbose` | ход работы в stderr | — |
+| `--stats N` | счётчики в stderr каждые N имён и в конце | — |
+| `--log-resolved FILE`, `--log-failed FILE` | имена, которые разрешились и нет | — |
+| `--dns-make-query NAME` | вывести DNS-запрос A (с `--family 6` — AAAA) в двоичном виде | — |
+| `--dns-parse-query` | прочитать двоичный DNS-ответ со stdin и вывести его адреса A и AAAA | — |
+
+**`geneva ip2net --ext`** читает адреса со stdin и сворачивает их в
+подсети: для каждого адреса берётся самая маленькая подсеть в диапазоне
+длин префикса, где адресов достаточно. Подсети (`A/N`) и диапазоны
+(`A-B`) из ввода выводятся как есть и первыми.
+
+| Опция | Что | По умолчанию |
+|---|---|---|
+| `-4`, `-6` | список IPv4 или IPv6 | `-4` |
+| `--prefix-length MIN[-MAX]` | длины префикса | 22–30 (IPv4), 56–64 (IPv6) |
+| `--v4-threshold MUL/DIV` | IPv4: подсеть, если в ней не меньше MUL/DIV её адресов | 3/4 |
+| `--v6-threshold N` | IPv6: подсеть, если в ней не меньше N адресов | 5 |
+
+Отличия от zapret2: опции в форме geneva (`--family 4` и `--family=4`;
+однодефисные `-family=4` не принимаются) и коды выхода geneva (2 — опции,
+6 — ввод-вывод, 1 — ответ DNS не разобран). Нужен `--ext`.
+
+Проверки: юнит-тесты (`tests/test_tools.c`: ожидаемые строки получены
+самими `ip2net` и `mdig` zapret2); `tests/e2e/tools.sh` (без root, с
+`NFQWS2_DIR`) сравнивает вывод с бинарниками официального релиза zapret2
+на 100 случайных списках каждого семейства с разными опциями, на списке
+имён и адресов (`--family 4`, `6`, `46`, журналы) и на DNS-запросах.
+
 ## Код zapret2
 
 Распознавание L7, маркеры, сборка, conntrack и x-действия
 (`src/ext/l7.c`, `markers.c`, `xl7.c`, `ctrack.c`, `xact.c`, `xact_tcp.c`,
-`xact_http.c`, `xact_misc.c`, `xact_comb.c`, `xact_seq.c` (функция `oob`), `profile.c`, `hostlist.c`, `ipset.c`, `lists.c`, `autolist.c`, `ipcache.c`, список системных вызовов seccomp в `svc.c`, `tls.c` — `tls_mod`, `genhost`, `tls_clone.c`) перенесены из zapret2
+`xact_http.c`, `xact_misc.c`, `xact_comb.c`, `xact_seq.c` (функция `oob`), `profile.c`, `hostlist.c`, `ipset.c`, `lists.c`, `autolist.c`, `ipcache.c`, список системных вызовов seccomp в `svc.c`, `tls.c` — `tls_mod`, `genhost`, `tls_clone.c`, `tools.c` — `mdig` и `ip2net`) перенесены из zapret2
 (https://github.com/bol-van/zapret2) и распространяются на условиях его
 лицензии:
 

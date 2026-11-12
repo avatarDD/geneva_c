@@ -49,6 +49,9 @@ Extensions (with --ext):
   has --dry-run, --daemon, --pidfile, --user/--uid, seccomp and syslog.
   geneva selftest --ext --fuzz N runs every reader of packets, captures,
   strategies, lists and profiles over N random inputs (selftest --help).
+  geneva resolve --ext < NAMES resolves a list with threads (zapret2's mdig),
+  geneva ip2net --ext < ADDRESSES groups addresses into subnets (zapret2's
+  ip2net); see their --help.
   See docs/EXT.md.
 [exit 0]
 ### help-ext-censor

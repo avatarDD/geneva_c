@@ -14,6 +14,7 @@
 #  include "ext/cfgfile.h"
 #  include "ext/ext.h"
 #  include "ext/selftest.h"
+#  include "ext/tools.h"
 #endif
 #include "geneva.h"
 #include "json.h"
@@ -80,6 +81,9 @@ static void usage(FILE *f)
                "  has --dry-run, --daemon, --pidfile, --user/--uid, seccomp and syslog.\n"
                "  geneva selftest --ext --fuzz N runs every reader of packets, captures,\n"
                "  strategies, lists and profiles over N random inputs (selftest --help).\n"
+               "  geneva resolve --ext < NAMES resolves a list with threads (zapret2's mdig),\n"
+               "  geneva ip2net --ext < ADDRESSES groups addresses into subnets (zapret2's\n"
+               "  ip2net); see their --help.\n"
                "  See docs/EXT.md.\n");
 #endif
 }
@@ -179,6 +183,10 @@ int main(int argc, char **argv)
     /* not in the command list: that one is Geneva's (golden snapshots) */
     if (strcmp(cmd, "selftest") == 0)
         return xcmd_selftest(argc - 2, argv + 2);
+    if (strcmp(cmd, "resolve") == 0)
+        return xcmd_resolve(argc - 2, argv + 2);
+    if (strcmp(cmd, "ip2net") == 0)
+        return xcmd_ip2net(argc - 2, argv + 2);
 #endif
     for (size_t i = 0; i < ARRAY_LEN(commands); i++)
         if (strcmp(cmd, commands[i].name) == 0) {
