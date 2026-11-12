@@ -23,6 +23,7 @@
 #include "profile.h"
 #include "rawsend.h"
 #include "seqtrack.h"
+#include "tuner.h"
 #include "xact.h"
 #include "xl7.h"
 #include "xtrig.h"
@@ -164,6 +165,26 @@ int ext_activate(const args_t *a, const char *cmd)
         }
         sb_free(&err);
     }
+    {
+        int tune = 0;
+        const char *st = arg_str(a, "ext-state", NULL);
+        sbuf err;
+        for (size_t i = 0; i < g_prof.n; i++)
+            tune |= g_prof.v[i]->tune != NULL;
+        if (st && !tune) {
+            fprintf(stderr, "geneva %s: --ext-state is for the tuner (--ext-arm)\n", cmd);
+            ext_deactivate();
+            return -1;
+        }
+        sb_init(&err);
+        if (tune && xtune_start(st, &err) < 0) {
+            fprintf(stderr, "geneva %s: %s\n", cmd, err.data);
+            sb_free(&err);
+            ext_deactivate();
+            return -1;
+        }
+        sb_free(&err);
+    }
     g_active = 1;
     return 0;
 }
@@ -192,7 +213,10 @@ void ext_profile_list(sbuf *out)
         const xprofile *p = g_prof.v[i];
         sb_puts(out, i ? "; " : "");
         xprof_label(p, out);
-        sb_puts(out, p->cmd ? ": the command's strategy" : p->st ? ": its strategy" : ": no strategy");
+        if (p->tune)
+            sb_printf(out, ": %zu arms", xtune_arms(p->tune));
+        else
+            sb_puts(out, p->cmd ? ": the command's strategy" : p->st ? ": its strategy" : ": no strategy");
     }
 }
 
@@ -208,6 +232,7 @@ void ext_deactivate(void)
     xipc_reset();
     xah_debug_log(NULL);
     xauto_reset();
+    xtune_stop();
     g_active = 0;
 }
 
@@ -416,11 +441,39 @@ static void flow_autolist(int tcp, const gpkt *p, ct_flow *f, int reverse, int l
         xah_udp(P, &k);
 }
 
-/* The strategy of profile i: profile 0 of the command line runs the
- * command's (cmd), the others their own; NULL: none (the packet passes) */
-static strategy *prof_st(int i, strategy *cmd)
+/* The tuner's step (circular) on a packet of flow f in profile i */
+static void flow_tune(int i, const gpkt *p, ct_flow *f, int reverse, int l7p, uint64_t now,
+                      void (*send)(void *, const uint8_t *, size_t), void *ud)
+{
+    xtune_pkt k;
+    if (i < 0 || !f || !g_prof.v[i]->tune || g_server_side || (p->l4 != LAYER_TCP && p->l4 != LAYER_UDP))
+        return;
+    memset(&k, 0, sizeof(k));
+    k.p = p;
+    k.f = f;
+    k.reverse = reverse;
+    k.http_reply = l7p == L7P_HTTP_REPLY;
+    k.now_ms = now;
+    k.send = send;
+    k.ud = ud;
+    xtune_packet(g_prof.v[i]->tune, &k);
+}
+
+/* The arm of profile p's tuner that flow f gets (0-based; arm 1 without a
+ * flow), -1: none (a key is required and the flow has none) */
+static int prof_arm(const xprofile *p, const ct_flow *f) { return f ? xtune_current(p->tune, f) : 0; }
+
+/* The strategy of profile i for flow f (NULL: a packet without one):
+ * profile 0 of the command line runs the command's (cmd), a profile with a
+ * tuner the arm of the flow's key, the others their own; NULL: none (the
+ * packet passes) */
+static strategy *prof_st(int i, strategy *cmd, const ct_flow *f)
 {
     const xprofile *p = i >= 0 ? g_prof.v[i] : NULL;
+    if (p && p->tune) {
+        int a = prof_arm(p, f);
+        return a < 0 ? NULL : xtune_arm(p->tune, (size_t)a);
+    }
     return !p ? NULL : p->cmd ? cmd : p->st;
 }
 
@@ -440,12 +493,19 @@ typedef struct {
     unsigned ifn_next;
     int closed; /* the capture is closed: held packets cannot get a verdict */
     strategy **pst; /* --ext-workers: the worker's copies of the profiles' strategies */
+    strategy ***arms; /* ... and of their arms */
 } xworker;
 
-/* prof_st with the worker's copy of a profile's own strategy */
-static strategy *wprof_st(const xworker *x, int i, strategy *cmd)
+/* prof_st with the worker's copies */
+static strategy *wprof_st(const xworker *x, int i, strategy *cmd, const ct_flow *f)
 {
-    strategy *st = prof_st(i, cmd);
+    const xprofile *p = i >= 0 ? g_prof.v[i] : NULL;
+    strategy *st;
+    if (p && p->tune && x->arms) {
+        int a = prof_arm(p, f);
+        return a < 0 ? NULL : x->arms[i][a];
+    }
+    st = prof_st(i, cmd, f);
     return x->pst && st && st != cmd ? x->pst[i] : st;
 }
 
@@ -499,12 +559,22 @@ static int xw_open(eng_worker *w, sbuf *err)
             xipc_threads();
         }
         x->pst = xcalloc(g_prof.n ? g_prof.n : 1, sizeof(*x->pst));
-        for (size_t i = 0; i < g_prof.n; i++)
-            if (!g_prof.v[i]->cmd && g_prof.v[i]->st && !(x->pst[i] = strategy_clone(g_prof.v[i]->st))) {
-                sb_printf(err, "cannot copy the strategy of profile %zu for worker %u", i + 1, w->id);
+        x->arms = xcalloc(g_prof.n ? g_prof.n : 1, sizeof(*x->arms));
+        for (size_t i = 0; i < g_prof.n; i++) {
+            const xprofile *p = g_prof.v[i];
+            int bad = !p->cmd && p->st && !(x->pst[i] = strategy_clone(p->st));
+            if (p->tune) {
+                size_t n = xtune_arms(p->tune);
+                x->arms[i] = xcalloc(n, sizeof(**x->arms));
+                for (size_t k = 0; k < n && !bad; k++)
+                    bad = !(x->arms[i][k] = strategy_clone(xtune_arm(p->tune, k)));
+            }
+            if (bad) {
+                sb_printf(err, "cannot copy the strategies of profile %zu for worker %u", i + 1, w->id);
                 xw_close(w); /* the engine closes only the opened ones */
                 return -1;
             }
+        }
     }
     /* one observer for the process, opened before the rules go up */
     return w->id == 0 ? xauto_open(err) : 0;
@@ -530,12 +600,19 @@ static void xw_close(eng_worker *w)
         xauto_close();
         xpol_free(); /* the threads have ended */
         g_healthy = 0;
+        xtune_save(); /* --ext-state at the end of the run */
     }
     ctrack_free(x->ct);
     xl7_free(x->l7);
     for (size_t i = 0; x->pst && i < g_prof.n; i++)
         strategy_free(x->pst[i]);
     free(x->pst);
+    for (size_t i = 0; x->arms && i < g_prof.n; i++) {
+        for (size_t k = 0; x->arms[i] && k < xtune_arms(g_prof.v[i]->tune); k++)
+            strategy_free(x->arms[i][k]);
+        free(x->arms[i]);
+    }
+    free(x->arms);
     free(x);
     w->x = NULL;
     if (g_threaded && w->id == 0) { /* the threads have ended: no hook runs any more */
@@ -600,7 +677,7 @@ static void xw_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, c
     meta(u->w->x, u->w, pctx, &c);
     c.l7 = v;
     if (g_prof.n)
-        st = wprof_st(u->w->x, pick(NULL, c.f, dir, c.reverse, v->l7, v->host, c.mark, plat_now_ms()), u->st);
+        st = wprof_st(u->w->x, pick(NULL, c.f, dir, c.reverse, v->l7, v->host, c.mark, plat_now_ms()), u->st, c.f);
     c.st = st;
     engine_replay(u->w, st, raw, len, dir, pctx, &c);
 }
@@ -613,7 +690,7 @@ static int maybe_st(const gpkt *p, const ct_flow *f, strat_dir dir, uint32_t mar
     char hb[XL7_HOST_MAX];
     match_of(&m, p, f, dir, L7_UNKNOWN, NULL, mark, hb, sizeof(hb));
     for (size_t i = 0; i < g_prof.n; i++)
-        if (xprof_match(g_prof.v[i], &m, 1) && prof_st((int)i, cmd))
+        if (xprof_match(g_prof.v[i], &m, 1) && prof_st((int)i, cmd, NULL))
             return 1;
     return 0;
 }
@@ -699,6 +776,9 @@ static void flow_healthy(eng_worker *w, const xpkt_ctx *c, const strategy *st, c
             return;
         if (f->xprof >= 0 && g_prof.v[f->xprof]->ahl)
             return;
+        /* the tuner still waits for the flow's outcome */
+        if (f->xprof >= 0 && g_prof.v[f->xprof]->tune && !f->xt_nocheck)
+            return;
     }
     if (st && !(dir_done(st, DIR_OUT, f) && dir_done(st, DIR_IN, f)))
         return;
@@ -756,7 +836,7 @@ static int xw_packet_in(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, c
         if (!g_threaded) /* else the main loop does (xw_ready) */
             xlists_reload(now, 0);
         i = pick(p, c->f, dir, c->reverse, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, c->mark, now);
-        st = wprof_st(x, i, cmd);
+        st = wprof_st(x, i, cmd, c->f);
     }
     c->st = st;
     if ((has = found(c->f, i, st)))
@@ -788,7 +868,14 @@ static int xw_packet_in(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, c
     if (has && x->view.l7p == L7P_DNS_RESPONSE && p->l4 == LAYER_UDP)
         xipc_dns_response(p->payload, p->payload_len, now);
     if (g_prof.n) {
-        strategy *st2 = wprof_st(x, pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, c->mark, now), cmd);
+        int i2 = pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, c->mark, now);
+        strategy *st2;
+        if (has) {
+            ru.w = w;
+            ru.pctx = pctx;
+            flow_tune(i2, p, c->f, c->reverse, x->view.l7p, now, xw_rst, &ru);
+        }
+        st2 = wprof_st(x, i2, cmd, c->f);
         if (has)
             flow_autolist(0, p, c->f, c->reverse, x->view.l7p, now, NULL, NULL);
         if (st2 != st) {
@@ -966,12 +1053,14 @@ static int xw_control(engine *e, const char *cmd, const json_val *req, jw *w, sb
         if (w) {
             keys(w);
             xauto_keys(w);
+            xtune_keys(w, 1000);
         }
         return 1;
     }
     if (!strcmp(cmd, "ext_status")) {
         if (w) {
             xauto_status(w);
+            xtune_status(w);
             xpol_json(w);
             jw_kbool(w, "surgical", g_healthy);
         }
@@ -995,6 +1084,7 @@ static size_t xw_pollfds(engine *e, plat_pollfd *fds, size_t max)
 static void xw_ready(engine *e, const plat_pollfd *fds, size_t n)
 {
     xpol_publish(); /* what waited for a slot, and the replaced snapshots freed */
+    xtune_tick(plat_now_ms());
     if (g_threaded && g_prof.n) {
         /* the lists' files, at most once a second (xlists_reload): the
          * hooks wait meanwhile */
@@ -1065,7 +1155,7 @@ static void xo_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, c
     (void)pctx;
     c.l7 = v;
     if (g_prof.n)
-        c.st = prof_st(pick(NULL, c.f, dir, c.reverse, v->l7, v->host, 0, u->now), u->cmd);
+        c.st = prof_st(pick(NULL, c.f, dir, c.reverse, v->l7, v->host, 0, u->now), u->cmd, c.f);
     u->fn(u->ud, raw, len, dir, v->piece, v->pieces, &c);
 }
 
@@ -1137,7 +1227,7 @@ static void *xoff_packet2(xoffline *x, strategy **stp, gpkt *p, strat_dir dir, u
     int bypass, hold, i = -1, has;
     if (g_prof.n) {
         i = pick(p, c->f, dir, c->reverse, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, 0, now);
-        st = prof_st(i, cmd);
+        st = prof_st(i, cmd, c->f);
     }
     c->st = st;
     if ((has = found(c->f, i, st)))
@@ -1161,7 +1251,11 @@ static void *xoff_packet2(xoffline *x, strategy **stp, gpkt *p, strat_dir dir, u
     if (has && x->view.l7p == L7P_DNS_RESPONSE && p->l4 == LAYER_UDP)
         xipc_dns_response(p->payload, p->payload_len, now);
     if (g_prof.n) {
-        strategy *st2 = prof_st(pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, 0, now), cmd);
+        int i2 = pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, 0, now);
+        strategy *st2;
+        if (has)
+            flow_tune(i2, p, c->f, c->reverse, x->view.l7p, now, NULL, NULL); /* no RST offline */
+        st2 = prof_st(i2, cmd, c->f);
         if (has)
             flow_autolist(0, p, c->f, c->reverse, x->view.l7p, now, NULL, NULL);
         if (st2 != st) {

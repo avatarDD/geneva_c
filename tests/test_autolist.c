@@ -579,6 +579,59 @@ out:
     CHECK_INT((int)xlists_count(), 0);
 }
 
+/* The tuner offline (apply): circular's step runs on the packets as live */
+TEST(ah_tune_offline)
+{
+    const char *v[] = {"--ext", "--filter-tcp", "80", "--ext-arm", "\\/", "--ext-arm", "[TCP:flags:PA]-drop-| \\/",
+                       "--ext-tune", "rr:fails=1", NULL};
+    uint8_t b[200];
+    xoffline *x = NULL;
+    strategy *st;
+    sbuf e;
+    CHECK_INT(activate(v), 0);
+    sb_init(&e);
+    x = xoff_new();
+    if (!x)
+        goto out;
+    /* flow 1 on arm 1; the server's RST at its first byte: a failure */
+    st = open_req(x, NULL, 40011, 1000);
+    CHECK(st != NULL);
+    if (st)
+        strategy_print(st, &e);
+    CHECK_STR(e.data, "\\/");
+    go(x, NULL, b, mk(b, 40011, 1, 0x14, 5001, 1031, ""), DIR_IN, 1010);
+    /* flow 2: a.com is at arm 2 */
+    sb_reset(&e);
+    st = open_req(x, NULL, 40012, 2000);
+    CHECK(st != NULL);
+    if (st)
+        strategy_print(st, &e);
+    CHECK_STR(e.data, "[TCP:flags:PA]-drop-| \\/");
+out:
+    sb_free(&e);
+    xoff_free(x);
+    ext_reset();
+}
+
+/* A template's arms go with --import; the profile's own -s does not mix */
+TEST(ah_tune_template)
+{
+    const char *v[] = {"--ext", "-s", "\\/", "--new", "--template=t", "--ext-arm", "\\/", "--ext-arm",
+                       "[TCP:flags:PA]-drop-| \\/", "--ext-tune", "rr:fails=1", "--new", "--import", "t",
+                       "--filter-tcp", "80", "--ext-tune", "rr:fails=2", NULL};
+    const char *bad[] = {"--ext", "-s", "\\/", "--new", "--template=t", "--ext-arm", "\\/", "--new", "--import", "t",
+                         "--filter-tcp", "80", "-s", "\\/", NULL};
+    sbuf e;
+    sb_init(&e);
+    CHECK_INT(activate(v), 0);
+    ext_profile_list(&e);
+    CHECK(strstr(e.data, "2: ") && strstr(e.data, ": 2 arms"));
+    ext_reset();
+    CHECK(activate(bad) < 0);
+    ext_reset();
+    sb_free(&e);
+}
+
 TEST(ah_success)
 {
     const char *f = tmp("ok.txt"), *dbg = tmp("ok.log");
@@ -799,6 +852,8 @@ void suite_autolist(void)
     RUN(ah_counters);
     RUN(ah_rst);
     RUN(ah_flows);
+    RUN(ah_tune_offline);
+    RUN(ah_tune_template);
     RUN(ah_success);
     RUN(ah_udp);
     RUN(ah_ipcache_pick);

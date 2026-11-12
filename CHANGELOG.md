@@ -201,6 +201,14 @@
   Политика ключей — снапшоты с QSBR, без блокировок у воркеров. `healthy`
   в `stats`, `policy` и `surgical` в `ext_status`. e2e
   `tests/e2e/surgical.sh`.
+- X11a: автотюнер, селектор `rr` — точная семантика `circular` zapret2:
+  руки профиля `--ext-arm STRATEGY` (повторяется), `--ext-tune
+  rr[:fails=3][:time=60][:final=N][:key=NAME][:nld=N][:reqhost]...` с
+  детекторами `standard_success_detector`/`standard_failure_detector` и
+  ключом `standard_hostkey`; ключи общие для воркеров, `--ext-state FILE`
+  хранит их между перезапусками. Событие `ext_arm`, `tuner` в
+  `ext_status` и `ext_keys`. e2e `tests/e2e/censors_x.sh tune` (цензоры 14
+  и 18, сверка с `circular` nfqws2).
 
 ## v1.2.0
 

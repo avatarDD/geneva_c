@@ -19,9 +19,11 @@
 # --ext against nfqws2's posdebug on the same packets (stage X3).
 # The section "diff" (also with NFQWS2_DIR) checks x-actions against
 # nfqws2 packet by packet.
+# The section "tune" (or tune14, tune18) runs the tuner (--ext-arm) against 14 and 18,
+# and with NFQWS2_DIR zapret2's circular against 14 for comparison.
 # The section "xact" (or x14 ... x20 for one censor) runs geneva --ext with x-action strategies (the
 # nfqws2 references as x-actions, and combinators) against 14, 15, 18-20.
-#   tests/e2e/censors_x.sh [path/to/geneva] [censor ... | xact | nfqws2 | diff | posdebug]
+#   tests/e2e/censors_x.sh [path/to/geneva] [censor ... | xact | tune | nfqws2 | diff | posdebug]
 set -u
 GENEVA=$(readlink -f "${1:-build/geneva}")
 [ $# -gt 0 ] && shift
@@ -766,6 +768,109 @@ if on auto || on autonone; then
             bad "ext_status" "$WORK/status"
         fi
         auto_stop
+    fi
+fi
+
+# The tuner (stage X11a): geneva run with two arms, the first one doing
+# nothing. The censor's answer to the first request (14: an RST, 18: a 302
+# to another site) moves the key to arm 2 (fails=1), whose strategy gets
+# the next request through; with --ext-state a restart starts there.
+# inseq=1024: the lab's HTTPS reply is some 2 KB and the server ends it with
+# an RST, which circular's default inseq=4096 would take for a failure.
+tune_start() { # port arms-and-tune-options...
+    port=$1
+    shift
+    : > "$WORK/tune.jsonl"
+    : > "$WORK/tune.log"
+    ip netns exec "$NC" "$GENEVA" run --ext -p "$port" --firewall "${TUNE_FW:-auto}" "$@" \
+        --events "$WORK/tune.jsonl" --log-file "$WORK/tune.log" --log-level "${TUNE_LOG:-info}" --quiet \
+        --control "unix:$WORK/tune.sock" &
+    NPID=$!
+    for _ in $(seq 50); do
+        grep -q '"ev":"ready"' "$WORK/tune.jsonl" 2>/dev/null && return 0
+        sleep 0.1
+    done
+    bad "geneva run with the tuner did not start" "$WORK/tune.log"
+    return 1
+}
+tune_stop() {
+    kill "$NPID" 2>/dev/null
+    wait "$NPID" 2>/dev/null
+    NPID=
+    ip netns exec "$NC" sh -c 'iptables-save 2>/dev/null; nft list ruleset 2>/dev/null' | grep -qi geneva &&
+        bad "rules left behind"
+}
+# tune_case NAME "censor options" port "request" "expected" arm2
+tune_case() {
+    name=$1 copts=$2 port=$3 req=$4 want_ok=$5 arm2=$6
+    on tune || on "tune$name" || return
+    echo "== the tuner against censor $name"
+    start_censor $name $copts || return
+    rm -f "$WORK/tune.state"
+    if tune_start "$port" --ext-arm '\/' --ext-arm "$arm2" --ext-tune rr:fails=1:inseq=1024 --ext-state "$WORK/tune.state"; then
+        r=$(eval "$req")
+        [ "$r" != "$want_ok" ] && ok "arm 1: blocked ($r)" || bad "arm 1 got through"
+        sleep 0.3
+        grep '"ev":"ext_arm"' "$WORK/tune.jsonl" | grep -q '"key":"p1/ultrasurf.example","arm":2' &&
+            ok "ext_arm: ultrasurf.example to arm 2" || bad "no ext_arm to arm 2" "$WORK/tune.log"
+        r=$(eval "$req")
+        [ "$r" = "$want_ok" ] && ok "arm 2: gets through" || bad "arm 2 blocked ($r)" "$WORK/tune.log"
+        ip netns exec "$NC" python3 "$WORK/status.py" "$WORK/tune.sock" > "$WORK/status" 2>&1
+        grep -q '"tuner":{' "$WORK/status" && ok "ext_status: tuner" || bad "ext_status without the tuner" "$WORK/status"
+        tune_stop
+        grep -q '"key":"p1/ultrasurf.example","arm":2' "$WORK/tune.state" 2>/dev/null &&
+            ok "--ext-state kept arm 2" || bad "--ext-state" "$WORK/tune.state"
+        # the restart with two workers: each has its own copies of the arms
+        if tune_start "$port" --ext-arm '\/' --ext-arm "$arm2" --ext-tune rr:fails=1:inseq=1024 --ext-state "$WORK/tune.state" \
+            --ext-workers 2; then
+            r=$(eval "$req")
+            [ "$r" = "$want_ok" ] && ok "after a restart (2 workers): arm 2 at once" || bad "after a restart (2 workers): blocked ($r)" "$WORK/tune.log"
+            tune_stop
+        fi
+    fi
+    kill "$CPID" 2>/dev/null
+    wait "$CPID" 2>/dev/null
+    CPID=
+}
+tune_case 14 "" 443 'https ultrasurf.example' 0 '[TCP:flags:PA]-xsplit{pos=1}-| \/'
+tune_case 18 "" 80 "http /secret.html -H 'Host: ultrasurf.example'" "200 27" '[TCP:flags:PA]-xsplit{pos=method+2}-| \/'
+# The same scenario with zapret2's circular (NFQWS2_DIR): the reference of
+# the tuner's rr. nfqws2 sees the client's packets and the server's first
+# ones (circular's detectors need them); the first request is blocked, the
+# second one gets through on strategy 2.
+if [ -n "${NFQWS2_DIR:-}" ] && { on tune || on tune14; }; then
+    echo "== zapret2's circular against censor 14"
+    if start_censor 14; then
+        ip netns exec "$NC" sh -c 'iptables -t mangle -N ZT 2>/dev/null
+            iptables -t mangle -A ZT -m mark --mark 0x40000000/0x40000000 -j RETURN
+            iptables -t mangle -A ZT -j NFQUEUE --queue-num 300 --queue-bypass
+            iptables -t mangle -I OUTPUT -p tcp --dport 443 -j ZT
+            iptables -t mangle -I INPUT -p tcp --sport 443 -j ZT'
+        ip netns exec "$NC" "$NFQWS2_DIR/binaries/linux-x86_64/nfqws2" --qnum=300 \
+            --lua-init=@"$NFQWS2_DIR/lua/zapret-lib.lua" --lua-init=@"$NFQWS2_DIR/lua/zapret-antidpi.lua" \
+            --lua-init=@"$NFQWS2_DIR/lua/zapret-auto.lua" --filter-tcp=443 \
+            --in-range=-s2500 --lua-desync=circular:fails=1:inseq=1024 --in-range=x \
+            --lua-desync=pass:strategy=1 --payload=tls_client_hello --lua-desync=multisplit:pos=1:strategy=2 \
+            > "$WORK/nfq.log" 2>&1 &
+        NPID=$!
+        sleep 1.5
+        if kill -0 $NPID 2>/dev/null; then
+            r=$(https ultrasurf.example)
+            [ "$r" != 0 ] && ok "strategy 1: blocked ($r)" || bad "strategy 1 got through"
+            sleep 0.3
+            r=$(https ultrasurf.example)
+            [ "$r" = 0 ] && ok "strategy 2: gets through, as with the tuner" || bad "strategy 2 blocked ($r)" "$WORK/nfq.log"
+            kill $NPID 2>/dev/null
+            wait $NPID 2>/dev/null
+        else
+            bad "nfqws2 did not start" "$WORK/nfq.log"
+        fi
+        NPID=
+        ip netns exec "$NC" sh -c 'iptables -t mangle -D OUTPUT -p tcp --dport 443 -j ZT
+            iptables -t mangle -D INPUT -p tcp --sport 443 -j ZT; iptables -t mangle -F ZT; iptables -t mangle -X ZT'
+        kill "$CPID" 2>/dev/null
+        wait "$CPID" 2>/dev/null
+        CPID=
     fi
 fi
 

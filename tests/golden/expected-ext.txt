@@ -188,6 +188,8 @@ Extensions (with --ext):
       --ext-ipcache-lifetime SEC how long the IP cache keeps an address's host name and TTL (7200; 0: for ever)
       --ext-ipcache-hostname[=0|1]
                                  cache host names by address (from DNS answers and flows) for the next flows' profile search
+      --ext-arm STRATEGY         an arm of the tuner (arm 1, 2, ... in order; repeatable): the profile's flows get the arm their key is at instead of -s
+      --ext-tune rr[:ARG..]      how the profile's keys move between arms: rr is zapret2's circular (fails=3, time=60, final=N, key=NAME, nld=N, reqhost, maxseq, inseq, retrans, udp_out, udp_in, no_rst, no_http_redirect, reset; default rr)
       --ext-profile FILE         profiles from FILE ([profile NAME] sections; after those of the command line); repeatable
       --ext-first N|SPEC         --first per protocol and direction: [tcp-|udp-]out=N,[tcp-|udp-]in=N,... (zapret2's: tcp-out=20,tcp-in=10,udp-out=5,udp-in=3; 0: every packet)
       --ext-wan IF,..            like --iface, up to 8 interfaces (Windows: indexes)
@@ -227,6 +229,7 @@ Extensions (with --ext):
       --ext-seccomp[=0|1]        Linux: once running, forbid exec, kill, ptrace and file system changes (1; the root helper removes the rules on exit)
       --log-target syslog        also log to syslog (/dev/log)
       --ext-workers N|auto       Linux: N worker threads, each with its own NFQUEUE (--queue .. --queue+N-1, the rules balance the flows by address); auto: the CPUs, at most 4 (default 1)
+      --ext-state FILE           keep the tuner's keys and their arms in FILE across restarts
       --ext-auto observe         watch the PC's own flows on any port and tell of blocked keys (port, /24 or /48, address, host): Linux sees the first packets (NFLOG) and the conntrack's counters (ctnetlink, once a second: freezes, throttling); Windows every packet (a WinDivert sniff handle, the bytes counted itself); events ext_flow, ext_impaired, ext_class, ext_link, ctl ext_status; traffic is not changed
       --ext-nflog-group N        Linux: the NFLOG group of --ext-auto (the queue number)
       --ext-observe-first N      Linux: --ext-auto's packets of each direction observed per flow (16)

@@ -25,6 +25,7 @@
  *   --ipset FILE, --ipset-ip CIDR,...                  (the server's address)
  *   --ipset-exclude FILE, --ipset-exclude-ip CIDR,...
  *   --hostlist-auto FILE, --hostlist-auto-fail-threshold N, ...  (autolist.h)
+ *   --ext-arm STRATEGY (repeatable), --ext-tune rr:...            (tuner.h)
  *
  * As in zapret2, a profile with any of the tcp, udp, icmp or ipp filters
  * takes none of the protocols it names no filter for; one with none of them
@@ -101,6 +102,8 @@ typedef struct {
     struct xahfail *fails;
     size_t nfails;
     uint64_t fails_purged;
+    /* --ext-arm, --ext-tune: the tuner's arms replace the strategy (tuner.h) */
+    struct xtune *tune;
 } xprofile;
 
 typedef struct {

@@ -11,6 +11,7 @@
 
 #include "autolist.h"
 #include "l7.h"
+#include "tuner.h"
 #include "util.h"
 
 /* ---- filters (nfq2/filter.c) ----------------------------------------------- */
@@ -210,6 +211,7 @@ static void prof_free(xprofile *p)
     free(p->text);
     free(p->src);
     strategy_free(p->st);
+    xtune_free(p->tune);
     xlistref_free(&p->hl);
     xlistref_free(&p->hl_ex);
     xlistref_free(&p->ips);
@@ -293,7 +295,8 @@ static int prof_import(xprofile *to, const xprofile *from, sbuf *err)
     xlistref_copy(&to->hl_ex, &from->hl_ex);
     xlistref_copy(&to->ips, &from->ips);
     xlistref_copy(&to->ips_ex, &from->ips_ex);
-    if (from->text && !to->text && !to->cmd) {
+    xtune_import(&to->tune, from->tune);
+    if (from->text && !to->text && !to->cmd && !to->tune) {
         to->text = xstrdup(from->text);
         to->src = xstrdup(from->src);
         to->tpl_text = 1;
@@ -484,6 +487,15 @@ int xprof_opt(xprofile *p, const char *name, const char *value, const xprofiles 
         }
         free(p->name);
         p->name = xstrdup(value);
+    } else if (!strcmp(name, "ext-arm")) {
+        if (!*value) {
+            sb_puts(err, "--ext-arm needs a strategy");
+            return -1;
+        }
+        xtune_add_arm(&p->tune, value);
+    } else if (!strcmp(name, "ext-tune")) {
+        if (xtune_set(&p->tune, value, err) < 0)
+            return -1;
     } else if (!strcmp(name, "import")) {
         const xprofile *t = find_name(templates, value);
         if (!t) {
@@ -527,7 +539,7 @@ static int prof_strategy(xprofile *p, int file, const char *value, sbuf *err)
 static int has_filters(const xprofile *p)
 {
     return p->b_l3 || p->b_l7 || p->ntcp || p->nudp || p->nicf || p->nipp || p->mark_mask || p->name || p->text ||
-           p->hl.n || p->hl_ex.n || p->ips.n || p->ips_ex.n;
+           p->tune || p->hl.n || p->hl_ex.n || p->ips.n || p->ips_ex.n;
 }
 
 /* what is being built: the profiles, the templates, the one in hand */
@@ -608,7 +620,7 @@ static const char *const prof_opts[] = {"new",       "skip",       "name",      
                                          "filter-l3", "filter-tcp", "filter-udp",  "filter-icmp", "filter-ipp",
                                          "filter-l7", "filter-mark", "ext-profile", "hostlist",  "hostlist-domains",
                                          "hostlist-exclude", "hostlist-exclude-domains", "ipset", "ipset-ip",
-                                         "ipset-exclude", "ipset-exclude-ip"};
+                                         "ipset-exclude", "ipset-exclude-ip", "ext-arm", "ext-tune"};
 
 int xprof_wanted(const args_t *a)
 {
@@ -878,7 +890,20 @@ static int build_end(builder *b, int rc)
         xprofile *p = out->v[i];
         p->n = (int)i + 1;
         defaults(p);
-        if (p->text && !p->cmd) {
+        if (p->tune && (p->cmd || (p->text && !p->tpl_text))) {
+            sb_printf(err, "profile %d: --ext-arm replaces the strategy (no -s or -f in it)", p->n);
+            rc = -1;
+            break;
+        }
+        if (p->tune && xtune_finish(p->tune, p->n, err) < 0) {
+            char *m = xstrdup(err->data);
+            sb_reset(err);
+            sb_printf(err, "profile %d: %s", p->n, m);
+            free(m);
+            rc = -1;
+            break;
+        }
+        if (p->text && !p->cmd && !p->tune) {
             sbuf e2;
             sb_init(&e2);
             p->st = strategy_parse(p->text, &e2);
