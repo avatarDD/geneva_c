@@ -72,9 +72,10 @@ done
 [ $fail = 0 ] && ok "the same subnets"
 
 echo "== resolve: the list's addresses, names, logs"
-# localhost only: the release's static libc and the runner's resolve other
-# names (localhost. with its dot) differently
-printf 'localhost\n1.2.3.4\n1.2.3.4/24\n1.2.3.4/32\n1.2.3.4/40\n::1\n::1/64\nbad..name!\n\n' > "$W/names"
+# no names: they go to the libc's resolver, and the release's static libc
+# (musl) and the runner's glibc answer them differently (localhost, with or
+# without the dot); names are checked below on geneva's own
+printf 'example.invalid\n1.2.3.4\n1.2.3.4/24\n1.2.3.4/32\n1.2.3.4/40\n::1\n::1/64\nbad..name!\n\n' > "$W/names"
 for fam in 4 6 46; do
     "$ZB/mdig" --family=$fam --threads=3 --log-failed="$W/zf" --log-resolved="$W/zr" < "$W/names" | sort > "$W/z"
     "$G" resolve --ext --family=$fam --threads=3 --log-failed="$W/gf" --log-resolved="$W/gr" < "$W/names" | sort > "$W/g"
@@ -86,6 +87,11 @@ for fam in 4 6 46; do
         diff "$W/z" "$W/g" | head -5
     fi
 done
+if printf 'localhost\n' | "$G" resolve --ext --family=4 | grep -qx 127.0.0.1; then
+    ok "localhost resolves (the system resolver)"
+else
+    bad "localhost does not resolve"
+fi
 for d in example.com a.b. a.b.. x..y; do
     for fam in 4 6; do
         z=$("$ZB/mdig" --dns-make-query="$d" --family=$fam < /dev/null 2> /dev/null | tail -c +3 | od -An -tx1 | tr -d ' \n')
