@@ -69,7 +69,7 @@ typedef struct {
     int flows_ok, flows_bad, last_cls;
     int links, link_deg;
     unsigned link_bad, link_active;
-    char last_host[64];
+    char last_host[64], last_why[128];
     int nkey;
     struct {
         char key[64];
@@ -84,6 +84,7 @@ static void on_flow(void *ud, const xdet_flow_ev *ev)
         r->flows_ok++;
     else
         r->flows_bad++, r->last_cls = ev->cls;
+    snprintf(r->last_why, sizeof(r->last_why), "%s", ev->why ? ev->why : "");
     snprintf(r->last_host, sizeof(r->last_host), "%s", ev->host ? ev->host : "");
 }
 
@@ -121,7 +122,7 @@ static int key_state(const rec *r, const char *key, int *cls)
     return -1;
 }
 
-static xdet *det(rec *r)
+static xdet *det_self(rec *r, int self_count)
 {
     xdet_config c;
     ct_config ct;
@@ -131,9 +132,12 @@ static xdet *det(rec *r)
     xipc_reset();
     xipc_config(XIPC_LIFETIME, 1); /* --ext-ipcache-hostname 1 */
     xdet_config_default(&c);
+    c.self_count = self_count;
     ct_config_default(&ct);
     return xdet_new(&c, &ct, &s);
 }
+
+static xdet *det(rec *r) { return det_self(r, 0); }
 
 static uint64_t g_now = 1000000;
 
@@ -652,6 +656,102 @@ TEST(detect_throttle)
     sb_free(&s);
 }
 
+/* two downloads to other networks at once, both on a plateau: the link,
+ * no THROTTLE; then one alone: THROTTLE */
+TEST(detect_throttle_parallel)
+{
+    rec r;
+    xdet *d = det(&r);
+    fl f = {43000, 443, 40, 0, 0}, a = {43100, 443, 41, 0, 0}, b = {43200, 443, 42, 0, 0};
+    uint64_t t, ba = 6000, bb = 6000;
+    rate_flow(d, &f, 3, 1000000, 1); /* C */
+    ok_flow(d, &a);
+    ok_flow(d, &b);
+    t = g_now;
+    for (int i = 0; i <= 8; i++, ba += 20000, bb += 22000) {
+        ctr(d, &a, ba, 1, t + 1000u * (unsigned)i);
+        ctr(d, &b, bb, 1, t + 1000u * (unsigned)i + 5);
+    }
+    CHECK_INT(r.flows_bad, 0);
+    /* a parallel flow to the same network is no excuse */
+    g_now = t + 9000;
+    a.cport += 10, b.cport += 10, b.srv = 41;
+    ok_flow(d, &a);
+    ok_flow(d, &b);
+    t = g_now, ba = bb = 6000;
+    for (int i = 0; i <= 8; i++, ba += 20000, bb += 22000) {
+        ctr(d, &a, ba, 1, t + 1000u * (unsigned)i);
+        ctr(d, &b, bb, 1, t + 1000u * (unsigned)i + 5);
+    }
+    CHECK_INT(r.flows_bad, 2);
+    CHECK_INT(r.last_cls, XC_THROTTLE);
+    /* nor is a fast one to another network */
+    g_now = t + 9000;
+    a.cport += 10, b.cport += 10, b.srv = 43;
+    ok_flow(d, &a);
+    ok_flow(d, &b);
+    t = g_now, ba = bb = 6000;
+    for (int i = 0; i <= 8; i++, ba += 20000, bb += 900000) {
+        ctr(d, &a, ba, 1, t + 1000u * (unsigned)i);
+        ctr(d, &b, bb, 1, t + 1000u * (unsigned)i + 5);
+    }
+    CHECK_INT(r.flows_bad, 3);
+    xdet_free(d);
+}
+
+/* the observer sees every packet (WinDivert SNIFF): the detector counts */
+static void srv_data(xdet *d, const fl *f, uint32_t off, int n)
+{
+    uint8_t b[2048], data[1400];
+    memset(data, 'z', sizeof(data));
+    for (int i = 0; i < n; i++, off += 1400)
+        feed(d, b, mk(b, f, 1, A, SISN + 1 + off, CISN + 1 + sizeof(HTTP_REQ) - 1, data, sizeof(data)));
+}
+
+TEST(detect_self_count)
+{
+    rec r;
+    xdet *d = det_self(&r, 1);
+    fl f = {44000, 443, 50, 0, 0};
+    xdet_stats st;
+    uint8_t b[256];
+    /* no requests, and the conntrack's counters are not wanted */
+    ok_flow(d, &f); /* 5 packets of 1440 bytes */
+    g_nreq = 0;
+    xdet_tick(d, g_now, on_req, NULL);
+    CHECK_INT(g_nreq, 0);
+    xdet_get_stats(d, &st);
+    CHECK_INT((int)st.watched, 1);
+    ctr(d, &f, 1, 1, g_now); /* ignored */
+    srv_data(d, &f, 7000, 4);
+    {
+        /* a copy cut short (WinDivert's range): the IP length counts */
+        uint8_t big[2048], data[1400];
+        memset(data, 'z', sizeof(data));
+        feed(d, big, mk(big, &f, 1, A, SISN + 1 + 12600, CISN + 1 + sizeof(HTTP_REQ) - 1, data, sizeof(data)) - 900);
+    } /* 14400 bytes: in [8 KB, 64 KB] */
+    xdet_tick(d, g_now + 1000, NULL, NULL);
+    xdet_tick(d, g_now + 3000, NULL, NULL);
+    CHECK_INT(r.flows_bad, 0);
+    xdet_tick(d, g_now + 4100, NULL, NULL);
+    CHECK_INT(r.flows_bad, 1);
+    CHECK_INT(r.last_cls, XC_FREEZE);
+    CHECK(strstr(r.last_why, "14400") != NULL);
+    /* a flow the server closes is no freeze */
+    g_now += 5000;
+    f.cport++;
+    ok_flow(d, &f);
+    srv_data(d, &f, 7000, 5);
+    xdet_tick(d, g_now, NULL, NULL);
+    feed(d, b, mk(b, &f, 1, F | A, SISN + 1 + 14000, CISN + 1 + sizeof(HTTP_REQ) - 1, NULL, 0));
+    xdet_tick(d, g_now + 4000, NULL, NULL);
+    xdet_tick(d, g_now + 5000, NULL, NULL);
+    CHECK_INT(r.flows_bad, 1);
+    xdet_get_stats(d, &st);
+    CHECK_INT((int)st.watched, 1); /* the first one, frozen, still open */
+    xdet_free(d);
+}
+
 /* a DNS answer for blocked.example: a, its address; 0 for a stub */
 static size_t dns_ans(uint8_t *m, uint16_t id, const uint8_t a[4])
 {
@@ -1072,6 +1172,14 @@ TEST(detect_options)
         CHECK_INT(c.obs_group, 5);
         CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", "--ext-observe-first", "3"), -1);
     }
+    if (FW_WINDOWS) {
+        /* the SNIFF handle: no rules */
+        CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", NULL, NULL), 0);
+        CHECK_INT(c.obs, 0);
+        CHECK_INT(xauto_on(), 1);
+        CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", "--ext-nflog-group", "5"), -1);
+        CHECK_STR(e.data, "--ext-nflog-group: Windows observes through WinDivert");
+    }
     CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", NULL, NULL), -1);
     CHECK_STR(e.data, "--ext-auto apply is not there yet: observe");
     CHECK_INT(auto_parse(&c, &e, "--ext-auto", "watch", NULL, NULL), -1);
@@ -1091,8 +1199,6 @@ TEST(detect_auto_feed)
     fl f = {40500, 443, 11, 0, 0};
     sb_init(&e);
     sb_init(&s);
-    if (FW_WINDOWS)
-        return;
     CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", NULL, NULL), 0);
     for (int i = 0; i < 2; i++) {
         xauto_feed(b, mk(b, &f, 0, S, CISN, 0, NULL, 0), 1000);
@@ -1104,14 +1210,81 @@ TEST(detect_auto_feed)
     jw_obj(&w);
     xauto_status(&w);
     jw_obj_end(&w);
-    CHECK(strstr(s.data, "\"auto\":\"observe\",\"nflog_group\":310,\"observing\":false,\"packets\":4,\"lost\":0,"
-                         "\"flows\":2,\"flows_ok\":0,\"flows_failed\":2,\"keys\":3,\"counters\":false,\"watched\":0,"
-                         "\"capacity\":0,\"link_degraded\":false,\"impaired\":[{\"key\":\"tcp/443\"") !=
+    CHECK(strstr(s.data, FW_WINDOWS ? "\"auto\":\"observe\",\"source\":\"windivert\",\"observing\":false,"
+                                      : "\"auto\":\"observe\",\"source\":\"nflog\",\"nflog_group\":310,\"observing\":false,") !=
+          NULL);
+    CHECK(strstr(s.data, FW_WINDOWS ? "\"counters\":true," : "\"counters\":false,") != NULL);
+    CHECK(strstr(s.data, "\"observing\":false,\"packets\":4,\"lost\":0,\"flows\":2,\"flows_ok\":0,\"flows_failed\":2,"
+                         "\"keys\":3,") != NULL);
+    CHECK(strstr(s.data, "\"watched\":0,\"capacity\":0,\"link_degraded\":false,\"impaired\":[{\"key\":\"tcp/443\"") !=
           NULL);
     CHECK(strstr(s.data, "\"class\":\"BLACKHOLE_SYN\"") != NULL);
     xauto_reset();
     sb_free(&e);
     sb_free(&s);
+}
+
+/* every packet, with its direction (WinDivert): only the PC's own flows */
+TEST(detect_packet_dir)
+{
+    rec r;
+    xdet *d = det_self(&r, 1);
+    fl f = {45000, 8080, 60, 0, 0}, u = {45100, 5000, 61, 0, 1};
+    uint8_t b[256];
+    gpkt *p;
+    xdet_stats st;
+#  define DIR(out, n)                       \
+    do {                                    \
+        p = pkt_parse(b, n);                \
+        CHECK(p != NULL);                   \
+        if (p) {                            \
+            xdet_packet_dir(d, p, g_now, out); \
+            pkt_free(p);                    \
+        }                                   \
+        g_now += 10;                        \
+    } while (0)
+    /* a peer connects to a server of the PC: its SYN comes in, the
+     * SYN,ACK goes out; and a datagram comes in: no flows */
+    for (int i = 0; i < 3; i++) {
+        DIR(0, mk(b, &f, 0, S, CISN, 0, NULL, 0));
+        DIR(1, mk(b, &f, 1, S | A, SISN, CISN + 1, NULL, 0));
+        DIR(0, mk(b, &u, 0, 0, 0, 0, "q", 1));
+    }
+    xdet_get_stats(d, &st);
+    CHECK_INT((int)st.flows, 0);
+    CHECK_INT((int)st.packets, 9);
+    /* the PC's own flow: its SYN goes out, the answer comes in */
+    f.cport++;
+    DIR(1, mk(b, &f, 0, S, CISN, 0, NULL, 0));
+    DIR(0, mk(b, &f, 1, S | A, SISN, CISN + 1, NULL, 0));
+    DIR(1, mk(b, &u, 0, 0, 0, 0, "q", 1));
+    DIR(0, mk(b, &u, 1, 0, 0, 0, "a", 1));
+    DIR(0, mk(b, &u, 1, 0, 0, 0, "a", 1));
+    xdet_get_stats(d, &st);
+    CHECK_INT((int)st.flows, 2);
+    CHECK_INT((int)st.watched, 1);
+    CHECK_INT(r.flows_ok, 1);
+    {
+        /* ICMP prohibited about the PC's own flow: out, nothing; in, its
+         * failure */
+        uint8_t ic[128];
+        size_t n = mk(b, &f, 0, A, CISN + 1, SISN + 1, NULL, 0);
+        memset(ic, 0, 28);
+        ic[0] = 0x45, ic[8] = 64, ic[9] = 1;
+        put16(ic + 2, (unsigned)(28 + n));
+        ic[12] = 10, ic[13] = 9, ic[14] = 60, ic[15] = 1; /* a router */
+        ic[16] = 10, ic[19] = 1;
+        ic[20] = 3, ic[21] = 13;
+        memcpy(ic + 28, b, n);
+        memcpy(b, ic, 28 + n);
+        DIR(1, 28 + n);
+        CHECK_INT(r.flows_bad, 0);
+        DIR(0, 28 + n);
+        CHECK_INT(r.flows_bad, 1);
+        CHECK_INT(r.last_cls, XC_ICMP_PROHIBIT);
+    }
+#  undef DIR
+    xdet_free(d);
 }
 
 void suite_detect(void)
@@ -1124,6 +1297,9 @@ void suite_detect(void)
     RUN(detect_cache_multicast);
     RUN(detect_freeze);
     RUN(detect_throttle);
+    RUN(detect_throttle_parallel);
+    RUN(detect_self_count);
+    RUN(detect_packet_dir);
     RUN(detect_dns);
     RUN(detect_link);
     RUN(ctnl_messages);

@@ -12,6 +12,7 @@
 #include "log.h"
 #include "nflog.h"
 #include "pkt.h"
+#include "wdsniff.h"
 
 #ifdef _WIN32
 #  include <ws2tcpip.h>
@@ -27,6 +28,8 @@ static struct {
     int first;
     xdet_config dc;
     nflog *nl;
+    wdsniff *sn;   /* Windows: the SNIFF handle instead of NFLOG */
+    int priority;  /* of the engine's WinDivert handle */
     ctnl *cn;      /* the conntrack's counters (NULL: no volume classes) */
     xdet *d;
     uint64_t lost, bad, t_tick;
@@ -62,12 +65,12 @@ int xauto_parse(const args_t *a, fw_config *c, sbuf *err)
         sb_printf(err, "bad --ext-auto %s (observe)", s);
         return -1;
     }
-    if (FW_WINDOWS) {
-        sb_puts(err, "--ext-auto is Linux only for now");
-        return -1;
-    }
     if (c->forward || c->server_side) {
         sb_puts(err, "--ext-auto watches the client side: not with --server-side");
+        return -1;
+    }
+    if (FW_WINDOWS && arg_has(a, "ext-nflog-group")) {
+        sb_puts(err, "--ext-nflog-group: Windows observes through WinDivert");
         return -1;
     }
     if (arg_int(a, "ext-nflog-group", c->queue, 0, 65535, &v) < 0)
@@ -78,6 +81,13 @@ int xauto_parse(const args_t *a, fw_config *c, sbuf *err)
     g.first = (int)v;
     xdet_config_default(&g.dc);
     g.on = 1;
+    if (FW_WINDOWS) {
+        /* the SNIFF handle sees every packet: no rules, the detector
+         * counts the bytes itself */
+        g.dc.self_count = 1;
+        g.priority = c->priority;
+        return 0;
+    }
     c->obs = 1;
     c->obs_group = g.group;
     c->obs_first = g.first;
@@ -170,7 +180,8 @@ static void ensure_detector(void)
     }
 }
 
-void xauto_feed(const uint8_t *pkt, size_t len, uint64_t now_ms)
+/* out: 1 outbound, 0 inbound, -1 as NFLOG gives them (either) */
+static void feed(const uint8_t *pkt, size_t len, uint64_t now_ms, int out)
 {
     gpkt *p;
     ensure_detector();
@@ -179,14 +190,33 @@ void xauto_feed(const uint8_t *pkt, size_t len, uint64_t now_ms)
         g.bad++;
         return;
     }
-    xdet_packet(g.d, p, now_ms);
+    if (out < 0)
+        xdet_packet(g.d, p, now_ms);
+    else
+        xdet_packet_dir(g.d, p, now_ms, out);
     pkt_free(p);
 }
 
+void xauto_feed(const uint8_t *pkt, size_t len, uint64_t now_ms) { feed(pkt, len, now_ms, -1); }
+
+void xauto_feed_dir(const uint8_t *pkt, size_t len, uint64_t now_ms, int out) { feed(pkt, len, now_ms, out); }
+
 int xauto_open(sbuf *err)
 {
-    if (!g.on || g.nl)
+    if (!g.on || g.nl || g.sn)
         return 0;
+    if (FW_WINDOWS) {
+        int priv;
+        /* above the engine's handle: the packets as they come, before the
+         * strategy; its own sends pass under it */
+        g.sn = wdsniff_open(g.priority + 1, NFLOG_RANGE, err, &priv);
+        if (!g.sn)
+            return -1;
+        ensure_detector();
+        g.t_tick = 0;
+        LOGI("auto", "observing every packet through a WinDivert sniff handle");
+        return 0;
+    }
     g.nl = nflog_open(g.group, NFLOG_RANGE, 1 << 20, err);
     if (!g.nl)
         return -1;
@@ -206,6 +236,8 @@ int xauto_open(sbuf *err)
 
 void xauto_close(void)
 {
+    wdsniff_close(g.sn);
+    g.sn = NULL;
     if (g.nl)
         nflog_close(g.nl);
     g.nl = NULL;
@@ -218,6 +250,12 @@ void xauto_close(void)
 size_t xauto_pollfds(plat_pollfd *fds, size_t max)
 {
     size_t n = 0;
+    if (g.sn && max) {
+        memset(fds, 0, sizeof(*fds));
+        fds->fd = wdsniff_fd(g.sn);
+        fds->events = POLLIN;
+        return 1;
+    }
     if (!g.nl || !max)
         return 0;
     memset(fds, 0, sizeof(*fds) * (max < 2 ? 1 : 2));
@@ -296,9 +334,36 @@ static void read_counters(void)
     }
 }
 
+static void on_sniff(const uint8_t *data, size_t len, int out, void *ctx)
+{
+    (void)ctx;
+    xauto_feed_dir(data, len, plat_now_ms(), out);
+}
+
+static void lost_copies(uint64_t lost)
+{
+    if (!lost)
+        return;
+    if (!g.lost)
+        LOGW("auto", "observed packets were dropped (a slow reader): detection sees less");
+    g.lost += lost;
+}
+
 void xauto_ready(const plat_pollfd *fds, size_t n)
 {
     uint64_t lost = 0;
+    if (g.sn && n) {
+        /* a bounded batch, as below: the engine's receiver waits for the
+         * lock meanwhile; what is left wakes the loop again */
+        if (fds->revents & (POLLIN | POLLERR) && wdsniff_read(g.sn, 256, on_sniff, NULL, &lost) < 0) {
+            LOGW("auto", "the WinDivert sniff handle failed: the observation stops");
+            wdsniff_close(g.sn);
+            g.sn = NULL;
+        }
+        lost_copies(lost);
+        xauto_tick(plat_now_ms());
+        return;
+    }
     if (!g.nl || !n)
         return;
     if (n > 1 && fds[1].revents & (POLLIN | POLLERR))
@@ -317,11 +382,7 @@ void xauto_ready(const plat_pollfd *fds, size_t n)
             break;
         }
     }
-    if (lost) {
-        if (!g.lost)
-            LOGW("auto", "the kernel dropped observed packets (a slow reader): detection sees less");
-        g.lost += lost;
-    }
+    lost_copies(lost);
 }
 
 void xauto_status(jw *w)
@@ -333,15 +394,17 @@ void xauto_status(jw *w)
     memset(&s, 0, sizeof(s));
     if (g.d)
         xdet_get_stats(g.d, &s);
-    jw_kint(w, "nflog_group", g.group);
-    jw_kbool(w, "observing", g.nl != NULL);
+    jw_kstr(w, "source", FW_WINDOWS ? "windivert" : "nflog");
+    if (!FW_WINDOWS)
+        jw_kint(w, "nflog_group", g.group);
+    jw_kbool(w, "observing", g.nl != NULL || g.sn != NULL);
     jw_kuint(w, "packets", s.packets);
     jw_kuint(w, "lost", g.lost);
     jw_kuint(w, "flows", s.flows);
     jw_kuint(w, "flows_ok", s.flows_ok);
     jw_kuint(w, "flows_failed", s.flows_failed);
     jw_kuint(w, "keys", s.keys);
-    jw_kbool(w, "counters", g.cn != NULL);
+    jw_kbool(w, "counters", g.cn != NULL || g.dc.self_count);
     jw_kuint(w, "watched", s.watched);
     jw_kuint(w, "capacity", (uint64_t)s.capacity);
     jw_kbool(w, "link_degraded", s.link_degraded);

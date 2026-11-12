@@ -22,7 +22,7 @@
  *
  * Volume (X9b; the kernel conntrack's counters of the flow, polled about
  * once a second through xdet_tick/xdet_counters while the flow lives, up to
- * watch_s):
+ * watch_s; on Windows the detector counts the packets itself, self_count):
  *
  *   FREEZE_N       the server's bytes stopped at B in [freeze_min,
  *                  freeze_max] (8 KB, 64 KB), the flow still open and
@@ -35,7 +35,11 @@
  *                  throttle_rho (0.25) of the capacity C (the fastest window
  *                  of any flow lately), coefficient of variation under
  *                  throttle_cv (0.3), no window over twice the median, and
- *                  throttle_min_bytes (64 KB) in all: a policer's plateau
+ *                  throttle_min_bytes (64 KB) in all: a policer's plateau.
+ *                  Not while a flow to another network plateaus alike
+ *                  (median within half to twice, also under rho C, a
+ *                  quarter of throttle_min_bytes): a shared plateau is
+ *                  the own link's
  *   DNS_POISON     a DNS answer with a stub address (0.0.0.0, 127/8, ::,
  *                  ::1), or two answers to one query, the first with
  *                  another IP TTL than the second: the first was injected. A stub address counts
@@ -116,6 +120,10 @@ typedef struct {
     int link_min_keys;               /* 5 */
     size_t watch_max;                /* flows whose counters are polled (512) */
     unsigned watch_s;                /* for at most (120) */
+    /* the observer sees every packet (WinDivert's SNIFF handle, X9c): the
+     * detector counts the server's bytes itself and xdet_tick answers its
+     * own requests; no xdet_counters. 0 */
+    int self_count;
 } xdet_config;
 
 void xdet_config_default(xdet_config *c);
@@ -169,9 +177,16 @@ void xdet_free(xdet *d);
 
 /* One packet as observed (either direction; the conntrack tells which) */
 void xdet_packet(xdet *d, const gpkt *p, uint64_t now_ms);
+/* One packet from an observer that sees every packet (WinDivert): out 1
+ * outbound, 0 inbound. Only the PC's own flows count, as with the
+ * conntrack's original direction on Linux: an inbound packet starts no
+ * flow, nor does an outbound SYN,ACK (a server of the PC answering);
+ * ICMP errors count inbound only. */
+void xdet_packet_dir(xdet *d, const gpkt *p, uint64_t now_ms, int out);
 
 /* About once a second: the volume checks, LINK_DEGRADED, and req for each
- * watched flow whose counters are wanted (answer with xdet_counters) */
+ * watched flow whose counters are wanted (answer with xdet_counters; with
+ * self_count the detector's own counts are taken and req is not called) */
 void xdet_tick(xdet *d, uint64_t now_ms, void (*req)(void *ud, const xdet_tuple *t), void *ud);
 void xdet_counters(xdet *d, const xdet_ctr *c, uint64_t now_ms);
 
