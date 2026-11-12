@@ -6,7 +6,8 @@
 # mark, the engine saw only the first packets; a strategy that never lets
 # go and a run without --ext-healthy-mark (off by default) keep every
 # packet in the queue; the rules are gone afterwards. Needs root,
-# iproute2, python3, curl, and nft or iptables.
+# iproute2, python3, curl, conntrack (or /proc/net/nf_conntrack), and nft or
+# iptables.
 #
 #   client ns 10.88.1.2 --- 10.88.1.1 server ns
 #
