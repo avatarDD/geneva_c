@@ -302,6 +302,7 @@ static int contains(const sbuf *b, const char *needle)
 typedef struct {
     int hdr_done, status, chunked, nobody;
     int64_t clen;
+    size_t hdr_len;   /* the header's bytes, with the empty line */
     size_t body;      /* body bytes so far */
     char tail[8];     /* last bytes of the stream (chunked end) */
 } http_state;
@@ -319,6 +320,7 @@ static void http_headers(http_state *h, const sbuf *b, size_t hdr_len)
 {
     const char *v;
     h->hdr_done = 1;
+    h->hdr_len = hdr_len;
     h->clen = -1;
     if (b->len >= 12 && !memcmp(b->data, "HTTP/", 5)) {
         const char *sp = memchr(b->data, ' ', MIN(b->len, (size_t)16));
@@ -348,6 +350,33 @@ static int http_complete(const http_state *h)
     if (h->chunked)
         return !memcmp(h->tail + 3, "0\r\n\r\n", 5);
     return h->clen >= 0 && (int64_t)h->body >= h->clen;
+}
+
+/* blockcheck2's curl_test_http: a redirect (301, 302, 307, 308) must stay
+ * on the domain (an absolute Location of http(s)://...DOMAIN followed by /
+ * or the end) or be relative. Returns 1 for a redirect elsewhere. */
+static int http_foreign_redirect(const http_state *h, const sbuf *b, const char *dom)
+{
+    const char *v, *end, *p;
+    char loc[512];
+    size_t n = 0, dl;
+    if (h->status != 301 && h->status != 302 && h->status != 307 && h->status != 308)
+        return 0;
+    if (!(v = find_header(b->data, h->hdr_len, "location")))
+        return 0; /* an empty Location passes blockcheck2's grep -v */
+    end = b->data + h->hdr_len;
+    while (v < end && (*v == ' ' || *v == '\t'))
+        v++;
+    for (p = v; p < end && *p != '\r' && *p != '\n' && n + 1 < sizeof(loc); p++)
+        loc[n++] = (char)(*p >= 'A' && *p <= 'Z' ? *p + 32 : *p);
+    loc[n] = 0;
+    if (strncmp(loc, "http://", 7) && strncmp(loc, "https://", 8))
+        return 0;
+    dl = strlen(dom);
+    for (p = strstr(loc, "://") + 3; dl && *p; p++)
+        if (str_ieqn(p, dom, dl) && (p[dl] == '/' || !p[dl]))
+            return 0;
+    return 1;
 }
 
 /* Reads an HTTP response (http = 1) or any reply (tcp). */
@@ -424,6 +453,10 @@ static void read_reply(const probe_cfg *c, sock_t s, int http, probe_res *r)
         set_res(r, PO_BROKEN, "the answer lacks \"%s\"", c->valid_contains);
     } else if (total < c->min_bytes) {
         set_res(r, PO_BROKEN, "%zu of %zu bytes", total, c->min_bytes);
+    } else if (http && c->strict_http && h.status == 400) {
+        set_res(r, PO_BROKEN, "HTTP 400: the server likely got the fakes");
+    } else if (http && c->strict_http && c->host && http_foreign_redirect(&h, &b, c->host)) {
+        set_res(r, PO_INJECTED, "HTTP %d: a redirect off the domain", h.status);
     } else if (http) {
         set_res(r, PO_OK, "HTTP %d, %zu bytes", h.status, total);
     } else {

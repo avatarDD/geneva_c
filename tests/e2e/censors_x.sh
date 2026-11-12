@@ -22,6 +22,7 @@
 # The section "tune" (or tune14, tune18, tunets, tunepropose) runs the tuner (--ext-arm) against 14 and 18,
 # and with NFQWS2_DIR zapret2's circular against 14 for comparison.
 # The section "treat" (or treat14 ... treat20, treatpropose) runs --ext-auto apply|propose against 14-20.
+# The section "blockcheck" runs geneva blockcheck --ext against no censor, 18 and 14.
 # The section "xact" (or x14 ... x20 for one censor) runs geneva --ext with x-action strategies (the
 # nfqws2 references as x-actions, and combinators) against 14, 15, 18-20.
 #   tests/e2e/censors_x.sh [path/to/geneva] [censor ... | xact | tune | nfqws2 | diff | posdebug]
@@ -1085,6 +1086,44 @@ if on treat || on treatpropose; then
     kill "$CPID" 2>/dev/null
     wait "$CPID" 2>/dev/null
     CPID=
+fi
+
+# geneva blockcheck (X12b): the grid of blockcheck2 against 18 (Host:) and 14
+# (SNI); the report names the lines that got through, the baseline fails
+bc() { # name "blockcheck options" grep-patterns...
+    name=$1 opts=$2
+    shift 2
+    # shellcheck disable=SC2086
+    ip netns exec "$NC" "$GENEVA" blockcheck --ext --ip 10.81.2.2 --level quick --max-ttl 2 --max-autottl-delta 1 \
+        $opts ultrasurf.example > "$WORK/bc.txt" 2> "$WORK/bc.log"
+    rc=$?
+    [ $rc = 0 ] && ok "$name: exit 0" || bad "$name: exit $rc" "$WORK/bc.log"
+    for p in "$@"; do
+        grep -qF -- "$p" "$WORK/bc.txt" && ok "$name: $p" || bad "$name: no $p" "$WORK/bc.txt"
+    done
+}
+if on blockcheck; then
+    echo "== geneva blockcheck"
+    bc "no censor" "--test http,tls12 -d lab.example" "curl_test_http ipv4 ultrasurf.example : working without bypass" \
+        "curl_test_https_tls12 ipv4 lab.example : working without bypass" "* COMMON" \
+        "2/2 : curl_test_https_tls12 ipv4 : working without bypass"
+    ip netns exec "$NC" sh -c 'iptables-save 2>/dev/null; nft list ruleset 2>/dev/null' | grep -qi geneva &&
+        bad "blockcheck left rules behind"
+    if start_censor 18; then
+        # a 302 to block.example is the censor's (strict_http)
+        bc "censor 18" "--test http --scripts 10,20,23" \
+            "curl_test_http ipv4 ultrasurf.example : nfqws2 --payload=http_req --lua-desync=http_hostcase" \
+            "curl_test_http ipv4 ultrasurf.example : nfqws2 --payload=http_req --lua-desync=multisplit:pos=midsld" \
+            "  geneva: [FLOW:n:a]-xwhen{iff=L7:payload:http_req}(xhttp{hostcase},)-| \\/"
+        grep -q "working without bypass" "$WORK/bc.txt" && bad "censor 18: the baseline got through" "$WORK/bc.txt"
+        stop_censor
+    fi
+    if start_censor 14; then
+        bc "censor 14" "--test tls12 --scripts 20 --json" \
+            '"nfqws2":"--payload=tls_client_hello --lua-desync=multisplit:pos=2"' \
+            '"nfqws2":"--payload=tls_client_hello --lua-desync=multisplit:pos=sniext+1"'
+        stop_censor
+    fi
 fi
 
 if [ $fails -eq 0 ]; then echo "all passed"; else echo "$fails failure(s)"; fi

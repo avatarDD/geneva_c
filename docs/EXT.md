@@ -50,6 +50,7 @@ geneva run --ext -s '...'
 | X11c | лечение `--ext-auto propose\|apply`: портфель рук по классу блокировки, Thompson sampling по соединениям ключа, CUSUM, `UNTREATABLE` с перепроверкой | ниже |
 | X11d | лечение `FREEZE_N` и `THROTTLE` (строгий успех), генетический поиск `--ext-ga` для ключей без рабочей руки, `--ext-treat-arms` | ниже |
 | X12a | `geneva resolve` (mdig zapret2) и `geneva ip2net` (ip2net zapret2) | ниже |
+| X12b | `geneva blockcheck`: `blockcheck2.sh` zapret2 со всей сеткой `blockcheck2.d/standard`, строки nfqws2 переведены в стратегии geneva; уровни, повторы, отчёт SUMMARY/COMMON/COVERAGE | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
 
@@ -1883,11 +1884,123 @@ geneva ip2net --ext -4 < ips.txt > nets4.txt
 на 100 случайных списках каждого семейства с разными опциями, на списке
 имён и адресов (`--family 4`, `6`, `46`, журналы) и на DNS-запросах.
 
+## Проверка блокировок: `geneva blockcheck` (X12b)
+
+```
+sudo geneva blockcheck --ext rutracker.org
+sudo geneva blockcheck --ext --test http,tls12,tls13 --level quick -d a.example,b.example
+sudo geneva blockcheck --ext --test http3 --curl /opt/curl/bin/curl rutracker.org
+geneva blockcheck --ext --print-grid --test tls12 > grid.tsv
+```
+
+Перенос `blockcheck2.sh` zapret2 с его сеткой стратегий
+`blockcheck2.d/standard`: для каждого домена, версии IP и теста (HTTP,
+TLS 1.2, TLS 1.3, HTTP/3) сначала проверка без обхода, затем все скрипты
+по порядку — 10 (`http_*`), 15 (`tcpseg` с повторами), 17 (`oob`), 20
+(`multisplit`, `multidisorder`), 23 (`seqovl`), 24 (`syndata`), 25
+(`fake` с TTL 1–12, autottl 1–5 и fooling), 30 (`fakedsplit`,
+`fakeddisorder`), 35 (`hostfakesplit`), 50, 55, 60 (фейк перед
+разрезами), 90 (QUIC: фейки, фрагменты). Каждая строка nfqws2 переводится
+в стратегию geneva и проверяется через вычислитель (как `geneva eval`):
+пробы `http`, `tls` с версией 1.2 или 1.3, для HTTP/3 — `exec` с curl
+`--http3-only`. Управление скриптов перенесено строка в строку: те же
+циклы и выходы из них, переменные `need_*` между скриптами (фейк с
+разрезом не пробуется, если разрез сработал и без фейка), второй проход
+TLS 1.2 с `wssize`, если первый ничего не нашёл.
+
+**Перевод.** Каждый `--lua-desync` — x-действие (X5a–X5c), следующие
+вкладываются в его поддерево, как в цепочке nfqws2, где следующий
+экземпляр видит и отброшенный пакет. Фильтры `--payload` и `--out-range`
+перед экземплярами — `xwhen` вокруг тех, что их делят; «иначе» — то, что
+после них:
+
+```
+--payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:ip_ttl=3 --lua-desync=multisplit:pos=2
+  [FLOW:n:a]-xwhen{iff=L7:payload:tls_client_hello}(xfake{blob=fake_default_tls;ip_ttl=3}(xsplit{pos=2},),)-| \/
+--payload=quic_initial --lua-desync=send:ipfrag:ipfrag_pos_udp=8 --lua-desync=drop
+  [FLOW:n:a]-xwhen{iff=L7:payload:quic_initial}(xsend{ipfrag;ipfrag_pos_udp=8}(drop,),)-| \/
+--payload=empty --out-range=<s1 --lua-desync=send:tcp_md5
+  [FLOW:n:a]-xwhen{iff=FLOW:n:<s1}(xwhen{iff=L7:payload:empty}(xsend{tcp_md5},),)-| \/
+```
+
+Функции: `fake`→`xfake`, `multisplit`→`xsplit`,
+`multidisorder[_legacy]`→`xdisorder[{legacy}]`, `fakedsplit`,
+`fakeddisorder`, `hostfakesplit`→`xhostfake`, `tcpseg`, `oob`, `syndata`,
+`wssize`, `send`, `pktmod`→`xmod`, `http_hostcase`/`domcase`/
+`methodeol`/`unixeol`→`xhttp{...}` (`spell=` — значение `hostcase`),
+`drop`. Аргументы переносятся как есть, `tls_mod` становится `tlsmod`.
+
+**Отчёт** — как у `blockcheck2.sh`: SUMMARY (все сработавшие строки
+каждого теста, «not working», «working without bypass»), а для нескольких
+доменов COMMON (строки, сработавшие на всех) и COVERAGE (на скольких
+доменах). Под каждой рабочей строкой nfqws2 — её стратегия geneva
+(`  geneva: ...`). Ход проверки (строки, исходы проб) — в stderr.
+`--json` — отчёт одним объектом: `summary` (`domain`, `test`, `nfqws2` и
+`strategy` или `result`), `common`, `coverage` (`count`). Код выхода 0,
+если что-то работает (стратегия или сайт без обхода), 1 — нет.
+
+| Опция | Что | По умолчанию |
+|---|---|---|
+| `-d`, `--domain ИМЯ,..` или имена в конце | домены | `rutracker.org` |
+| `--test СПИСОК` | `http`, `tls12`, `tls13`, `http3` | `http,tls12` |
+| `--ipv 4\|6\|46` | версии IP | `4` |
+| `--level` | `veryquick`, `quick`, `standard`, `force` (SCANLEVEL) | `standard` |
+| `--repeats N` | попыток каждой строки, нужны все (REPEATS); `quick` и `veryquick` бросают после первой неудачи | 1 |
+| `--min-ttl`, `--max-ttl` | TTL фейков (0 — без тестов TTL) | 1, 12 |
+| `--min-autottl-delta`, `--max-autottl-delta` | autottl (0 — без них) | 1, 5 |
+| `--fake-repeats N` | FAKE_REPEATS | 1 |
+| `--multidisorder-legacy` | MULTIDISORDER=multidisorder_legacy | — |
+| `--scripts N,..` | только эти скрипты (как NOTEST_* наоборот) | все |
+| `--ip АДРЕС` | соединяться с этим адресом, а не с адресом домена (curl `--connect-to`) | — |
+| `--timeout СЕК` | тайм-аут пробы (CURL_MAX_TIME) | 2 |
+| `--curl ПУТЬ` | curl с HTTP/3 для `http3` | `curl` |
+| `--print-grid` | без проб: строки сетки (`nfqws2<TAB>geneva`) так, будто ничего не сработало; без root | — |
+| `--grid-ok ФАЙЛ` | с `--print-grid`: эти строки nfqws2 «работают» (для сверки с zapret2) | — |
+| `--queue`, `--mark`, `--firewall`, `--local-ports` | как у `geneva eval` | 311, … |
+
+Проба HTTP проверяет ответ как `curl_test_http`: код 400 («сервер
+получил фейки») — неудача, перенаправление 301/302/307/308 на чужой
+домен — подмена цензором; относительное и на тот же домен (с поддоменами)
+— успех. Опции `--ext-blob` и прочие X3–X4 работают как у `eval`.
+
+Отличия от zapret2:
+
+- Проверки DNS, блокировки по IP и порту и DoH — следующий этап (X12c).
+- Строки с Lua-кодом (`luaexec`: шаблон seqovl `padencap` в 23-seqovl,
+  3 строки на каждый проход TLS) перевести нельзя (решение 11.1): они
+  считаются неудачными, в ходе проверки — «geneva: none». `--lua-init` с
+  `tls_mod(..., 'rnd')` для шаблона seqovl опускается: шаблон — блоб
+  `fake_default_tls` как есть.
+- Список маркеров в `pos` у `fakedsplit` и `fakeddisorder`
+  (`method+2,midsld`) zapret2 читает как первый маркер (`atoi` в
+  `posmarker_parse`); перевод делает так же, хотя в стратегии geneva
+  такой `pos` — ошибка разбора.
+- Фейки — свои блобы geneva (решение 11.3), а не `fake_default_*` zapret2;
+  `--blob=` файлов (FAKE_HTTP и т.п.) нет, свой блоб — `--ext-blob` с
+  тем же именем.
+- Успех — проба geneva: целый ответ HTTP, полёт сервера после ServerHello
+  в TLS (без проверки сертификата), код 0 у curl для HTTP/3. Попытки
+  (`--repeats`) идут одна за другой (PARALLEL нет).
+- Порт-фильтр, ipset и прочее окружение nfqws2 не нужны: вычислитель
+  перехватывает только соединения пробы (локальные порты). Правила
+  снимаются после каждого теста.
+- Опции — в форме geneva, а не переменные окружения.
+
+Проверки: юнит-тесты (`tests/test_blockcheck.c`: перевод строк, каждая
+строка сетки на всех уровнях переводится и разбирается, ярлыки `need_`,
+уровни, отчёт); `tests/e2e/blockcheck_grid.sh` (без root, с `NFQWS2_DIR`)
+запускает сами скрипты `blockcheck2.d/standard` релиза zapret2 с
+заглушкой `pktws_curl_test_update` и сравнивает последовательность строк
+с `--print-grid` на всех уровнях, IPv4 и IPv6, когда ничего не работает
+и когда работает каждая 7-я, 61-я или 397-я строка; раздел `blockcheck`
+`tests/e2e/censors_x.sh` прогоняет `geneva blockcheck` против цензоров 18
+(HTTP, перенаправление) и 14 (SNI) и без цензора.
+
 ## Код zapret2
 
 Распознавание L7, маркеры, сборка, conntrack и x-действия
 (`src/ext/l7.c`, `markers.c`, `xl7.c`, `ctrack.c`, `xact.c`, `xact_tcp.c`,
-`xact_http.c`, `xact_misc.c`, `xact_comb.c`, `xact_seq.c` (функция `oob`), `profile.c`, `hostlist.c`, `ipset.c`, `lists.c`, `autolist.c`, `ipcache.c`, список системных вызовов seccomp в `svc.c`, `tls.c` — `tls_mod`, `genhost`, `tls_clone.c`, `tools.c` — `mdig` и `ip2net`) перенесены из zapret2
+`xact_http.c`, `xact_misc.c`, `xact_comb.c`, `xact_seq.c` (функция `oob`), `profile.c`, `hostlist.c`, `ipset.c`, `lists.c`, `autolist.c`, `ipcache.c`, список системных вызовов seccomp в `svc.c`, `tls.c` — `tls_mod`, `genhost`, `tls_clone.c`, `tools.c` — `mdig` и `ip2net`, `blockcheck.c` — сетка `blockcheck2.d/standard`) перенесены из zapret2
 (https://github.com/bol-van/zapret2) и распространяются на условиях его
 лицензии:
 

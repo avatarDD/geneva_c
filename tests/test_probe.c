@@ -16,8 +16,11 @@
 
 enum {
     M_HTTP_CL, M_HTTP_CHUNKED, M_HTTP_EOF, M_HTTP_PARTIAL, M_HTTP_BLOCK, M_RESET, M_SILENT,
-    M_TLS13, M_TLS12, M_TLS_SPLIT, M_ECHO, M_DNS_TCP,
+    M_TLS13, M_TLS12, M_TLS_SPLIT, M_ECHO, M_DNS_TCP, M_HTTP_TEXT,
 };
+
+/* M_HTTP_TEXT: this answer */
+static const char *volatile srv_text;
 
 static struct {
     sock_t ls;
@@ -104,6 +107,10 @@ static void serve_one(sock_t c)
         send_bytes(c, r, sizeof(r) - 1);
         break;
     }
+    case M_HTTP_TEXT:
+        send_bytes(c, srv_text, strlen(srv_text));
+        drain(c);
+        break;
     case M_HTTP_BLOCK: {
         static const char r[] = "HTTP/1.1 403 Forbidden\r\nContent-Length: 14\r\n\r\nblocked by isp";
         send_bytes(c, r, sizeof(r) - 1);
@@ -292,6 +299,33 @@ static void test_http(void)
     c.valid_contains = NULL;
     c.min_bytes = 10000;
     CHECK_INT(run_mode(M_HTTP_EOF, &c, &r), PO_BROKEN);
+    c.min_bytes = 0;
+
+    /* blockcheck2's curl_test_http (strict_http): 400, a redirect elsewhere */
+    {
+        static const struct {
+            const char *text;
+            probe_outcome plain, strict;
+        } cases[] = {
+            {"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n", PO_OK, PO_BROKEN},
+            {"HTTP/1.1 302 Found\r\nLocation: http://block.isp/\r\nContent-Length: 0\r\n\r\n", PO_OK, PO_INJECTED},
+            {"HTTP/1.1 301 Moved\r\nLocation: HTTPS://Test.Example/\r\nContent-Length: 0\r\n\r\n", PO_OK, PO_OK},
+            {"HTTP/1.1 307 Moved\r\nlocation: https://www.test.example\r\nContent-Length: 0\r\n\r\n", PO_OK, PO_OK},
+            {"HTTP/1.1 308 Moved\r\nLocation: https://test.example.evil/\r\nContent-Length: 0\r\n\r\n", PO_OK,
+             PO_INJECTED},
+            {"HTTP/1.1 302 Found\r\nLocation: /login\r\nContent-Length: 0\r\n\r\n", PO_OK, PO_OK},
+            {"HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n", PO_OK, PO_OK},
+            {"HTTP/1.1 303 See Other\r\nLocation: http://block.isp/\r\nContent-Length: 0\r\n\r\n", PO_OK, PO_OK},
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            srv_text = cases[i].text;
+            c.strict_http = 0;
+            CHECK_INT(run_mode(M_HTTP_TEXT, &c, &r), cases[i].plain);
+            c.strict_http = 1;
+            CHECK_INT(run_mode(M_HTTP_TEXT, &c, &r), cases[i].strict);
+        }
+        c.strict_http = 0;
+    }
 
     /* nothing listens (Windows retries a refused connect for about 2 s) */
     cfg_init(&c, PROBE_HTTP, 1);

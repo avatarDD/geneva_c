@@ -52,6 +52,11 @@ Extensions (with --ext):
   geneva resolve --ext < NAMES resolves a list with threads (zapret2's mdig),
   geneva ip2net --ext < ADDRESSES groups addresses into subnets (zapret2's
   ip2net); see their --help.
+  geneva blockcheck --ext [DOMAIN...] runs zapret2's blockcheck2: each test
+  (http, tls12, tls13, http3) without a strategy, then the strategies of
+  blockcheck2.d/standard translated into geneva, scan levels, the report
+  SUMMARY / COMMON / COVERAGE with nfqws2 and geneva strategies side by side
+  (blockcheck --help; --print-grid lists the grid without probes).
   See docs/EXT.md.
 [exit 0]
 ### help-ext-censor
