@@ -223,10 +223,6 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw,
             fprintf(stderr, "geneva %s: --ext-flowoffload makes rules: not with --firewall none\n", cmd);
             return -1;
         }
-        /* the surgical path needs its rules (geneva fw up --ext makes
-         * them): with someone else's only when asked for */
-        if (!*use_fw && !arg_has(a, "ext-healthy-mark"))
-            c->healthy_mark = 0;
         return 0;
     }
 #endif

@@ -197,6 +197,7 @@ Extensions (with --ext):
       --ext-ttl-icmp             Linux: drop ICMP time-exceeded of the queued flows (fakes with a small TTL make them; ct mark --mark)
       --ext-flowoffload none|software|hardware
                                  Linux, nft: our flowtable over --iface/--ext-wan and --ext-lan, the queued flows kept out of it while queued (turn the system's flow offload off)
+      --ext-healthy-mark on|MASK Linux: mark connections the engine is done with (no strategy can apply any more, none of its keys blocked) in conntrack, and the rules let them go past the queue (on: 0x10000000; off by default)
       --fw-hook-pre FILE         Linux: run FILE up|down BACKEND QUEUE before the rules go up or down
       --fw-hook-post FILE        Linux: the same after them
       --wf-tcp-out [~]P[-P],..   WinDivert filter of winws2 (replaces the one from -p): TCP to these ports

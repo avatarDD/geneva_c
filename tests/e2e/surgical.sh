@@ -4,8 +4,9 @@
 # later packets skip the queue. Checked with iptables and nft, one and four
 # workers: the download arrives whole, the conntrack entry carries the
 # mark, the engine saw only the first packets; a strategy that never lets
-# go and --ext-healthy-mark 0 keep every packet in the queue; the rules are
-# gone afterwards; --firewall none turns it off unless asked for. Needs root, iproute2, python3, curl, and nft or iptables.
+# go and a run without --ext-healthy-mark (off by default) keep every
+# packet in the queue; the rules are gone afterwards. Needs root,
+# iproute2, python3, curl, and nft or iptables.
 #
 #   client ns 10.88.1.2 --- 10.88.1.1 server ns
 #
@@ -125,7 +126,7 @@ CUT='[FLOW:n:1-3]-duplicate-| \/'
 for FW in $FIREWALLS; do
     for W in 1 4; do
         echo "== $FW, $W worker(s), a strategy cut off after 3 packets"
-        start "$CUT" --ext-workers "$W" || continue
+        start "$CUT" --ext-healthy-mark on --ext-workers "$W" || continue
         ip netns exec "$NC" conntrack -F >/dev/null 2>&1
         fetch && ok "$MB MB arrived whole" || bad "the download was cut short" "$WORK/g.log"
         m=$(ctmark)
@@ -142,7 +143,7 @@ for FW in $FIREWALLS; do
     done
 
     echo "== $FW, a strategy that never lets go"
-    if start '[TCP:flags:PA]-duplicate-| \/'; then
+    if start '[TCP:flags:PA]-duplicate-| \/' --ext-healthy-mark on; then
         fetch && ok "$MB MB arrived whole" || bad "the download was cut short" "$WORK/g.log"
         pk=$(($(field pkts_out) + $(field pkts_in)))
         [ "$pk" -ge $FEW ] && ok "every packet in the queue ($pk)" || bad "only $pk packets in the queue"
@@ -150,10 +151,12 @@ for FW in $FIREWALLS; do
         stop
     fi
 
-    echo "== $FW, --ext-healthy-mark 0"
-    if start "$CUT" --ext-healthy-mark 0; then
+    echo "== $FW, without --ext-healthy-mark (off)"
+    if start "$CUT"; then
         rules=$(ip netns exec "$NC" sh -c 'iptables-save 2>/dev/null; nft list ruleset 2>/dev/null')
         echo "$rules" | grep -qi '0x10000000' && bad "a healthy-mark rule without the mark" || ok "no healthy-mark rules"
+        python3 "$WORK/ctl.py" "$WORK/g.sock" ext_status | grep -q '"surgical":false' &&
+            ok "ext_status: surgical off" || bad "surgical without --ext-healthy-mark"
         fetch && ok "$MB MB arrived whole" || bad "the download was cut short" "$WORK/g.log"
         pk=$(($(field pkts_out) + $(field pkts_in)))
         [ "$pk" -ge $FEW ] && ok "every packet in the queue ($pk)" || bad "only $pk packets in the queue"
@@ -162,19 +165,6 @@ for FW in $FIREWALLS; do
     ip netns exec "$NC" sh -c 'iptables-save 2>/dev/null; nft list ruleset 2>/dev/null' | grep -qi geneva &&
         bad "rules left behind" || ok "the rules are gone"
 done
-
-echo "== --firewall none: off unless asked for"
-FW=none
-if start "$CUT"; then
-    python3 "$WORK/ctl.py" "$WORK/g.sock" ext_status | grep -q '"surgical":false' &&
-        ok "ext_status: surgical off" || bad "surgical with --firewall none"
-    stop
-fi
-if start "$CUT" --ext-healthy-mark 0x10000000; then
-    python3 "$WORK/ctl.py" "$WORK/g.sock" ext_status | grep -q '"surgical":true' &&
-        ok "ext_status: surgical with --ext-healthy-mark" || bad "no surgical with --ext-healthy-mark"
-    stop
-fi
 
 [ $fails -eq 0 ] && echo "surgical: all passed" || echo "surgical: $fails failed"
 [ $fails -eq 0 ]

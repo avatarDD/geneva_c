@@ -181,10 +181,10 @@ TEST(surg_rules)
     sb_init(&s);
     sb_init(&err);
     fw_config_default(&c);
-    CHECK_INT(fw_args(NULL, NULL, 0, &c, &err), 0);
-    CHECK_INT((int)c.healthy_mark, (int)XFW_HEALTHY_MARK);
-    CHECK_INT(fw_args(NULL, NULL, 1, &c, &err), 0); /* Windows: no rules to pass by */
+    CHECK_INT(fw_args(NULL, NULL, 0, &c, &err), 0); /* asked for only: --ext alone keeps the rules */
     CHECK_INT((int)c.healthy_mark, 0);
+    CHECK_INT(fw_args("--ext-healthy-mark", "on", 0, &c, &err), 0);
+    CHECK_INT((int)c.healthy_mark, (int)XFW_HEALTHY_MARK);
     CHECK_INT(fw_args("--ext-healthy-mark", "0", 0, &c, &err), 0);
     CHECK_INT((int)c.healthy_mark, 0);
     CHECK_INT(fw_args("--ext-healthy-mark", "0x800", 0, &c, &err), 0);
@@ -200,7 +200,7 @@ TEST(surg_rules)
     sb_reset(&err);
     fw_config_default(&c);
     c.forward = 1;
-    CHECK_INT(fw_args(NULL, NULL, 0, &c, &err), 0); /* a router's forwarding: no */
+    CHECK_INT(fw_args("--ext-healthy-mark", "on", 0, &c, &err), 0); /* a router's forwarding: no */
     CHECK_INT((int)c.healthy_mark, 0);
 
     fw_config_default(&c);
