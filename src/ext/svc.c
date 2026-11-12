@@ -714,3 +714,37 @@ void xsvc_stop(xsvc *s)
     }
 #endif
 }
+
+int xsvc_workers(const args_t *a, uint16_t queue, int windows, unsigned ncpu, unsigned *out, sbuf *err)
+{
+    const char *s = arg_str(a, "ext-workers", NULL);
+    unsigned n;
+    *out = 1;
+    if (!s)
+        return 0;
+    if (!strcmp(s, "auto")) {
+        n = ncpu ? ncpu : 1;
+        if (n > XSVC_AUTO_WORKERS)
+            n = XSVC_AUTO_WORKERS;
+    } else {
+        char *end;
+        unsigned long v;
+        errno = 0;
+        v = strtoul(s, &end, 10);
+        if (errno || end == s || *end || *s == '-' || *s == '+' || v < 1 || v > XSVC_MAX_WORKERS) {
+            sb_printf(err, "bad --ext-workers %s (1..%d or auto)", s, XSVC_MAX_WORKERS);
+            return -1;
+        }
+        n = (unsigned)v;
+    }
+    if (n > 1 && windows) {
+        sb_puts(err, "--ext-workers: Linux only for now");
+        return -1;
+    }
+    if ((unsigned)queue + n - 1 > 65535) {
+        sb_printf(err, "--ext-workers %u: the queues %u..%u go past 65535", n, queue, (unsigned)queue + n - 1);
+        return -1;
+    }
+    *out = n;
+    return 0;
+}

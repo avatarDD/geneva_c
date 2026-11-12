@@ -197,6 +197,59 @@ static int parse_run(xsvc *s, const char *o1, const char *v1, const char *o2, sb
     return r;
 }
 
+static int workers(const char *v, uint16_t queue, int windows, unsigned ncpu, unsigned *out, sbuf *err)
+{
+    static const optdef defs[] = {EXT_OPT, EXT_RUN_OPTS, {NULL, 0, 0, NULL, NULL}};
+    const char *argv[] = {"--ext", "--ext-workers", v, NULL};
+    args_t a;
+    char e[128];
+    int r;
+    if (args_parse(&a, v ? 3 : 1, (char **)argv, defs, e, sizeof(e)) < 0)
+        return -2;
+    r = xsvc_workers(&a, queue, windows, ncpu, out, err);
+    args_free(&a);
+    return r;
+}
+
+TEST(svc_workers)
+{
+    unsigned n = 0;
+    sbuf err;
+    sb_init(&err);
+    CHECK_INT(workers(NULL, 310, 0, 8, &n, &err), 0);
+    CHECK_INT(n, 1);
+    CHECK_INT(workers("4", 310, 0, 1, &n, &err), 0);
+    CHECK_INT(n, 4);
+    CHECK_INT(workers("auto", 310, 0, 2, &n, &err), 0);
+    CHECK_INT(n, 2);
+    CHECK_INT(workers("auto", 310, 0, 16, &n, &err), 0);
+    CHECK_INT(n, XSVC_AUTO_WORKERS);
+    CHECK_INT(workers("auto", 310, 0, 0, &n, &err), 0);
+    CHECK_INT(n, 1);
+    CHECK_INT(workers("64", 310, 0, 1, &n, &err), 0);
+    CHECK_INT(n, 64);
+    CHECK_INT(workers("1", 310, 1, 8, &n, &err), 0); /* Windows: one is fine */
+    CHECK_INT(n, 1);
+    CHECK_INT(workers("65535", 0, 0, 1, &n, &err), -1);
+    sb_reset(&err);
+    {
+        static const char *const bad[] = {"0", "65", "-1", "+2", "2x", "", "two"};
+        for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
+            CHECK_INT(workers(bad[i], 310, 0, 4, &n, &err), -1);
+            CHECK(strstr(err.data, "bad --ext-workers") != NULL);
+            sb_reset(&err);
+        }
+    }
+    CHECK_INT(workers("2", 310, 1, 4, &n, &err), -1);
+    CHECK(strstr(err.data, "Linux only") != NULL);
+    sb_reset(&err);
+    CHECK_INT(workers("4", 65533, 0, 4, &n, &err), -1);
+    CHECK(strstr(err.data, "65535") != NULL);
+    sb_reset(&err);
+    CHECK_INT(workers("3", 65533, 0, 4, &n, &err), 0);
+    sb_free(&err);
+}
+
 TEST(svc_options)
 {
     xsvc s;
@@ -423,6 +476,7 @@ void suite_svc(void)
     RUN(svc_split);
     RUN(svc_expand);
     RUN(svc_options);
+    RUN(svc_workers);
     RUN(svc_syslog);
     RUN(svc_notify);
     RUN(svc_seccomp);

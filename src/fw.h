@@ -24,6 +24,8 @@ typedef enum { FW_AUTO = 0, FW_IPTABLES, FW_NFT } fw_backend;
 typedef struct {
     fw_backend backend;
     uint16_t queue;
+    uint16_t nqueues; /* --ext-workers: queues queue..queue+nqueues-1, the flows
+                       * spread by a hash of their addresses (0 or 1: one) */
     uint32_t mark;
     portset ports;
     int tcp, udp;

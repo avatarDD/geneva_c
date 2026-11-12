@@ -186,6 +186,13 @@
   `ext_status`. e2e без цензора `tests/e2e/auto_synth.sh` (long-poll,
   WebSocket, загрузки по 50 МБ; 30 минут — ни одного класса), Windows
   smoke в CI.
+- X10a: многоочередной движок `run --ext --ext-workers N|auto` (Linux):
+  у каждого воркера поток, очередь NFQUEUE (`--queue`..`--queue+N-1`),
+  raw-сокет и копия стратегии; правила раскладывают потоки по хэшу адресов
+  (iptables `--queue-balance A:B`, nft `queue num A-B`). Поля `workers` и
+  `worker_pkts` в `stats`, `workers` в `status`. По умолчанию 1 воркер
+  (отличие от плана). e2e `tests/e2e/workers.sh` (`BENCH=1` — замер 1 и 4
+  воркеров).
 
 ## v1.2.0
 

@@ -791,6 +791,21 @@ void strategy_free(strategy *s)
     free(s);
 }
 
+strategy *strategy_clone(const strategy *s)
+{
+    sbuf t, err;
+    strategy *c;
+    if (!s)
+        return NULL;
+    sb_init(&t);
+    sb_init(&err);
+    strategy_print(s, &t);
+    c = strategy_parse(t.data, &err);
+    sb_free(&t);
+    sb_free(&err);
+    return c;
+}
+
 strategy *strategy_parse(const char *text, sbuf *err)
 {
     char *s = strip_dup(text, strlen(text));

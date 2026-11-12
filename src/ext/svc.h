@@ -42,6 +42,14 @@ typedef struct {
 /* Reads the options (with --ext). Returns 0, or -1 with a message in err. */
 int xsvc_parse(const args_t *a, xsvc *s, sbuf *err);
 
+/* --ext-workers N|auto (1..64; auto: ncpu, at most 4): the worker threads
+ * of the engine, each with its own NFQUEUE (queue .. queue+N-1). windows:
+ * refused there for now. Returns 0 with *out (1 without the option), or -1
+ * with a message in err. */
+#define XSVC_MAX_WORKERS 64
+#define XSVC_AUTO_WORKERS 4
+int xsvc_workers(const args_t *a, uint16_t queue, int windows, unsigned ncpu, unsigned *out, sbuf *err);
+
 /* Before the engine starts: --daemon (the parent waits for the child to be
  * ready and returns its exit code: >= 0; the child goes on: -1), then the
  * pidfile and syslog. Returns -1 to go on, or an exit code. */

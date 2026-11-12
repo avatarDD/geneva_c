@@ -1,10 +1,13 @@
 /* The engine core without a capture: a fake backend records verdicts and
  * injections, so the worker context (X1 of docs/EXT_ROADMAP.md) and the
  * extension hooks are tested without NFQUEUE or WinDivert. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "args.h"
 #include "engine_int.h"
+#include "ext_opt.h"
 #include "strategy.h"
 #include "test.h"
 #include "util.h"
@@ -43,7 +46,7 @@ static int fake_inject(eng_worker *w, const void *pctx, const uint8_t *data, siz
 }
 
 static const backend fake_backend = {
-    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, fake_verdict, fake_inject, 0, NULL, NULL, NULL, NULL, NULL,
+    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, fake_verdict, fake_inject, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 };
 
 static void load_base(void)
@@ -148,6 +151,127 @@ static void test_worker_path(void)
     CHECK_INT(e.w[0].c.parse_errors, 1);
     teardown(&e);
 }
+
+/* ---- --ext-workers: engine_run with worker threads ------------------------ */
+
+#ifndef _WIN32
+#  include <unistd.h>
+#  if GENEVA_EXT
+#    include "ext/ext.h"
+#  endif
+
+#  define TW_N 4      /* workers */
+#  define TW_PKTS 400 /* packets per worker */
+
+/* each worker's pipe: one byte is one packet */
+static int tw_pipe[TW_N][2];
+static int tw_acc[TW_N], tw_inj[TW_N], tw_wrong[TW_N]; /* written by worker i only */
+static volatile int tw_done, tw_stop;
+
+static int tw_open(engine *e, sbuf *err) { return 0; }
+static void tw_nop(engine *e) {}
+static size_t tw_pollfds(engine *e, plat_pollfd *fds, size_t max) { return 0; }
+static int tw_ready(engine *e, const plat_pollfd *fds, size_t n) { return 0; }
+
+static int tw_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len)
+{
+    uint32_t id;
+    memcpy(&id, pctx, sizeof(id));
+    if (id != w->id)
+        tw_wrong[w->id]++;
+    if (accept)
+        tw_acc[w->id]++;
+    if (__atomic_add_fetch(&tw_done, 1, __ATOMIC_SEQ_CST) == TW_N * TW_PKTS)
+        atomic_store_int(&tw_stop, 1);
+    return 0;
+}
+
+static int tw_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t len)
+{
+    tw_inj[w->id]++;
+    return 0;
+}
+
+static sock_t tw_fd(eng_worker *w) { return tw_pipe[w->id][0]; }
+
+static int tw_worker_ready(eng_worker *w)
+{
+    uint8_t b[64];
+    ssize_t n = read(tw_pipe[w->id][0], b, sizeof(b));
+    uint32_t id = w->id;
+    for (ssize_t i = 0; i < n; i++)
+        engine_packet(w, pkt_buf, pkt_len, DIR_OUT, &id);
+    return n < 0 ? -1 : 0;
+}
+
+static const backend tw_backend = {
+    "threads", sizeof(uint32_t), tw_open, tw_nop, tw_nop, tw_pollfds, tw_ready, tw_verdict, tw_inject, 0,
+    NULL, NULL, NULL, NULL, NULL, tw_fd, tw_worker_ready,
+};
+
+#  define TW_STRATEGY "[TCP:flags:PA]-duplicate(tamper{TCP:seq:corrupt},sleep{5})-| \\/"
+
+/* ext: the --ext command line (NULL: without), with_inj: whether the
+ * packets get the strategy */
+static void test_threads(const char *name, const char **ext, int with_inj)
+{
+    engine_opts o;
+    uint8_t ones[TW_PKTS];
+    int acc = 0, inj = 0, wrong = 0, busy = 0;
+
+    t_current = name;
+    load_base();
+    memset(ones, 1, sizeof(ones));
+    memset(tw_acc, 0, sizeof(tw_acc));
+    memset(tw_inj, 0, sizeof(tw_inj));
+    memset(tw_wrong, 0, sizeof(tw_wrong));
+    tw_done = tw_stop = 0;
+    for (int i = 0; i < TW_N; i++) {
+        CHECK_INT(pipe(tw_pipe[i]), 0);
+        CHECK(write(tw_pipe[i][1], ones, sizeof(ones)) == (ssize_t)sizeof(ones));
+    }
+    engine_opts_default(&o);
+    o.apply_fw = 0;
+    o.embedded = 1;
+    o.stop = &tw_stop;
+    o.duration = 30; /* a hang fails the checks below, not the run */
+    o.workers = TW_N;
+    o.backend = &tw_backend;
+    /* the delayed copies go out from the workers' own timers */
+    o.strategy = TW_STRATEGY;
+#  if GENEVA_EXT
+    if (ext) {
+        static const optdef defs[] = {{"strategy", 's', 1, "S", ""}, EXT_OPT, EXT_PROFILE_OPTS,
+                                      {NULL, 0, 0, NULL, NULL}};
+        args_t a;
+        char err[128];
+        int argc = 0;
+        while (ext[argc])
+            argc++;
+        CHECK_INT(args_parse(&a, argc, (char **)ext, defs, err, sizeof(err)), 0);
+        CHECK_INT(ext_parse_args(&a, "test"), 0);
+        args_free(&a);
+        o.ext = ext_engine_hooks();
+        o.strategy = "\\/";
+    }
+#  endif
+    CHECK_INT(engine_run(&o), 0);
+#  if GENEVA_EXT
+    if (ext)
+        ext_deactivate();
+#  endif
+    for (int i = 0; i < TW_N; i++) {
+        acc += tw_acc[i], inj += tw_inj[i], wrong += tw_wrong[i];
+        busy += tw_acc[i] == TW_PKTS;
+        close(tw_pipe[i][0]);
+        close(tw_pipe[i][1]);
+    }
+    CHECK_INT(acc, TW_N * TW_PKTS);
+    CHECK_INT(busy, TW_N); /* every worker its own packets, */
+    CHECK_INT(wrong, 0);   /* answered through itself */
+    CHECK_INT(inj, with_inj ? TW_N * TW_PKTS : 0);
+}
+#endif
 
 /* ---- extension hooks ----------------------------------------------------- */
 
@@ -260,5 +384,27 @@ static void test_hooks(void)
 void suite_engine(void)
 {
     test_worker_path();
+#ifndef _WIN32
+    test_threads("engine workers: threads", NULL, 1);
+#  if GENEVA_EXT
+    {
+        /* the hooks share the lists (a read lock); profile 2 has its own
+         * strategy (each worker a copy of it), */
+        const char *v1[] = {"--ext", "--filter-tcp", "443", "--new", "--filter-tcp", "80", "-s", TW_STRATEGY, NULL};
+        /* the autolist takes them one by one (the write lock); the host is
+         * not in it: no strategy */
+        char f[96];
+        snprintf(f, sizeof(f), "geneva-test-tw-%d.txt", (int)getpid());
+        remove(f);
+        {
+            const char *v2[] = {"--ext", "--filter-tcp", "443", "--new", "--filter-tcp", "80", "--hostlist-auto", f,
+                                "-s", TW_STRATEGY, NULL};
+            test_threads("engine workers: threads, --ext", v1, 1);
+            test_threads("engine workers: threads, --ext with an autolist", v2, 0);
+        }
+        remove(f);
+    }
+#  endif
+#endif
     test_hooks();
 }

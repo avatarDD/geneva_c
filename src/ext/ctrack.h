@@ -61,6 +61,7 @@ struct ct_flow {
     ct_side client, server;
     uint8_t state; /* CT_* */
     uint8_t incoming_ttl;
+    uint32_t ttl_put; /* the second the ipcache last got incoming_ttl */
     uint64_t t_start, t_last; /* ms */
 
     /* D7: trees cut off for good on this flow, per forest (out, in), and

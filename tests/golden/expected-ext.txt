@@ -225,6 +225,7 @@ Extensions (with --ext):
       --uid UID[:GID,..]         the same with numbers
       --ext-seccomp[=0|1]        Linux: once running, forbid exec, kill, ptrace and file system changes (1; the root helper removes the rules on exit)
       --log-target syslog        also log to syslog (/dev/log)
+      --ext-workers N|auto       Linux: N worker threads, each with its own NFQUEUE (--queue .. --queue+N-1, the rules balance the flows by address); auto: the CPUs, at most 4 (default 1)
       --ext-auto observe         watch the PC's own flows on any port and tell of blocked keys (port, /24 or /48, address, host): Linux sees the first packets (NFLOG) and the conntrack's counters (ctnetlink, once a second: freezes, throttling); Windows every packet (a WinDivert sniff handle, the bytes counted itself); events ext_flow, ext_impaired, ext_class, ext_link, ctl ext_status; traffic is not changed
       --ext-nflog-group N        Linux: the NFLOG group of --ext-auto (the queue number)
       --ext-observe-first N      Linux: --ext-auto's packets of each direction observed per flow (16)

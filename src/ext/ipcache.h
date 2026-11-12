@@ -24,6 +24,9 @@ void xipc_config(unsigned lifetime_s, int hostname);
 int xipc_hostname_on(void);
 /* Drops every entry (and goes back to the default configuration) */
 void xipc_reset(void);
+/* --ext-workers: from now on every call takes a lock (call before the
+ * threads start) */
+void xipc_threads(void);
 size_t xipc_count(void);
 
 /* ver 4 or 6, a its 4 or 16 bytes; iface NULL or "" for none */

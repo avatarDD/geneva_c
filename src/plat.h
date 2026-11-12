@@ -51,9 +51,11 @@ void plat_sleep_ms(unsigned ms);
 #ifdef _WIN32
 typedef HANDLE plat_thread_t;
 typedef CRITICAL_SECTION plat_mutex_t;
+typedef SRWLOCK plat_rwlock_t;
 #else
 typedef pthread_t plat_thread_t;
 typedef pthread_mutex_t plat_mutex_t;
+typedef pthread_rwlock_t plat_rwlock_t;
 #endif
 
 typedef void (*plat_thread_fn)(void *arg);
@@ -64,6 +66,15 @@ void plat_mutex_init(plat_mutex_t *m);
 void plat_mutex_destroy(plat_mutex_t *m);
 void plat_mutex_lock(plat_mutex_t *m);
 void plat_mutex_unlock(plat_mutex_t *m);
+/* readers share it, a writer has it alone */
+void plat_rwlock_init(plat_rwlock_t *l);
+void plat_rwlock_destroy(plat_rwlock_t *l);
+void plat_rwlock_rdlock(plat_rwlock_t *l);
+void plat_rwlock_rdunlock(plat_rwlock_t *l);
+void plat_rwlock_wrlock(plat_rwlock_t *l);
+void plat_rwlock_wrunlock(plat_rwlock_t *l);
+/* online processors (at least 1) */
+unsigned plat_ncpu(void);
 
 /* Atomics over plain ints only: 64-bit atomics would need libatomic on
  * mips32/armv5, so counters stay thread-confined instead. ARMv5 has no

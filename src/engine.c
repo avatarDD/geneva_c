@@ -15,6 +15,7 @@
 #include "geneva.h"
 #include "log.h"
 #include "plat.h"
+#include "rng.h"
 #include "strategy.h"
 #include "util.h"
 
@@ -145,8 +146,11 @@ static void dl_pop(eng_worker *w, delayed *top)
 static void record(eng_worker *w, const uint8_t *data, size_t len)
 {
     engine *e = w->e;
-    if (e->pw)
+    if (e->pw) {
+        plat_mutex_lock(&e->pw_lock);
         pcap_write(e->pw, plat_wall_ms() * 1000000ull, data, len);
+        plat_mutex_unlock(&e->pw_lock);
+    }
 }
 
 static void give_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len)
@@ -338,7 +342,7 @@ void engine_packet(eng_worker *w, const uint8_t *data, size_t len, int d, const 
         plat_mutex_unlock(&ss->lock);
         return;
     }
-    packet(w, e->st, NULL, p, dir, data, len, pctx);
+    packet(w, w->st ? w->st : e->st, NULL, p, dir, data, len, pctx);
 }
 
 void engine_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t *data, size_t len, int modified)
@@ -388,6 +392,7 @@ int engine_workers_init(engine *e, unsigned nw, sbuf *err)
         eng_worker *w = &e->w[i];
         w->e = e;
         w->id = i;
+        plat_mutex_init(&w->lock);
         sb_init(&w->line);
         if (fw_first_any(&e->o->fw) && e->be->engine_first)
             w->flows = flowtab_new(FLOW_MAX);
@@ -411,10 +416,38 @@ void engine_workers_free(engine *e)
         free(w->dl);
         flowtab_free(w->flows);
         sb_free(&w->line);
+        strategy_free(w->st);
+        plat_mutex_destroy(&w->lock);
     }
     free(e->w);
     e->w = NULL;
     e->nw = 0;
+}
+
+void engine_lock_workers(engine *e)
+{
+    for (unsigned i = 0; e->threaded && i < e->nw; i++)
+        plat_mutex_lock(&e->w[i].lock);
+}
+
+void engine_unlock_workers(engine *e)
+{
+    for (unsigned i = e->threaded ? e->nw : 0; i-- > 0;)
+        plat_mutex_unlock(&e->w[i].lock);
+}
+
+/* --ext-workers: each worker runs its own copy of e->st (call with the
+ * workers locked). Returns 0, or -1 when a copy cannot be made. */
+static int workers_strategy(engine *e)
+{
+    for (unsigned i = 0; e->threaded && i < e->nw; i++) {
+        strategy *c = e->st ? strategy_clone(e->st) : NULL;
+        if (e->st && !c)
+            return -1;
+        strategy_free(e->w[i].st);
+        e->w[i].st = c;
+    }
+    return 0;
 }
 
 void engine_run_timers(engine *e, int all)
@@ -633,17 +666,30 @@ static void run(eng_worker *w, strategy *st, eng_slot *sl, gpkt *p, strat_dir di
 
 /* ---- events -------------------------------------------------------------- */
 
-static void forest_json(jw *w, atree **f, size_t n)
+/* the trees of one direction; with --ext-workers their counts are the
+ * sums over the workers' copies (the same trees in the same order) */
+static void forest_json(jw *w, const engine *e, int in)
 {
+    atree **f = in ? e->st->in : e->st->out;
+    size_t n = in ? e->st->nin : e->st->nout;
     sbuf s;
     sb_init(&s);
     jw_arr(w);
     for (size_t i = 0; i < n; i++) {
+        uint64_t fired = 0;
+        int copies = 0;
+        for (unsigned k = 0; e->threaded && k < e->nw; k++) {
+            const strategy *c = e->w[k].st;
+            if (c && i < (in ? c->nin : c->nout)) {
+                fired += (in ? c->in : c->out)[i]->fired;
+                copies = 1;
+            }
+        }
         sb_reset(&s);
         tree_print(f[i], &s);
         jw_obj(w);
         jw_kstr(w, "tree", s.data);
-        jw_kuint(w, "fired", f[i]->fired);
+        jw_kuint(w, "fired", copies ? fired : f[i]->fired);
         jw_obj_end(w);
     }
     jw_arr_end(w);
@@ -674,11 +720,20 @@ static void stats_fields(engine *e, jw *w)
     jw_kuint(w, "passed_first", c->passed_first);
     jw_kuint(w, "flow_evictions", c->flow_evictions);
     jw_kuint(w, "held", c->held);
+    if (e->threaded) {
+        /* the packets of each worker: how the rules spread the flows */
+        jw_kuint(w, "workers", e->nw);
+        jw_key(w, "worker_pkts");
+        jw_arr(w);
+        for (unsigned i = 0; i < e->nw; i++)
+            jw_uint(w, e->w[i].c.pkts_out + e->w[i].c.pkts_in);
+        jw_arr_end(w);
+    }
     if (e->st) {
         jw_key(w, "out_trees");
-        forest_json(w, e->st->out, e->st->nout);
+        forest_json(w, e, 0);
         jw_key(w, "in_trees");
-        forest_json(w, e->st->in, e->st->nin);
+        forest_json(w, e, 1);
     }
 }
 
@@ -832,6 +887,8 @@ static int reload(engine *e, sbuf *err)
     }
     strategy_free(e->st);
     e->st = s;
+    if (workers_strategy(e) < 0)
+        LOGE("engine", "cannot copy the strategy for the workers");
     emit_strategy(e);
     return 0;
 }
@@ -851,6 +908,8 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
         jw_kuint(w, "uptime_ms", plat_now_ms() - e->start_ms);
         jw_kstr(w, "backend", e->be->name);
         jw_kuint(w, "queue", e->o->fw.queue);
+        if (e->threaded)
+            jw_kuint(w, "workers", e->nw);
         ports_format(&e->o->fw.ports, &s, ",", "-");
         jw_kstr(w, "ports", s.data);
         jw_kbool(w, "server_side", e->o->fw.server_side);
@@ -876,8 +935,11 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
         return 0;
     }
     if (!strcmp(cmd, "reset_stats")) {
-        for (unsigned i = 0; i < e->nw; i++)
+        for (unsigned i = 0; i < e->nw; i++) {
             memset(&e->w[i].c, 0, sizeof(e->w[i].c));
+            if (e->w[i].st)
+                strategy_reset(e->w[i].st);
+        }
         strategy_reset(e->st);
         return 0;
     }
@@ -894,6 +956,8 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
             return -1;
         strategy_free(e->st);
         e->st = s;
+        if (workers_strategy(e) < 0)
+            LOGE("engine", "cannot copy the strategy for the workers");
         emit_strategy(e);
         sb_init(&out);
         strategy_print(s, &out);
@@ -1003,6 +1067,89 @@ static void emit_start(engine *e)
 
 #define MAX_POLL (8 + CTL_MAX_CLIENTS + 1 + 4)
 
+/* ---- --ext-workers --------------------------------------------------------- */
+
+#define WORKER_WAKE_MS 200 /* a worker looks at e->wstop at least this often */
+
+/* A worker's loop: its queue, its delayed packets, under its own lock */
+static void worker_main(void *arg)
+{
+    eng_worker *w = arg;
+    engine *e = w->e;
+    while (!atomic_load_int(&e->wstop)) {
+        plat_pollfd pfd;
+        int timeout = WORKER_WAKE_MS, r;
+        uint64_t now;
+        plat_mutex_lock(&w->lock);
+        memset(&pfd, 0, sizeof(pfd));
+        pfd.fd = e->be->worker_fd(w);
+        pfd.events = POLLIN;
+        now = plat_now_ms();
+        if (w->ndl)
+            timeout = w->dl[0].due <= now ? 0 : (int)MIN(w->dl[0].due - now, (uint64_t)timeout);
+        plat_mutex_unlock(&w->lock);
+        r = plat_poll(&pfd, 1, timeout);
+        plat_mutex_lock(&w->lock);
+        if (r > 0 && e->be->worker_ready(w) < 0) {
+            plat_mutex_unlock(&w->lock);
+            atomic_store_int(&e->wfail, 1);
+            return;
+        }
+        run_timers(w, 0);
+        if (w->flows && plat_now_ms() >= w->next_expire) {
+            flowtab_expire(w->flows, plat_now_ms());
+            w->next_expire = plat_now_ms() + 5000;
+        }
+        plat_mutex_unlock(&w->lock);
+    }
+}
+
+static int workers_start(engine *e)
+{
+    (void)rng_u64(); /* the generators' seed is set before the threads draw */
+    for (unsigned i = 0; i < e->nw; i++) {
+        if (plat_thread_start(&e->w[i].thread, worker_main, &e->w[i]) != 0)
+            return -1;
+        e->w[i].thread_on = 1;
+    }
+    return 0;
+}
+
+static void workers_stop(engine *e)
+{
+    atomic_store_int(&e->wstop, 1);
+    for (unsigned i = 0; i < e->nw; i++)
+        if (e->w[i].thread_on) {
+            plat_thread_join(e->w[i].thread);
+            e->w[i].thread_on = 0;
+        }
+}
+
+/* Events reach the control socket's clients through the main loop: the
+ * workers emit them on their own threads (the log's lock held) */
+static void evq_push(const char *line, size_t len, void *ctx)
+{
+    engine *e = ctx;
+    plat_mutex_lock(&e->evq_lock);
+    if (e->evq.len < (8u << 20)) /* a stuck main loop loses events, not memory */
+        sb_append(&e->evq, line, len);
+    plat_mutex_unlock(&e->evq_lock);
+}
+
+static void evq_flush(engine *e)
+{
+    sbuf q;
+    if (!e->threaded || !e->ctl)
+        return;
+    plat_mutex_lock(&e->evq_lock);
+    q = e->evq;
+    sb_init(&e->evq);
+    plat_mutex_unlock(&e->evq_lock);
+    if (q.len)
+        ctl_broadcast(q.data, q.len, e->ctl);
+    sb_free(&q);
+}
+
 int engine_run(engine_opts *o)
 {
     engine e;
@@ -1012,14 +1159,20 @@ int engine_run(engine_opts *o)
     const char *reason = "signal";
 
 #ifndef HAVE_BACKEND
-    LOGE("engine", "no packet engine on %s: geneva run needs Linux (NFQUEUE) or Windows (WinDivert)",
-         plat_os_name());
-    return EXIT_PRIV;
+    if (!o->backend) {
+        LOGE("engine", "no packet engine on %s: geneva run needs Linux (NFQUEUE) or Windows (WinDivert)",
+             plat_os_name());
+        return EXIT_PRIV;
+    }
 #endif
     memset(&e, 0, sizeof(e));
     e.o = o;
-    e.be = BACKEND;
+    e.be = o->backend ? o->backend : BACKEND;
     plat_mutex_init(&e.lock);
+    plat_mutex_init(&e.pw_lock);
+    plat_mutex_init(&e.evq_lock);
+    sb_init(&e.evq);
+    e.threaded = o->workers > 1 && !o->slots && e.be && e.be->worker_fd && e.be->worker_ready;
     sb_init(&err);
     e.start_ms = plat_now_ms();
     sig_stop = sig_hup = sig_usr1 = 0;
@@ -1055,14 +1208,23 @@ int engine_run(engine_opts *o)
             rc = EXIT_IO;
             goto out;
         }
-        ev_set_tap(ctl_broadcast, e.ctl);
+        if (e.threaded)
+            ev_set_tap(evq_push, &e);
+        else
+            ev_set_tap(ctl_broadcast, e.ctl);
         LOGI("engine", "control socket %s", o->control);
     }
     sb_reset(&err);
-    if (engine_workers_init(&e, 1, &err) < 0) {
+    if (engine_workers_init(&e, e.threaded ? o->workers : 1, &err) < 0) {
         LOGE("engine", "%s", err.data);
         emit_error("ext", err.data);
         rc = EXIT_FAIL;
+        goto out;
+    }
+    if (workers_strategy(&e) < 0) {
+        LOGE("engine", "cannot copy the strategy for the workers");
+        emit_error("strategy", "cannot copy the strategy for the workers");
+        rc = EXIT_STRATEGY;
         goto out;
     }
     sb_reset(&err);
@@ -1077,6 +1239,15 @@ int engine_run(engine_opts *o)
     running = 1;
     if (err.len)
         LOGW("engine", "%s", err.data);
+    if (e.threaded) {
+        if (workers_start(&e) < 0) {
+            LOGE("engine", "cannot start the worker threads");
+            emit_error("engine", "cannot start the worker threads");
+            rc = EXIT_FAIL;
+            goto out;
+        }
+        LOGI("engine", "%u workers on queues %u-%u", e.nw, o->fw.queue, o->fw.queue + e.nw - 1);
+    }
     if (o->on_ready) {
         o->on_ready(o->ready_ctx, 0);
         o->on_ready = NULL;
@@ -1097,6 +1268,13 @@ int engine_run(engine_opts *o)
     next_stats = o->stats_interval > 0 ? e.start_ms + (uint64_t)(o->stats_interval * 1000) : 0;
     deadline = o->duration > 0 ? e.start_ms + (uint64_t)(o->duration * 1000) : 0;
     while (!sig_stop && !e.stop_request && !(o->stop && atomic_load_int(o->stop))) {
+        if (atomic_load_int(&e.wfail)) {
+            LOGE("engine", "a worker's queue failed");
+            rc = EXIT_FAIL;
+            reason = "error";
+            break;
+        }
+        evq_flush(&e);
         plat_pollfd pfd[MAX_POLL];
         size_t nbe, nctl, nx = 0;
         uint64_t now, due;
@@ -1110,7 +1288,9 @@ int engine_run(engine_opts *o)
         now = plat_now_ms();
         if (o->stop)
             timeout = 100; /* the stop flag is polled */
-        if ((due = next_due(&e)) != 0)
+        if (e.threaded)
+            timeout = MIN(timeout, WORKER_WAKE_MS); /* the workers' events, their failure */
+        else if ((due = next_due(&e)) != 0)
             timeout = due <= now ? 0 : (int)MIN(due - now, (uint64_t)timeout);
         plat_mutex_unlock(&e.lock);
         if (next_stats && next_stats > now && next_stats - now < (uint64_t)timeout)
@@ -1145,33 +1325,44 @@ int engine_run(engine_opts *o)
             reason = "error";
             break;
         }
-        if (r > 0 && nctl)
+        if (r > 0 && nctl) {
+            engine_lock_workers(&e);
             ctl_dispatch(e.ctl, pfd + nbe, nctl, on_control, &e);
-        if (nx) /* also without events: their timers */
+            engine_unlock_workers(&e);
+        }
+        /* also without events: their timers (and with --ext-workers the
+         * extensions' once a second work, see ext_hooks.ready) */
+        if (nx || (e.threaded && e.o->ext && e.o->ext->ready))
             e.o->ext->ready(&e, pfd + nbe + nctl, nx);
-        engine_run_timers(&e, 0);
-        for (unsigned i = 0; i < e.nw; i++) {
-            eng_worker *w = &e.w[i];
-            if (w->flows && plat_now_ms() >= w->next_expire) {
-                flowtab_expire(w->flows, plat_now_ms());
-                w->next_expire = plat_now_ms() + 5000;
+        if (!e.threaded) { /* the workers run their own timers */
+            engine_run_timers(&e, 0);
+            for (unsigned i = 0; i < e.nw; i++) {
+                eng_worker *w = &e.w[i];
+                if (w->flows && plat_now_ms() >= w->next_expire) {
+                    flowtab_expire(w->flows, plat_now_ms());
+                    w->next_expire = plat_now_ms() + 5000;
+                }
             }
         }
         if (sig_hup) {
             sbuf herr;
             sig_hup = 0;
             sb_init(&herr);
+            engine_lock_workers(&e);
             if (reload(&e, &herr) < 0 && !e.o->strategy_file)
                 LOGI("engine", "SIGHUP: %s", herr.data);
             sb_reset(&herr);
             if (e.o->ext && e.o->ext->control)
                 e.o->ext->control(&e, "reload_lists", NULL, NULL, &herr);
+            engine_unlock_workers(&e);
             sb_free(&herr);
         }
         now = plat_now_ms();
         if (sig_usr1 || (next_stats && now >= next_stats)) {
             sig_usr1 = 0;
+            engine_lock_workers(&e);
             emit_stats(&e);
+            engine_unlock_workers(&e);
             if (next_stats)
                 while (next_stats <= now)
                     next_stats += (uint64_t)(o->stats_interval * 1000);
@@ -1186,6 +1377,7 @@ int engine_run(engine_opts *o)
     }
 
 out:
+    workers_stop(&e); /* from here on one thread: no worker locks */
     if (opened) {
         e.be->stop(&e);
         plat_mutex_lock(&e.lock);
@@ -1205,6 +1397,7 @@ out:
         ev_emit(&ev);
     }
     if (e.ctl) {
+        evq_flush(&e);
         ev_set_tap(NULL, NULL);
         ctl_close(e.ctl);
     }
@@ -1215,6 +1408,9 @@ out:
         rc = EXIT_IO;
     strategy_free(e.st);
     sb_free(&err);
+    sb_free(&e.evq);
+    plat_mutex_destroy(&e.evq_lock);
+    plat_mutex_destroy(&e.pw_lock);
     plat_mutex_destroy(&e.lock);
     return rc;
 }

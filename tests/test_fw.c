@@ -152,6 +152,43 @@ static void test_protocols(void)
     sb_free(&e);
 }
 
+/* --ext-workers: the rules balance the flows over the workers' queues */
+static void test_nqueues(void)
+{
+    fw_config c;
+    sbuf s;
+    t_current = "fw nqueues";
+    sb_init(&s);
+    fw_config_default(&c);
+    c.ipv6 = 0;
+    c.nqueues = 4;
+    ports_parse("443", &c.ports);
+    fw_script(&c, FW_IPTABLES, 1, &s);
+    CHECK_INT(count(s.data, "-j NFQUEUE --queue-balance 310:313 --queue-bypass\n"), 2);
+    CHECK_INT(count(s.data, "--queue-num"), 0);
+    CHECK(count(s.data, "GENEVA_310_OUT") > 0); /* the chains keep the first queue's name */
+    CHECK_INT(count(s.data, "GENEVA_311"), 0);
+    sb_reset(&s);
+    fw_script(&c, FW_NFT, 1, &s);
+    CHECK_INT(count(s.data, "queue num 310-313 bypass\n"), 2);
+    CHECK(count(s.data, "table inet geneva_310") > 0);
+    CHECK_INT(count(s.data, "geneva_311"), 0);
+    sb_reset(&s);
+    c.bypass = 0;
+    c.forward = 1;
+    fw_script(&c, FW_NFT, 1, &s);
+    CHECK_INT(count(s.data, "queue num 310-313\n"), 2);
+    sb_reset(&s);
+    fw_script(&c, FW_IPTABLES, 1, &s);
+    CHECK_INT(count(s.data, "-j NFQUEUE --queue-balance 310:313\n"), 2);
+    sb_reset(&s);
+    c.nqueues = 1; /* one queue: as before */
+    fw_script(&c, FW_IPTABLES, 1, &s);
+    CHECK_INT(count(s.data, "--queue-balance"), 0);
+    CHECK_INT(count(s.data, "--queue-num 310\n"), 2);
+    sb_free(&s);
+}
+
 /* Router mode (geneva censor): forwarded packets of both directions. */
 static void test_forward(void)
 {
@@ -322,6 +359,7 @@ void suite_fw(void)
     test_iptables();
     test_nft();
     test_forward();
+    test_nqueues();
     test_windivert();
     test_protocols();
 #ifdef __linux__

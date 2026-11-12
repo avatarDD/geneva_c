@@ -179,6 +179,26 @@ static size_t port_matches(const portset *ps, int src, char out[][400], size_t m
     return n;
 }
 
+/* the queue target: one queue, or --ext-workers' range (the kernel spreads
+ * the packets by a hash of the addresses, the same both ways) */
+static const char *ipt_q(const fw_config *c, char *b, size_t n)
+{
+    if (c->nqueues > 1)
+        snprintf(b, n, "--queue-balance %u:%u", c->queue, c->queue + c->nqueues - 1);
+    else
+        snprintf(b, n, "--queue-num %u", c->queue);
+    return b;
+}
+
+static const char *nft_q(const fw_config *c, char *b, size_t n)
+{
+    if (c->nqueues > 1)
+        snprintf(b, n, "queue num %u-%u%s", c->queue, c->queue + c->nqueues - 1, c->bypass ? " bypass" : "");
+    else
+        snprintf(b, n, "queue num %u%s", c->queue, c->bypass ? " bypass" : "");
+    return b;
+}
+
 static void gen_ipt_queue(const fw_config *c, fwlist *l, int v6, const char *chain, int outdir)
 {
     const char *protos[2] = {c->tcp ? "tcp" : NULL, c->udp ? "udp" : NULL};
@@ -188,7 +208,7 @@ static void gen_ipt_queue(const fw_config *c, fwlist *l, int v6, const char *cha
     size_t nm = port_matches(&c->ports, src, m, MAX_PORT_RANGES);
     const char *ifv[FW_MAX_IFS];
     int nif = fw_ifaces(c, ifv);
-    char bypass[24] = "";
+    char bypass[24] = "", qb[48];
     if (c->bypass)
         snprintf(bypass, sizeof(bypass), " --queue-bypass");
     ipt(l, K_REQ, v6, "-t mangle -N %s", chain);
@@ -218,17 +238,17 @@ static void gen_ipt_queue(const fw_config *c, fwlist *l, int v6, const char *cha
                 if (c->ttl_icmp)
                     ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s %s-j CONNMARK --or-mark 0x%x", chain, ifm,
                         protos[p], m[i], cb, c->mark);
-                ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s %s-j NFQUEUE --queue-num %u%s", chain, ifm,
-                    protos[p], m[i], cb, c->queue, bypass);
+                ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s %s-j NFQUEUE %s%s", chain, ifm,
+                    protos[p], m[i], cb, ipt_q(c, qb, sizeof(qb)), bypass);
             }
         }
         /* --ext profiles: ICMP and other IP protocols, whatever the ports */
         if (c->icmp)
-            ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s -j NFQUEUE --queue-num %u%s", chain, ifm,
-                v6 ? "ipv6-icmp" : "icmp", c->queue, bypass);
+            ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s -j NFQUEUE %s%s", chain, ifm,
+                v6 ? "ipv6-icmp" : "icmp", ipt_q(c, qb, sizeof(qb)), bypass);
         for (int i = 0; i < c->nipp; i++)
-            ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %u -j NFQUEUE --queue-num %u%s", chain, ifm, c->ipp[i],
-                c->queue, bypass);
+            ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %u -j NFQUEUE %s%s", chain, ifm, c->ipp[i],
+                ipt_q(c, qb, sizeof(qb)), bypass);
     }
     ipt(l, K_REQ, v6, "-t mangle -I %s -j %s", outdir ? "POSTROUTING" : "PREROUTING", chain);
 }
@@ -242,7 +262,7 @@ static void gen_ipt_forward(const fw_config *c, fwlist *l, int v6, const char *c
     size_t nm[2];
     const char *ifv[FW_MAX_IFS];
     int nif = fw_ifaces(c, ifv);
-    char bypass[24] = "";
+    char bypass[24] = "", qb[48];
     nm[0] = port_matches(&c->ports, 0, m[0], MAX_PORT_RANGES);
     nm[1] = port_matches(&c->ports, 1, m[1], MAX_PORT_RANGES);
     if (c->bypass)
@@ -256,8 +276,8 @@ static void gen_ipt_forward(const fw_config *c, fwlist *l, int v6, const char *c
         for (int p = 0; p < 2; p++)
             for (int src = 0; protos[p] && src < 2; src++)
                 for (size_t i = 0; i < nm[src]; i++)
-                    ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s -j NFQUEUE --queue-num %u%s", chain, ifm,
-                        protos[p], m[src][i], c->queue, bypass);
+                    ipt(l, K_REQ, v6, "-t mangle -A %s %s-p %s %s -j NFQUEUE %s%s", chain, ifm,
+                        protos[p], m[src][i], ipt_q(c, qb, sizeof(qb)), bypass);
     }
     ipt(l, K_REQ, v6, "-t mangle -I FORWARD -j %s", chain);
 }
@@ -390,6 +410,7 @@ static void nft_queue_chain(const fw_config *c, sbuf *s, int outdir)
     const char *protos[2] = {c->tcp ? "tcp" : NULL, c->udp ? "udp" : NULL};
     int src = outdir ? c->server_side : !c->server_side;
     int prio = outdir ? (c->prenat ? -150 : 101) : -150;
+    char qb[48];
     sb_printf(s, "\tchain %s {\n\t\ttype filter hook %s priority %d; policy accept;\n",
               outdir ? "out" : "in", outdir ? "postrouting" : "prerouting", prio);
     sb_printf(s, "\t\tmeta mark & 0x%x == 0x%x return\n", c->mark, c->mark);
@@ -408,7 +429,7 @@ static void nft_queue_chain(const fw_config *c, sbuf *s, int outdir)
             sb_printf(s, "ct %s packets 1-%d ", outdir ? "original" : "reply", first);
         if (c->ttl_icmp)
             sb_printf(s, "ct mark set ct mark or 0x%x ", c->mark);
-        sb_printf(s, "queue num %u%s\n", c->queue, c->bypass ? " bypass" : "");
+        sb_printf(s, "%s\n", nft_q(c, qb, sizeof(qb)));
     }
     /* --ext profiles: ICMP and other IP protocols, whatever the ports */
     for (int k = 0; k < 2; k++) {
@@ -423,7 +444,7 @@ static void nft_queue_chain(const fw_config *c, sbuf *s, int outdir)
             sb_puts(s, "icmp, ipv6-icmp");
         for (int i = 0; k && i < c->nipp; i++)
             sb_printf(s, "%s%u", i ? ", " : "", c->ipp[i]);
-        sb_printf(s, " } queue num %u%s\n", c->queue, c->bypass ? " bypass" : "");
+        sb_printf(s, " } %s\n", nft_q(c, qb, sizeof(qb)));
     }
     sb_puts(s, "\t}\n");
 }
@@ -431,6 +452,7 @@ static void nft_queue_chain(const fw_config *c, sbuf *s, int outdir)
 static void nft_forward_chain(const fw_config *c, sbuf *s)
 {
     const char *protos[2] = {c->tcp ? "tcp" : NULL, c->udp ? "udp" : NULL};
+    char qb[48];
     sb_puts(s, "\tchain routed {\n\t\ttype filter hook forward priority -150; policy accept;\n");
     sb_printf(s, "\t\tmeta mark & 0x%x == 0x%x return\n", c->mark, c->mark);
     for (int p = 0; p < 2; p++)
@@ -441,7 +463,7 @@ static void nft_forward_chain(const fw_config *c, sbuf *s)
             nft_ifname(c, s, "iifname");
             sb_printf(s, "%s %s { ", protos[p], src ? "sport" : "dport");
             ports_format(&c->ports, s, ", ", "-");
-            sb_printf(s, " } queue num %u%s\n", c->queue, c->bypass ? " bypass" : "");
+            sb_printf(s, " } %s\n", nft_q(c, qb, sizeof(qb)));
         }
     sb_puts(s, "\t}\n");
 }

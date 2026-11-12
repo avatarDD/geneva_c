@@ -728,11 +728,11 @@ static void e_detach(const void *pctx, void *out)
 }
 
 static const backend ebe = {
-    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, e_verdict, e_inject, 0, NULL, NULL, NULL, NULL, NULL,
+    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, e_verdict, e_inject, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 };
 /* NFQUEUE-like: held packets are dropped at once and sent anew */
 static const backend ebe_d = {
-    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, e_verdict, e_inject, 0, NULL, NULL, NULL, NULL, e_detach,
+    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, e_verdict, e_inject, 0, NULL, NULL, NULL, NULL, e_detach, NULL, NULL,
 };
 
 static int ext_on(const char *opt, const char *val)

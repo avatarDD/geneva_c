@@ -411,6 +411,8 @@ int cmd_run(int argc, char **argv)
         r = xsvc_parse(&a, &svc, &e);
         if (r >= 0)
             r = xauto_parse(&a, &o.fw, &e);
+        if (r >= 0 && (r = xsvc_workers(&a, o.fw.queue, FW_WINDOWS, plat_ncpu(), &o.workers, &e)) >= 0)
+            o.fw.nqueues = (uint16_t)o.workers;
         if (r < 0 && e.len) /* arg_int printed its own */
             fprintf(stderr, "geneva run: %s\n", e.data);
         sb_free(&e);
