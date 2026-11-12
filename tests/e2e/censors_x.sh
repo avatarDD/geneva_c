@@ -74,15 +74,21 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=lab -keyout "$WORK/k
     -out "$WORK/cert.pem" >/dev/null 2>&1 || { echo "openssl failed"; exit 1; }
 # HTTP on 80, HTTPS on 443 (any name), and a UDP echo on 443 for QUIC
 cat > "$WORK/srv.py" <<'EOF'
-import http.server, os, socket, ssl, sys, threading
+import http.server, os, socket, socketserver, ssl, sys, threading
 work = sys.argv[1]
+class Srv(http.server.ThreadingHTTPServer):
+    # HTTPServer.server_bind asks getfqdn("0.0.0.0"): a reverse lookup that
+    # in the namespace waits for the runner's resolver (20 s and more)
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "lab", self.server_address[1]
 os.chdir(work + "/www")
 class H(http.server.SimpleHTTPRequestHandler):
     timeout = 10
     def log_message(self, *a):
         pass
 def serve(port, tls):
-    s = http.server.ThreadingHTTPServer(("0.0.0.0", port), H)
+    s = Srv(("0.0.0.0", port), H)
     if tls:
         c = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         c.load_cert_chain(work + "/cert.pem", work + "/key.pem")
@@ -118,10 +124,13 @@ serve(443, True)
 EOF
 ip netns exec "$NS" python3 "$WORK/srv.py" "$WORK" > "$WORK/srv.log" 2>&1 &
 SRV=$!
-for _ in $(seq 50); do
-    ip netns exec "$NS" curl -s -o /dev/null http://10.81.2.2/ && break
+up=
+for _ in $(seq 300); do
+    ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null --max-time 2 http://10.81.2.2/ &&
+        ip netns exec "$NC" curl --noproxy "*" -sk -o /dev/null --max-time 2 https://10.81.2.2/ && { up=1; break; }
     sleep 0.1
 done
+[ -n "$up" ] || { echo "the lab server did not start"; cat "$WORK/srv.log"; exit 1; }
 
 # A QUIC client in miniature: sends a file as one datagram from a fixed port,
 # twice, and prints how many echoes came back.
