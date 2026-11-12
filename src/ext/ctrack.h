@@ -98,6 +98,10 @@ struct ct_flow {
      * connection go (its verdicts mark it, the rules stop queueing it):
      * how many verdicts marked it */
     uint8_t xhealthy;
+    /* the tuner (src/ext/tuner.c, X11): zapret2's per-connection record of
+     * circular (crec: nocheck, failure, retrans) */
+    uint8_t xt_nocheck, xt_failure;
+    uint16_t xt_retrans;
 
     /* table links */
     ct_flow *hnext, *lprev, *lnext;

@@ -46,7 +46,8 @@
     {"log-target", 0, 1, "syslog", EXT_HELP("also log to syslog (/dev/log)")},                              \
     {"ext-workers", 0, 1, "N|auto",                                                                           \
      EXT_HELP("Linux: N worker threads, each with its own NFQUEUE (--queue .. --queue+N-1, the rules "        \
-              "balance the flows by address); auto: the CPUs, at most 4 (default 1)")}
+              "balance the flows by address); auto: the CPUs, at most 4 (default 1)")},                       \
+    {"ext-state", 0, 1, "FILE", EXT_HELP("keep the tuner's keys and their arms in FILE across restarts")}
 
 /* --ext-auto (run; src/ext/auto.h) */
 #define EXT_AUTO_OPTS                                                                                         \
@@ -169,6 +170,13 @@
      EXT_HELP("how long the IP cache keeps an address's host name and TTL (7200; 0: for ever)")},             \
     {"ext-ipcache-hostname", 0, 2, "0|1",                                                                     \
      EXT_HELP("cache host names by address (from DNS answers and flows) for the next flows' profile search")}, \
+    {"ext-arm", 0, 1, "STRATEGY",                                                                              \
+     EXT_HELP("an arm of the tuner (arm 1, 2, ... in order; repeatable): the profile's flows get the arm "    \
+              "their key is at instead of -s")},                                                              \
+    {"ext-tune", 0, 1, "rr[:ARG..]",                                                                          \
+     EXT_HELP("how the profile's keys move between arms: rr is zapret2's circular (fails=3, time=60, final=N, " \
+              "key=NAME, nld=N, reqhost, maxseq, inseq, retrans, udp_out, udp_in, no_rst, no_http_redirect, "   \
+              "reset; default rr)")},                                                                         \
     {"ext-profile", 0, 1, "FILE", EXT_HELP("profiles from FILE ([profile NAME] sections; after those of the "  \
                                            "command line); repeatable")}
 

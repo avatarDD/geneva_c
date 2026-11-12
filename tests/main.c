@@ -45,6 +45,7 @@ void suite_fuzz(void);
 void suite_xseq(void);
 void suite_detect(void);
 void suite_surgical(void);
+void suite_tuner(void);
 
 int main(void)
 {
@@ -77,6 +78,7 @@ int main(void)
     suite_xseq();
     suite_detect();
     suite_surgical();
+    suite_tuner();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }
