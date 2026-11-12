@@ -91,7 +91,7 @@ TEST(pol_snapshots)
 #    define PT_READERS 3
 #    define PT_ROUNDS 3000
 static volatile int pt_stop;
-static int pt_seen[PT_READERS];
+static volatile int pt_seen[PT_READERS];
 
 static void pt_reader(void *arg)
 {
@@ -100,7 +100,7 @@ static void pt_reader(void *arg)
         const xpol_snap *s = xpol_enter(r);
         /* "even" is impaired from the first round on: every snapshot has it */
         if (xpol_state(s, "even") == XPOL_IMPAIRED)
-            pt_seen[r]++;
+            atomic_fetch_add_int(&pt_seen[r], 1);
         xpol_leave(r);
     }
 }
@@ -113,14 +113,25 @@ TEST(pol_threads)
     xpol_set("even", XPOL_IMPAIRED);
     xpol_publish();
     pt_stop = 0;
-    memset(pt_seen, 0, sizeof(pt_seen));
+    for (int i = 0; i < PT_READERS; i++)
+        atomic_store_int(&pt_seen[i], 0);
     for (int i = 0; i < PT_READERS; i++)
         CHECK_INT(plat_thread_start(&t[i], pt_reader, (void *)(size_t)i), 0);
-    for (int i = 0; i < PT_ROUNDS; i++) {
-        char key[32];
-        snprintf(key, sizeof(key), "k%d", i % 50);
-        xpol_set(key, i % 2 ? XPOL_IMPAIRED : XPOL_HEALTHY);
-        xpol_publish();
+    /* PT_ROUNDS at least, and on until every reader has run (a busy
+     * runner may start a thread late), 30 s at most */
+    {
+        uint64_t end = plat_now_ms() + 30000;
+        for (int i = 0;; i++) {
+            char key[32];
+            int all = 1;
+            snprintf(key, sizeof(key), "k%d", i % 50);
+            xpol_set(key, i % 2 ? XPOL_IMPAIRED : XPOL_HEALTHY);
+            xpol_publish();
+            for (int r = 0; r < PT_READERS; r++)
+                all &= atomic_load_int(&pt_seen[r]) > 0;
+            if ((i >= PT_ROUNDS && all) || plat_now_ms() > end)
+                break;
+        }
     }
     atomic_store_int(&pt_stop, 1);
     for (int i = 0; i < PT_READERS; i++)
