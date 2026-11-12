@@ -102,6 +102,11 @@ void xtune_keys(jw *w, size_t max);
  * with err, 0 not the tuner's */
 int xtune_control(const char *cmd, const json_val *req, jw *w, sbuf *err);
 
+/* A draw of Beta(a, b), a, b >= 1 (the thread's generator) */
+double xtune_beta(double a, double b);
+/* The next id of a proposal (the tuner's and the treatment's share them) */
+uint64_t xtune_new_id(void);
+
 /* For the tests: every key forgotten */
 void xtune_reset(void);
 

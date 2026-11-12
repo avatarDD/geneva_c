@@ -16,6 +16,7 @@
 #include "log.h"
 #include "plat.h"
 #include "rng.h"
+#include "treat.h"
 
 #ifdef _WIN32
 #  include <ws2tcpip.h>
@@ -659,7 +660,7 @@ static double gamma_ge1(double a)
     }
 }
 
-static double beta_draw(double a, double b)
+double xtune_beta(double a, double b)
 {
     double x = gamma_ge1(a), y = gamma_ge1(b);
     return x / (x + y);
@@ -677,7 +678,7 @@ static int ts_pick(const xtune *t, rec *r, int except)
         double x;
         if (!allowed(r, i, except))
             continue;
-        x = beta_draw(1.0 + r->A[i - 1], 1.0 + r->B[i - 1]);
+        x = xtune_beta(1.0 + r->A[i - 1], 1.0 + r->B[i - 1]);
         if (x > best)
             best = x, arm = i;
     }
@@ -736,6 +737,18 @@ static void ts_outcome(const xtune *t, rec *r, int arm, int ok, news *nw)
         nw->tuned = 2, nw->tuned_arm = r->treat, nw->p = p;
         r->treat = 0;
     }
+}
+
+uint64_t xtune_new_id(void)
+{
+    /* without a tuner only the treatment counts, under its own lock */
+    uint64_t id;
+    if (g.on)
+        lock();
+    id = ++g.next_id;
+    if (g.on)
+        unlock();
+    return id;
 }
 
 static void propose(rec *r, int to, size_t arms, news *nw)
@@ -1036,6 +1049,7 @@ int xtune_control(const char *cmd, const json_val *req, jw *w, sbuf *err)
                     }
             unlock();
         }
+        xtreat_proposals(w); /* --ext-auto propose */
         jw_arr_end(w);
         return 1;
     }
@@ -1046,13 +1060,11 @@ int xtune_control(const char *cmd, const json_val *req, jw *w, sbuf *err)
         int64_t id = ids ? strtoll(ids, NULL, 10) : json_get_int(req, "proposal", 0);
         char name[400];
         int to = 0, arms = 0;
-        rec *r;
-        if (!g.on) {
-            sb_puts(err, "no tuner (--ext-arm)");
-            return -1;
+        rec *r = NULL;
+        if (g.on) {
+            lock();
+            r = id > 0 ? by_id((uint64_t)id) : NULL;
         }
-        lock();
-        r = id > 0 ? by_id((uint64_t)id) : NULL;
         if (r) {
             to = r->prop;
             arms = r->prop_arms;
@@ -1067,8 +1079,12 @@ int xtune_control(const char *cmd, const json_val *req, jw *w, sbuf *err)
             r->prop = 0;
             g.dirty = 1;
         }
-        unlock();
+        if (g.on)
+            unlock();
         if (!r) {
+            /* the ids are one sequence: the treatment's (--ext-auto) */
+            if (id > 0 && xtreat_decide((uint64_t)id, approve, w))
+                return 1;
             sb_printf(err, "no proposal %lld (ext_proposals lists them)", (long long)id);
             return -1;
         }

@@ -11,6 +11,7 @@
 #include "detect.h"
 #include "log.h"
 #include "policy.h"
+#include "treat.h"
 #include "nflog.h"
 #include "pkt.h"
 #include "wdsniff.h"
@@ -24,7 +25,7 @@
 #define NFLOG_RANGE 2048 /* bytes of each packet: a ClientHello, a redirect's head */
 
 static struct {
-    int on;
+    int on, mode;
     uint16_t group;
     int first;
     xdet_config dc;
@@ -41,6 +42,7 @@ int xauto_on(void) { return g.on; }
 void xauto_reset(void)
 {
     xauto_close();
+    xtreat_stop();
     memset(&g, 0, sizeof(g));
 }
 
@@ -58,12 +60,14 @@ int xauto_parse(const args_t *a, fw_config *c, sbuf *err)
             }
         return 0;
     }
-    if (!strcmp(s, "propose") || !strcmp(s, "apply")) {
-        sb_printf(err, "--ext-auto %s is not there yet: observe", s);
-        return -1;
-    }
-    if (strcmp(s, "observe")) {
-        sb_printf(err, "bad --ext-auto %s (observe)", s);
+    if (!strcmp(s, "observe"))
+        g.mode = XTR_OFF;
+    else if (!strcmp(s, "propose"))
+        g.mode = XTR_PROPOSE;
+    else if (!strcmp(s, "apply"))
+        g.mode = XTR_APPLY;
+    else {
+        sb_printf(err, "bad --ext-auto %s (observe, propose, apply)", s);
         return -1;
     }
     if (c->forward || c->server_side) {
@@ -80,6 +84,8 @@ int xauto_parse(const args_t *a, fw_config *c, sbuf *err)
     if (arg_int(a, "ext-observe-first", XAUTO_FIRST, 4, 1000, &v) < 0)
         return -1;
     g.first = (int)v;
+    if (xtreat_start(g.mode, err) < 0)
+        return -1;
     xdet_config_default(&g.dc);
     g.on = 1;
     if (FW_WINDOWS) {
@@ -106,6 +112,7 @@ static void on_flow(void *ud, const xdet_flow_ev *ev)
 {
     char c[64], s[64];
     (void)ud;
+    xtreat_outcome(ev, plat_now_ms());
     if (ev->ok)
         return;
     addr(ev->f, 0, c, sizeof(c));
@@ -130,11 +137,14 @@ static void on_flow(void *ud, const xdet_flow_ev *ev)
 
 static void on_key(void *ud, const xdet_key_ev *ev)
 {
+    int owned;
     (void)ud;
+    /* the treatment first: a key in it stays impaired in the policy */
+    owned = xtreat_key(ev, plat_now_ms());
     /* the policy the workers read (surgical path: an impaired key keeps
      * its connections in the queue) */
     if (!ev->class_change) {
-        xpol_set(ev->key, ev->impaired ? XPOL_IMPAIRED : XPOL_HEALTHY);
+        xpol_set(ev->key, ev->impaired || owned ? XPOL_IMPAIRED : XPOL_HEALTHY);
         xpol_publish();
     }
     if (ev->impaired)
@@ -324,6 +334,7 @@ void xauto_tick(uint64_t now)
         return;
     g.t_tick = now;
     xdet_tick(g.d, now, g.cn ? on_req : NULL, &full);
+    xtreat_tick(now);
 }
 
 static void read_counters(void)
@@ -395,9 +406,11 @@ void xauto_ready(const plat_pollfd *fds, size_t n)
 void xauto_status(jw *w)
 {
     xdet_stats s;
-    jw_kstr(w, "auto", g.on ? "observe" : "off");
+    static const char *const mode[] = {"observe", "propose", "apply"};
+    jw_kstr(w, "auto", g.on ? mode[g.mode] : "off");
     if (!g.on)
         return;
+    xtreat_status(w);
     memset(&s, 0, sizeof(s));
     if (g.d)
         xdet_get_stats(g.d, &s);
@@ -431,4 +444,5 @@ void xauto_keys(jw *w)
         xdet_keys_json(g.d, w, 0);
     else
         jw_arr(w), jw_arr_end(w);
+    xtreat_keys(w, 256);
 }

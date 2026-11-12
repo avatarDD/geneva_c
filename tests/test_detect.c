@@ -20,6 +20,8 @@
 #  include "ext/detect.h"
 #  include "ext/ipcache.h"
 #  include "ext/nflog.h"
+#  include "ext/treat.h"
+#  include "ext/xact.h"
 
 enum { F = 1, S = 2, R = 4, P = 8, A = 16 };
 
@@ -319,7 +321,7 @@ TEST(detect_rst)
         CHECK_INT(changed, 1);
     }
     /* a RST after the server's answer, with its TTL: a short exchange
-     * ended, no class; with another TTL it is injected */
+     * ended, a success (X11c); with another TTL it is injected */
     f.srv = 12;
     for (int i = 0; i < 2; i++) {
         hs(d, &f);
@@ -331,8 +333,25 @@ TEST(detect_rst)
         f.cport++;
     }
     CHECK_INT(r.flows_bad, 8);
+    CHECK_INT(r.flows_ok, 1);
     CHECK_INT(r.last_cls, XC_RST_INJECT);
     r.flows_bad = 7;
+    r.flows_ok = 0;
+    /* a short answer that ends with a FIN: a success; a FIN without data
+     * says nothing */
+    f.srv = 13;
+    hs(d, &f);
+    feed(d, b, mk(b, &f, 0, P | A, CISN + 1, SISN + 1, "hello", 5));
+    feed(d, b, mk(b, &f, 1, P | A, SISN + 1, CISN + 6, "answer", 6));
+    CHECK_INT(r.flows_ok, 0);
+    feed(d, b, mk(b, &f, 1, F | A, SISN + 7, CISN + 6, NULL, 0));
+    CHECK_INT(r.flows_ok, 1);
+    f.cport++;
+    hs(d, &f);
+    feed(d, b, mk(b, &f, 1, F | A, SISN + 1, CISN + 1, NULL, 0));
+    CHECK_INT(r.flows_ok, 1);
+    f.cport++;
+    r.flows_ok = 0;
     /* a RST past incoming_maxseq is not one: the flow already succeeded */
     f.srv = 5;
     hs(d, &f);
@@ -1180,9 +1199,16 @@ TEST(detect_options)
         CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", "--ext-nflog-group", "5"), -1);
         CHECK_STR(e.data, "--ext-nflog-group: Windows observes through WinDivert");
     }
-    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", NULL, NULL), -1);
-    CHECK_STR(e.data, "--ext-auto apply is not there yet: observe");
+    strategy_set_xact(&xact_ops); /* the treatment's arms */
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", NULL, NULL), 0);
+    CHECK_INT(xtreat_mode(), XTR_APPLY);
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "propose", NULL, NULL), 0);
+    CHECK_INT(xtreat_mode(), XTR_PROPOSE);
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", NULL, NULL), 0);
+    CHECK_INT(xtreat_mode(), XTR_OFF);
+    strategy_set_xact(NULL);
     CHECK_INT(auto_parse(&c, &e, "--ext-auto", "watch", NULL, NULL), -1);
+    CHECK_STR(e.data, "bad --ext-auto watch (observe, propose, apply)");
     CHECK_INT(auto_parse(&c, &e, "--ext-nflog-group", "5", NULL, NULL), -1);
     CHECK_STR(e.data, "--ext-nflog-group is for --ext-auto");
     xauto_reset();
