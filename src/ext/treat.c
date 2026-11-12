@@ -518,7 +518,9 @@ void xtreat_outcome(const xdet_flow_ev *ev, uint64_t now_ms)
     const ct_flow *f = ev->f;
     tflow *t;
     tnews nw;
-    if (!g.mode || !f)
+    /* a provisional success (the key waits for the stricter one): the
+     * flow's next event decides */
+    if (!g.mode || !f || (ev->ok && ev->provisional))
         return;
     memset(&nw, 0, sizeof(nw));
     plat_mutex_lock(&g.lock);

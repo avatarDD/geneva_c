@@ -226,6 +226,39 @@ TEST(treat_apply)
     sb_free(&e);
 }
 
+/* FREEZE_N: a provisional success waits for the flow's next event */
+TEST(treat_provisional)
+{
+    sbuf e;
+    ct_flow f;
+    xdet_flow_ev ev;
+    char out[2000], want[64];
+    int a;
+    sb_init(&e);
+    strategy_set_xact(&xact_ops);
+    CHECK_INT(xtreat_start(XTR_APPLY, &e), 0);
+    CHECK_INT(key("10.9.9.2", XK_IP, 1, XC_FREEZE, 1000), 1);
+    mkflow(&f, 0, 9, 50000);
+    a = xtreat_flow(&f, NULL, 1000);
+    CHECK(a >= 0 && a < 5);
+    memset(&ev, 0, sizeof(ev));
+    ev.f = &f;
+    ev.ok = 1;
+    ev.provisional = 1;
+    xtreat_outcome(&ev, 1100);
+    snprintf(want, sizeof(want), "{\"arm\":%d,\"tries\":0,\"ok\":0}", a + 1);
+    text(xtreat_keys, out, sizeof(out));
+    CHECK(strstr(out, want) != NULL);
+    ev.provisional = 0; /* "the stricter success" */
+    xtreat_outcome(&ev, 1200);
+    snprintf(want, sizeof(want), "{\"arm\":%d,\"tries\":1,\"ok\":1}", a + 1);
+    text(xtreat_keys, out, sizeof(out));
+    CHECK(strstr(out, want) != NULL);
+    xtreat_stop();
+    strategy_set_xact(NULL);
+    sb_free(&e);
+}
+
 /* 4096 keys: no more until one is healthy again (its record makes room) */
 TEST(treat_full)
 {
@@ -346,6 +379,7 @@ void suite_treat(void)
 {
     RUN(treat_apply);
     RUN(treat_propose);
+    RUN(treat_provisional);
     RUN(treat_full);
 }
 

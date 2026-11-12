@@ -971,6 +971,36 @@ treat_case 14 "" ultrasurf.example 'https ultrasurf.example' 0
 treat_case 14 "" ultrasurf.example 'https ultrasurf.example' 0 --ext-workers 2
 treat_case 15 "" ultrasurf.example 'https ultrasurf.example' 0
 treat_case 16 "--forbidden google" 10.81.2.2 udpn 2
+# the volume classes: the treated flows must pass the stricter success
+bigw() { http '/big.bin?ultrasurf' --max-time 7; }
+treat_case 12 "--freeze-bytes 20000" 10.81.2.2 bigw "200 300000"
+# 13: the policer at an eighth of the speed through the lab censor (as in
+# auto13); a request is "fast" above three times the policer's rate
+thr() {
+    if [ -z "${TTHR_FAST:-}" ]; then # the capacity C first
+        TTHR_FAST=1
+        ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null --max-time 10 --limit-rate 1000k \
+            http://10.81.2.2/huge.bin > /dev/null
+    fi
+    v=$(ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null -w '%{speed_download}' --max-time 12 \
+        'http://10.81.2.2/huge.bin?ultrasurf' | cut -d. -f1)
+    [ "${v:-0}" -gt $((TR * 3)) ] && echo fast || echo "slow ${v:-0}"
+}
+if on treat || on treat13; then
+    if start_censor 13; then
+        S=$(ip netns exec "$NC" curl --noproxy "*" -s -o /dev/null -w '%{speed_download}' --max-time 10 \
+            --limit-rate 1000k http://10.81.2.2/huge.bin | cut -d. -f1)
+        kill "$CPID" 2>/dev/null
+        wait "$CPID" 2>/dev/null
+        CPID=
+        TR=$((${S:-0} / 8))
+        if [ "$TR" -ge 8000 ]; then
+            treat_case 13 "--rate $TR --burst $((TR / 2))" 10.81.2.2 thr fast
+        else
+            bad "the lab censor lets only $S B/s through: too slow to tell a policer"
+        fi
+    fi
+fi
 treat_case 18 "" ultrasurf.example "http /secret.html -H 'Host: ultrasurf.example'" "200 27"
 treat_case 19 "" 10.81.2.2 "http '/secret.html?ultrasurf'" "200 27"
 treat_case 20 "" 10.81.2.2 "http '/secret.html?ultrasurf'" "200 27"

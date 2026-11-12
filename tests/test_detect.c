@@ -68,7 +68,7 @@ static size_t mk(uint8_t *b, const fl *f, int from_server, unsigned flags, uint3
 /* ---- the sink ---- */
 
 typedef struct {
-    int flows_ok, flows_bad, last_cls;
+    int flows_ok, flows_bad, last_cls, flows_prov;
     int links, link_deg;
     unsigned link_bad, link_active;
     char last_host[64], last_why[128];
@@ -82,7 +82,9 @@ typedef struct {
 static void on_flow(void *ud, const xdet_flow_ev *ev)
 {
     rec *r = ud;
-    if (ev->ok)
+    if (ev->ok && ev->provisional)
+        r->flows_prov++;
+    else if (ev->ok)
         r->flows_ok++;
     else
         r->flows_bad++, r->last_cls = ev->cls;
@@ -579,9 +581,14 @@ TEST(detect_freeze)
     keys_json(d, &s);
     CHECK(strstr(s.data, "{\"key\":\"10.9.20.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"FREEZE_N\","
                          "\"flows\":5,\"fails\":3,\"classes\":{\"FREEZE_N\":3}}") != NULL);
-    /* now a success needs more than twice B (20500) */
+    /* now a success needs more than twice B (20500): the flow's success is
+     * provisional until then */
+    r.flows_ok = r.flows_prov = 0;
     ok_flow(d, &f);
+    CHECK_INT(r.flows_prov, 1);
+    CHECK_INT(r.flows_ok, 0);
     ctr(d, &f, 30000, 0, g_now);
+    CHECK_INT(r.flows_ok, 0);
     keys_json(d, &s);
     CHECK(strstr(s.data, "\"10.9.20.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"FREEZE_N\",\"flows\":5,") !=
           NULL);
@@ -589,6 +596,11 @@ TEST(detect_freeze)
     ok_flow(d, &f);
     ctr(d, &f, 30000, 1, g_now);
     ctr(d, &f, 50000, 1, g_now + 1000);
+    CHECK_INT(r.flows_prov, 2);
+    CHECK_INT(r.flows_ok, 1); /* "the stricter success" */
+    CHECK_STR(r.last_why, "the stricter success");
+    ctr(d, &f, 60000, 1, g_now + 2000);
+    CHECK_INT(r.flows_ok, 1); /* once */
     keys_json(d, &s);
     CHECK(strstr(s.data, "\"10.9.20.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"FREEZE_N\",\"flows\":6,") !=
           NULL);
@@ -659,6 +671,14 @@ TEST(detect_throttle)
     keys_json(d, &s);
     CHECK(strstr(s.data, "\"10.9.31.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"THROTTLE\",\"flows\":3,") !=
           NULL);
+    /* a download over before its first rate window: its mean rate decides */
+    r.flows_ok = 0;
+    ok_flow(d, &f);
+    ctr(d, &f, 2000000, 0, g_now + 500);
+    CHECK_INT(r.flows_ok, 1);
+    CHECK_STR(r.last_why, "the stricter success");
+    f.cport++;
+    g_now += 1000;
     /* a rate that varies is no plateau, nor is one with a burst */
     f.srv = 32;
     {

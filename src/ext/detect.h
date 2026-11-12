@@ -136,6 +136,9 @@ void xdet_config_default(xdet_config *c);
 typedef struct {
     const ct_flow *f;
     int ok;         /* 1 success, 0 failure */
+    int provisional; /* a success a key of the flow waits to see confirmed
+                      * (FREEZE_N, THROTTLE): a later event for the flow
+                      * says "the stricter success" or the failure */
     int cls;        /* XC_* of a failure */
     const char *host; /* NULL: not known */
     const char *why;  /* one line */
