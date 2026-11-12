@@ -24,6 +24,7 @@
 #include "rawsend.h"
 #include "seqtrack.h"
 #include "tuner.h"
+#include "treat.h"
 #include "xact.h"
 #include "xl7.h"
 #include "xtrig.h"
@@ -494,6 +495,7 @@ typedef struct {
     int closed; /* the capture is closed: held packets cannot get a verdict */
     strategy **pst; /* --ext-workers: the worker's copies of the profiles' strategies */
     strategy ***arms; /* ... and of their arms */
+    strategy **tarms; /* ... and of the treatment's (--ext-auto apply) */
 } xworker;
 
 /* prof_st with the worker's copies */
@@ -507,6 +509,21 @@ static strategy *wprof_st(const xworker *x, int i, strategy *cmd, const ct_flow 
     }
     st = prof_st(i, cmd, f);
     return x->pst && st && st != cmd ? x->pst[i] : st;
+}
+
+/* --ext-auto propose|apply: the treatment's arm for flow f of an impaired
+ * key (the profile's strategy when the key is not in treatment or the
+ * profile has its own tuner); 1 when st changed */
+static int flow_treat(const xworker *x, int i, ct_flow *f, strategy **st, uint64_t now)
+{
+    int a;
+    if (!xtreat_mode() || !f || g_server_side || (i >= 0 && g_prof.v[i]->tune))
+        return 0;
+    a = xtreat_flow(f, x->view.host, now);
+    if (a < 0)
+        return 0;
+    *st = x->tarms ? x->tarms[a] : xtreat_arm((size_t)a);
+    return 1;
 }
 
 /* A held packet of a flow the conntrack forgets, or at the end: it goes
@@ -575,6 +592,15 @@ static int xw_open(eng_worker *w, sbuf *err)
                 return -1;
             }
         }
+        if (xtreat_narms()) {
+            x->tarms = xcalloc(xtreat_narms(), sizeof(*x->tarms));
+            for (size_t k = 0; k < xtreat_narms(); k++)
+                if (!(x->tarms[k] = strategy_clone(xtreat_arm(k)))) {
+                    sb_printf(err, "cannot copy the treatment's arms for worker %u", w->id);
+                    xw_close(w);
+                    return -1;
+                }
+        }
     }
     /* one observer for the process, opened before the rules go up */
     return w->id == 0 ? xauto_open(err) : 0;
@@ -613,6 +639,9 @@ static void xw_close(eng_worker *w)
         free(x->arms[i]);
     }
     free(x->arms);
+    for (size_t k = 0; x->tarms && k < xtreat_narms(); k++)
+        strategy_free(x->tarms[k]);
+    free(x->tarms);
     free(x);
     w->x = NULL;
     if (g_threaded && w->id == 0) { /* the threads have ended: no hook runs any more */
@@ -882,6 +911,11 @@ static int xw_packet_in(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, c
             st = c->st = st2;
             bypass = st && c->f && !w->e->paused && xtrig_all_cut(st, dir, c->f);
         }
+        i = i2;
+    }
+    if (has && flow_treat(x, i, c->f, &st, now)) {
+        c->st = st;
+        bypass = c->f && !w->e->paused && xtrig_all_cut(st, dir, c->f);
     }
     if (bypass || (mb && ml && (w->e->paused || !st))) {
         /* (the engine would let the packet go as it came) */

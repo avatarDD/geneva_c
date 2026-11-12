@@ -106,6 +106,8 @@ struct ct_flow {
      * of the key it was picked for (a host name replaces the address) */
     uint8_t xt_arm;
     uint32_t xt_khash;
+    uint8_t xr_arm;     /* --ext-auto treatment: arm+1, 0 none */
+    uint32_t xr_khash;
 
     /* table links */
     ct_flow *hnext, *lprev, *lnext;

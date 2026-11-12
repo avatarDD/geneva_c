@@ -581,6 +581,8 @@ static void tcp_packet(xdet *d, ct_flow *f, int reverse, const gpkt *p, uint64_t
             decide(d, f, 0, XC_RST_INJECT, "a RST with another TTL than the SYN,ACK's", now);
         else if (!f->server.pdcounter)
             decide(d, f, 0, XC_RST_IN, "a RST from the server before its data", now);
+        else
+            decide(d, f, 1, XC_NONE, "the server answered and reset", now);
         return;
     }
     if (p->payload_len && l7_is_http_reply(p->payload, p->payload_len)) {
@@ -588,6 +590,9 @@ static void tcp_packet(xdet *d, ct_flow *f, int reverse, const gpkt *p, uint64_t
         if (host && l7_http_dpi_redirect(p->payload, p->payload_len, host))
             decide(d, f, 0, XC_REDIRECT, "an HTTP redirect to another domain", now);
     }
+    /* a short answer (under incoming_maxseq) that ends: a success too */
+    if (fl & 0x01 && f->server.pdcounter)
+        decide(d, f, 1, XC_NONE, "the server answered and closed", now);
 }
 
 /* ---- DNS ----------------------------------------------------------------------- */

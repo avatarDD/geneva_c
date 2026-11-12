@@ -21,6 +21,7 @@
 # nfqws2 packet by packet.
 # The section "tune" (or tune14, tune18, tunets, tunepropose) runs the tuner (--ext-arm) against 14 and 18,
 # and with NFQWS2_DIR zapret2's circular against 14 for comparison.
+# The section "treat" (or treat14 ... treat20, treatpropose) runs --ext-auto apply|propose against 14-20.
 # The section "xact" (or x14 ... x20 for one censor) runs geneva --ext with x-action strategies (the
 # nfqws2 references as x-actions, and combinators) against 14, 15, 18-20.
 #   tests/e2e/censors_x.sh [path/to/geneva] [censor ... | xact | tune | nfqws2 | diff | posdebug]
@@ -40,7 +41,7 @@ cleanup() {
     [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null
     for n in "$NC" "$NR" "$NS"; do ip netns del "$n" 2>/dev/null; done
     [ -n "${KEEP:-}" ] && cp -r "$WORK" "$KEEP"
-    rm -rf "$WORK"
+    [ -n "${KEEP_WORK:-}" ] && cp -r "$WORK" "$KEEP_WORK"; rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
 
@@ -920,6 +921,107 @@ if [ -n "${NFQWS2_DIR:-}" ] && { on tune || on tune14; }; then
         wait "$CPID" 2>/dev/null
         CPID=
     fi
+fi
+
+# The treatment (stage X11c): geneva run --ext-auto apply finds the key the
+# censor impairs and tries the built-in arms of its class on its new
+# connections until one gets them through (ext_treat "treat"); then 3 of 3
+# get through. 17 has no arm: "untreatable" within 10 flows.
+treat_state() { # key state: 1 when an ext_treat said so
+    grep '"ev":"ext_treat"' "$WORK/tune.jsonl" | grep "\"key\":\"$1\"" | grep -q "\"state\":\"$2\""
+}
+# treat_case NAME "censor options" KEY "request" "expected" [extra options]
+treat_case() {
+    name=$1 copts=$2 key=$3 req=$4 want_ok=$5
+    shift 5
+    on treat || on "treat$name" || return
+    echo "== --ext-auto apply against censor $name${*:+ $*}"
+    start_censor $name $copts || return
+    if tune_start 80,443 --proto tcp,udp --ext-auto apply -s '\/' --rng-seed 1 "$@"; then
+        n=0
+        while [ $n -lt 40 ]; do
+            n=$((n + 1))
+            eval "$req" > /dev/null 2>&1
+            sleep 0.3
+            treat_state "$key" treat && break
+        done
+        if treat_state "$key" treat; then
+            ok "$key treated after $n request(s): $(grep '"ev":"ext_treat"' "$WORK/tune.jsonl" | grep '"state":"treat"' |
+                tail -1 | sed 's/.*"strategy":"\([^"]*\)".*/\1/')"
+            k=0
+            for _ in 1 2 3; do [ "$(eval "$req")" = "$want_ok" ] && k=$((k + 1)); done
+            [ $k = 3 ] && ok "treated: 3 of 3 get through" || bad "treated: $k of 3 get through" "$WORK/tune.log"
+        else
+            bad "$key not treated after $n requests" "$WORK/tune.jsonl"
+            grep -E "treat|auto:" "$WORK/tune.log" | tail -20 | sed 's/^/       /'
+        fi
+        tune_stop
+    fi
+    kill "$CPID" 2>/dev/null
+    wait "$CPID" 2>/dev/null
+    CPID=
+}
+udpn() { # the echoes of the second half of a QUIC flow of four datagrams (the detector's udp_out)
+    UDPN=$((UDPN + 1))
+    ip netns exec "$NC" python3 "$WORK/udp.py" 10.81.2.2 "$DATA/quic_initial_www_google_com.bin" $UDPN > /dev/null
+    ip netns exec "$NC" python3 "$WORK/udp.py" 10.81.2.2 "$DATA/quic_initial_www_google_com.bin" $UDPN
+}
+treat_case 14 "" ultrasurf.example 'https ultrasurf.example' 0
+# two workers: each has its own copies of the arms
+treat_case 14 "" ultrasurf.example 'https ultrasurf.example' 0 --ext-workers 2
+treat_case 15 "" ultrasurf.example 'https ultrasurf.example' 0
+treat_case 16 "--forbidden google" 10.81.2.2 udpn 2
+treat_case 18 "" ultrasurf.example "http /secret.html -H 'Host: ultrasurf.example'" "200 27"
+treat_case 19 "" 10.81.2.2 "http '/secret.html?ultrasurf'" "200 27"
+treat_case 20 "" 10.81.2.2 "http '/secret.html?ultrasurf'" "200 27"
+if on treat || on treat17; then
+    echo "== --ext-auto apply against censor 17: no arm"
+    if start_censor 17 --block-ip 10.81.2.3 --port 80,443 && tune_start 80,443 --proto tcp,udp --ext-auto apply -s '\/'; then
+        n=0
+        while [ $n -lt 10 ]; do
+            n=$((n + 1))
+            https lab.example 10.81.2.3 > /dev/null
+            treat_state 10.81.2.3 untreatable && break
+        done
+        treat_state 10.81.2.3 untreatable && ok "10.81.2.3 untreatable after $n flow(s)" ||
+            bad "10.81.2.3 not untreatable after $n flows" "$WORK/tune.jsonl"
+        tune_stop
+    fi
+    kill "$CPID" 2>/dev/null
+    wait "$CPID" 2>/dev/null
+    CPID=
+fi
+# propose: nothing changes before ctl ext_approve
+if on treat || on treatpropose; then
+    echo "== --ext-auto propose against censor 14"
+    if start_censor 14 && tune_start 80,443 --proto tcp,udp --ext-auto propose -s '\/' --rng-seed 1; then
+        n=0
+        while [ $n -lt 10 ]; do
+            n=$((n + 1))
+            https ultrasurf.example > /dev/null
+            sleep 0.3
+            grep '"ev":"ext_proposal"' "$WORK/tune.jsonl" | grep -q '"kind":"treat"' && break
+        done
+        id=$(grep '"ev":"ext_proposal"' "$WORK/tune.jsonl" | grep '"kind":"treat"' | sed 's/.*"id":\([0-9]*\).*/\1/' | head -1)
+        [ -n "$id" ] && ok "ext_proposal $id after $n request(s)" || bad "no ext_proposal" "$WORK/tune.jsonl"
+        r=$(https ultrasurf.example)
+        [ "$r" != 0 ] && ok "before the consent: blocked ($r)" || bad "treated without consent"
+        ip netns exec "$NC" "$GENEVA" ctl --control "unix:$WORK/tune.sock" ext_approve proposal="${id:-0}" > "$WORK/ctl.out" 2>&1 &&
+            ok "ctl ext_approve" || bad "ctl ext_approve" "$WORK/ctl.out"
+        key=$(grep '"ev":"ext_proposal"' "$WORK/tune.jsonl" | grep '"kind":"treat"' | sed 's/.*"key":"\([^"]*\)".*/\1/' | head -1)
+        n=0
+        while [ $n -lt 40 ]; do
+            n=$((n + 1))
+            https ultrasurf.example > /dev/null
+            sleep 0.3
+            treat_state "$key" treat && break
+        done
+        treat_state "$key" treat && ok "$key treated after $n request(s)" || bad "$key not treated" "$WORK/tune.jsonl"
+        tune_stop
+    fi
+    kill "$CPID" 2>/dev/null
+    wait "$CPID" 2>/dev/null
+    CPID=
 fi
 
 if [ $fails -eq 0 ]; then echo "all passed"; else echo "$fails failure(s)"; fi

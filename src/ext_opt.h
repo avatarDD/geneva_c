@@ -51,12 +51,16 @@
 
 /* --ext-auto (run; src/ext/auto.h) */
 #define EXT_AUTO_OPTS                                                                                         \
-    {"ext-auto", 0, 1, "observe",                                                                             \
-     EXT_HELP("watch the PC's own flows on any port and tell of blocked keys (port, /24 or /48, "           \
+    {"ext-auto", 0, 1, "observe|propose|apply",                                                               \
+     EXT_HELP("observe: watch the PC's own flows on any port and tell of blocked keys (port, /24 or /48, "  \
               "address, host): Linux sees the first packets (NFLOG) and the conntrack's counters "          \
               "(ctnetlink, once a second: freezes, throttling); Windows every packet (a WinDivert "         \
               "sniff handle, the bytes counted itself); events ext_flow, ext_impaired, ext_class, "         \
-              "ext_link, ctl ext_status; traffic is not changed")},                                         \
+              "ext_link, ctl ext_status; traffic is not changed. apply: also treat a blocked address or "   \
+              "host with built-in strategies for its class (TCP: split, disorder, IP fragments; QUIC: a "  \
+              "fake Initial, fragments), Thompson sampling over its connections, the best one kept while " \
+              "it works (events ext_treat); its connections must reach the queue (-p, --proto). propose: " \
+              "the same after ctl ext_approve proposal=N (event ext_proposal, ctl ext_proposals)")},        \
     {"ext-nflog-group", 0, 1, "N", EXT_HELP("Linux: the NFLOG group of --ext-auto (the queue number)")},       \
     {"ext-observe-first", 0, 1, "N",                                                                          \
      EXT_HELP("Linux: --ext-auto's packets of each direction observed per flow (16)")}
