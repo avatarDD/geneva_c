@@ -1066,6 +1066,8 @@ static int xw_control(engine *e, const char *cmd, const json_val *req, jw *w, sb
         }
         return 1;
     }
+    if ((n = xtune_control(cmd, req, w, err)) != 0)
+        return n;
     if (strcmp(cmd, "reload_lists"))
         return 0;
     n = xlists_reload(plat_now_ms(), 1);

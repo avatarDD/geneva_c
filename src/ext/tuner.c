@@ -5,6 +5,7 @@
  */
 #include "tuner.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 #include "l7.h"
 #include "log.h"
 #include "plat.h"
+#include "rng.h"
 
 #ifdef _WIN32
 #  include <ws2tcpip.h>
@@ -32,6 +34,12 @@ struct xtune {
     int nld, reqhost;
     int64_t maxseq, inseq, retrans, udp_out, udp_in;
     int no_rst, no_http_redirect, reset;
+    int ts;          /* the selector: rr (0) or ts (1) */
+    int propose;     /* changes wait for ext_approve */
+    int rr_args;     /* fails, time or final given */
+    double gamma;    /* ts: the discount of older outcomes */
+    double pbest;    /* ts: P(best) that settles the key */
+    int min_succ;    /* ts: ... with at least this many successes */
 };
 
 /* ---- building ------------------------------------------------------------------ */
@@ -47,6 +55,9 @@ static xtune *tnew(xtune **t)
         (*t)->retrans = 3;
         (*t)->udp_out = 4;
         (*t)->udp_in = 1;
+        (*t)->gamma = 0.98;
+        (*t)->pbest = 0.95;
+        (*t)->min_succ = 5;
     }
     return *t;
 }
@@ -75,6 +86,23 @@ static int num(const char *k, const char *v, int64_t lo, int64_t hi, int64_t *ou
     return 0;
 }
 
+static int numf(const char *k, const char *v, double lo, double hi, double *out, sbuf *err)
+{
+    char *end;
+    double n;
+    if (!v || !*v) {
+        sb_printf(err, "--ext-tune: %s needs a number", k);
+        return -1;
+    }
+    n = strtod(v, &end);
+    if (*end || !(n >= lo && n <= hi)) {
+        sb_printf(err, "--ext-tune: %s=%s out of range [%g, %g]", k, v, lo, hi);
+        return -1;
+    }
+    *out = n;
+    return 0;
+}
+
 int xtune_set(xtune **t, const char *args, sbuf *err)
 {
     xtune *x = tnew(t);
@@ -89,19 +117,16 @@ int xtune_set(xtune **t, const char *args, sbuf *err)
     next = strchr(s, ':');
     if (next)
         *next++ = 0;
-    if (!strcmp(s, "ts")) {
-        sb_puts(err, "--ext-tune ts is not there yet: rr");
-        free(s);
-        return -1;
-    }
-    if (strcmp(s, "rr")) {
-        sb_printf(err, "--ext-tune: unknown selector \"%s\" (rr)", s);
+    x->ts = !strcmp(s, "ts");
+    if (strcmp(s, "rr") && !x->ts) {
+        sb_printf(err, "--ext-tune: unknown selector \"%s\" (rr, ts)", s);
         free(s);
         return -1;
     }
     for (tok = next; tok && !rc; tok = next) {
         char *v;
         int64_t n;
+        double d;
         next = strchr(tok, ':');
         if (next)
             *next++ = 0;
@@ -125,9 +150,21 @@ int xtune_set(xtune **t, const char *args, sbuf *err)
         field = 1;                                                                                                 \
         continue;                                                                                                  \
     }
+#define NUMF(name, lo, hi, field)                                                                                  \
+    if (!strcmp(tok, name)) {                                                                                      \
+        if ((rc = numf(name, v, lo, hi, &d, err)) == 0)                                                            \
+            field = d;                                                                                             \
+        continue;                                                                                                  \
+    }
+        if (!strcmp(tok, "fails") || !strcmp(tok, "time") || !strcmp(tok, "final"))
+            x->rr_args = 1;
         NUM("fails", 1, 1000, x->fails)
         NUM("time", 1, 86400 * 30, x->time_s)
         NUM("final", 1, XT_MAX_ARMS, x->final)
+        NUMF("gamma", 0.5, 1, x->gamma)
+        NUMF("p", 0.5, 1, x->pbest)
+        NUM("min_succ", 0, 1000000, x->min_succ)
+        FLAG("propose", x->propose)
         NUM("nld", 0, 127, x->nld)
         NUM("maxseq", 0, 0x7fffffff, x->maxseq)
         NUM("inseq", 0, 0x7fffffff, x->inseq)
@@ -139,6 +176,7 @@ int xtune_set(xtune **t, const char *args, sbuf *err)
         FLAG("no_http_redirect", x->no_http_redirect)
         FLAG("reset", x->reset)
 #undef NUM
+#undef NUMF
 #undef FLAG
         if (!strcmp(tok, "key")) {
             if (!v || !*v || strlen(v) > 64 || strpbrk(v, "/\"\\")) {
@@ -154,6 +192,10 @@ int xtune_set(xtune **t, const char *args, sbuf *err)
         rc = -1;
     }
     free(s);
+    if (!rc && x->ts && x->rr_args) {
+        sb_puts(err, "--ext-tune: fails, time and final are rr's (ts weighs every outcome)");
+        rc = -1;
+    }
     return rc;
 }
 
@@ -235,9 +277,16 @@ strategy *xtune_arm(const xtune *t, size_t i) { return t && t->arm && i < t->n ?
 typedef struct rec {
     struct rec *next;
     char *name; /* "TABLE/HOSTKEY" */
-    int arm;    /* 1-based */
+    int arm;    /* 1-based: rr's current one; ts with propose: the approved one */
     int counter; /* 0: none (nil) */
     uint64_t tlast; /* failure_time_last, seconds (0: none) */
+    /* ts: discounted successes and failures per arm, Beta(1 + A, 1 + B) */
+    double *A, *B;
+    int na;
+    int treat;         /* ts: the arm the key settled on (1-based), 0: exploring */
+    uint64_t rejected; /* propose: the arms refused for the key (bit arm - 1) */
+    int prop, prop_from, prop_arms; /* propose: a pending change (prop 0: none) */
+    uint64_t prop_id;
 } rec;
 
 #define NBUCKETS 4096
@@ -251,14 +300,29 @@ static struct {
     int dirty;
     uint64_t t_saved;
     uint64_t rotations;
+    uint64_t next_id; /* the proposals' ids */
 } g;
 
-static unsigned hash(const char *s)
+static uint32_t hash32(const char *s)
 {
-    unsigned h = 2166136261u;
+    uint32_t h = 2166136261u;
     for (; *s; s++)
         h = (h ^ (uint8_t)*s) * 16777619u;
-    return h % NBUCKETS;
+    return h;
+}
+
+static unsigned hash(const char *s) { return hash32(s) % NBUCKETS; }
+
+/* ts: room for n arms */
+static void ts_room(rec *r, int n)
+{
+    if (r->na >= n)
+        return;
+    r->A = xrealloc(r->A, (size_t)n * sizeof(*r->A));
+    r->B = xrealloc(r->B, (size_t)n * sizeof(*r->B));
+    for (int i = r->na; i < n; i++)
+        r->A[i] = r->B[i] = 0;
+    r->na = n;
 }
 
 static rec *rec_get(const char *name, int create)
@@ -286,6 +350,8 @@ static void recs_free(void)
         for (; r; r = n) {
             n = r->next;
             free(r->name);
+            free(r->A);
+            free(r->B);
             free(r);
         }
         g.b[i] = NULL;
@@ -326,10 +392,27 @@ static void load(const char *text)
         json_val *v = json_parse(s, &e);
         if (v) {
             const char *k = json_get_str(v, "key", NULL);
-            int64_t arm = json_get_int(v, "arm", 0);
+            int64_t arm = json_get_int(v, "arm", 0), treat = json_get_int(v, "treat", 0);
+            const json_val *a = json_get(v, "a"), *b = json_get(v, "b");
             rec *r;
-            if (k && arm >= 1 && arm <= XT_MAX_ARMS && strchr(k, '/') && (r = rec_get(k, 1)))
+            if (k && arm >= 1 && arm <= XT_MAX_ARMS && strchr(k, '/') && (r = rec_get(k, 1))) {
+                const json_val *rj = json_get(v, "rejected");
                 r->arm = (int)arm;
+                for (size_t i = 0; rj && rj->type == JSON_ARR && i < rj->n; i++)
+                    if (rj->items[i]->type == JSON_NUM && rj->items[i]->num >= 1 && rj->items[i]->num <= XT_MAX_ARMS)
+                        r->rejected |= 1ULL << ((int)rj->items[i]->num - 1);
+                if (a && b && a->type == JSON_ARR && b->type == JSON_ARR && a->n == b->n && a->n &&
+                    a->n <= XT_MAX_ARMS) {
+                    ts_room(r, (int)a->n);
+                    for (size_t i = 0; i < a->n; i++) {
+                        double x = a->items[i]->num, y = b->items[i]->num;
+                        r->A[i] = a->items[i]->type == JSON_NUM && x >= 0 && x < 1e6 ? x : 0;
+                        r->B[i] = b->items[i]->type == JSON_NUM && y >= 0 && y < 1e6 ? y : 0;
+                    }
+                    if (treat >= 1 && treat <= (int64_t)a->n)
+                        r->treat = (int)treat;
+                }
+            }
             json_free(v);
         }
         free(s);
@@ -361,6 +444,28 @@ static void save(void)
             jw_obj(&w);
             jw_kstr(&w, "key", r->name);
             jw_kint(&w, "arm", r->arm);
+            if (r->na) {
+                jw_key(&w, "a");
+                jw_arr(&w);
+                for (int k = 0; k < r->na; k++)
+                    jw_dbl(&w, r->A[k]);
+                jw_arr_end(&w);
+                jw_key(&w, "b");
+                jw_arr(&w);
+                for (int k = 0; k < r->na; k++)
+                    jw_dbl(&w, r->B[k]);
+                jw_arr_end(&w);
+                if (r->treat)
+                    jw_kint(&w, "treat", r->treat);
+            }
+            if (r->rejected) {
+                jw_key(&w, "rejected");
+                jw_arr(&w);
+                for (int k = 0; k < XT_MAX_ARMS; k++)
+                    if (r->rejected >> k & 1)
+                        jw_int(&w, k + 1);
+                jw_arr_end(&w);
+            }
             jw_obj_end(&w);
             sb_putc(&s, '\n');
         }
@@ -526,19 +631,259 @@ static int failure(const xtune *t, const xtune_pkt *k)
     return 0;
 }
 
-/* after the lock: the log and the event take their own */
-static void rotated(const xtune *t, const char *name, int arm)
+/* ---- ts: Thompson sampling ---------------------------------------------------------- */
+
+#define XT_PI 3.14159265358979323846
+#define XT_DRAWS 200 /* the Monte Carlo draws of P(best) */
+
+static double gauss(void)
 {
-    LOGI("tuner", "%s: arm %d of %zu%s", name, arm, t->n, arm == t->final ? " (final)" : "");
+    double u1 = 1.0 - rng_real(), u2 = rng_real();
+    return sqrt(-2.0 * log(u1)) * cos(2.0 * XT_PI * u2);
+}
+
+/* Gamma(a, 1) for a >= 1 (Marsaglia and Tsang) */
+static double gamma_ge1(double a)
+{
+    double d = a - 1.0 / 3.0, c = 1.0 / sqrt(9.0 * d);
+    for (;;) {
+        double x, v, u;
+        do {
+            x = gauss();
+            v = 1.0 + c * x;
+        } while (v <= 0);
+        v = v * v * v;
+        u = 1.0 - rng_real();
+        if (u < 1.0 - 0.0331 * x * x * x * x || log(u) < 0.5 * x * x + d * (1.0 - v + log(v)))
+            return d * v;
+    }
+}
+
+static double beta_draw(double a, double b)
+{
+    double x = gamma_ge1(a), y = gamma_ge1(b);
+    return x / (x + y);
+}
+
+static int allowed(const rec *r, int arm, int except) { return arm != except && !(r->rejected >> (arm - 1) & 1); }
+
+/* One Thompson draw over the arms of r but except (1-based); 0: none left */
+static int ts_pick(const xtune *t, rec *r, int except)
+{
+    double best = -1;
+    int arm = 0;
+    ts_room(r, (int)t->n);
+    for (int i = 1; i <= (int)t->n; i++) {
+        double x;
+        if (!allowed(r, i, except))
+            continue;
+        x = beta_draw(1.0 + r->A[i - 1], 1.0 + r->B[i - 1]);
+        if (x > best)
+            best = x, arm = i;
+    }
+    return arm;
+}
+
+/* P(each arm is the best one), by XT_DRAWS draws: the most likely arm
+ * and its probability */
+static int ts_best(const xtune *t, rec *r, double *p)
+{
+    int wins[XT_MAX_ARMS] = {0}, top = 0;
+    for (int k = 0; k < XT_DRAWS; k++) {
+        int a = ts_pick(t, r, 0);
+        if (a)
+            wins[a - 1]++;
+    }
+    for (int i = 1; i < (int)t->n; i++)
+        if (wins[i] > wins[top])
+            top = i;
+    *p = (double)wins[top] / XT_DRAWS;
+    return top + 1;
+}
+
+/* what changed under the lock, told after it */
+typedef struct {
+    int arm;      /* the key's arm changed to this (ext_arm) */
+    uint64_t pid; /* a proposal was made */
+    int pfrom, pto;
+    int tuned;    /* 1: settled on tuned_arm, 2: exploring again */
+    int tuned_arm;
+    double p;
+} news;
+
+/* An outcome of arm (1-based) on key r: older ones weigh gamma times less */
+static void ts_outcome(const xtune *t, rec *r, int arm, int ok, news *nw)
+{
+    double p;
+    int best;
+    ts_room(r, (int)t->n);
+    for (int i = 0; i < r->na; i++) {
+        r->A[i] *= t->gamma;
+        r->B[i] *= t->gamma;
+    }
+    if (ok)
+        r->A[arm - 1] += 1;
+    else
+        r->B[arm - 1] += 1;
+    g.dirty = 1;
+    if (t->propose)
+        return; /* only the approved arm runs: nothing to settle */
+    best = ts_best(t, r, &p);
+    if (!r->treat && p >= t->pbest && r->A[best - 1] >= t->min_succ) {
+        r->treat = best;
+        nw->tuned = 1, nw->tuned_arm = best, nw->p = p;
+    } else if (r->treat && (best != r->treat || p < 0.5)) {
+        nw->tuned = 2, nw->tuned_arm = r->treat, nw->p = p;
+        r->treat = 0;
+    }
+}
+
+static void propose(rec *r, int to, size_t arms, news *nw)
+{
+    if (r->prop || !to || to == r->arm)
+        return; /* one at a time; nothing else to try */
+    r->prop = to;
+    r->prop_from = r->arm;
+    r->prop_arms = (int)arms;
+    r->prop_id = ++g.next_id;
+    nw->pid = r->prop_id, nw->pfrom = r->arm, nw->pto = to;
+}
+
+/* after the lock: the log and the event take their own */
+static void arm_event(const char *name, int arm, size_t arms, int final)
+{
+    LOGI("tuner", "%s: arm %d of %zu%s", name, arm, arms, final ? " (final)" : "");
     if (ev_enabled()) {
         ev_t e;
         ev_begin(&e, "ext_arm");
         jw_kstr(&e.w, "key", name);
         jw_kint(&e.w, "arm", arm);
-        jw_kuint(&e.w, "arms", t->n);
-        jw_kbool(&e.w, "final", arm == t->final);
+        jw_kuint(&e.w, "arms", arms);
+        jw_kbool(&e.w, "final", final);
         ev_emit(&e);
     }
+}
+
+static void tell(const xtune *t, const char *name, const news *nw)
+{
+    if (nw->arm)
+        arm_event(name, nw->arm, t->n, nw->arm == t->final);
+    if (nw->pid) {
+        LOGI("tuner", "%s: proposal %llu: arm %d instead of %d", name, (unsigned long long)nw->pid, nw->pto,
+             nw->pfrom);
+        if (ev_enabled()) {
+            ev_t e;
+            ev_begin(&e, "ext_proposal");
+            jw_kuint(&e.w, "id", nw->pid);
+            jw_kstr(&e.w, "key", name);
+            jw_kint(&e.w, "from", nw->pfrom);
+            jw_kint(&e.w, "to", nw->pto);
+            jw_kuint(&e.w, "arms", t->n);
+            jw_kstr(&e.w, "selector", t->ts ? "ts" : "rr");
+            ev_emit(&e);
+        }
+    }
+    if (nw->tuned) {
+        LOGI("tuner", "%s: %s arm %d (P(best) %.2f)", name, nw->tuned == 1 ? "settled on" : "explores again, was",
+             nw->tuned_arm, nw->p);
+        if (ev_enabled()) {
+            ev_t e;
+            ev_begin(&e, "ext_tuned");
+            jw_kstr(&e.w, "key", name);
+            jw_kint(&e.w, "arm", nw->tuned == 1 ? nw->tuned_arm : 0);
+            jw_kdbl(&e.w, "p", nw->p);
+            ev_emit(&e);
+        }
+    }
+}
+
+/* the connection's outcome by the detectors: 1 success, -1 failure (a
+ * new one: one per connection), 0 none yet or counted before */
+static int outcome(const xtune *t, const xtune_pkt *k, const char *name)
+{
+    ct_flow *f = k->f;
+    if (f->xt_nocheck)
+        return 0;
+    if (success(t, k)) {
+        f->xt_nocheck = 1;
+        LOGD("tuner", "%s: success detected", name);
+        return 1;
+    }
+    if (failure(t, k)) {
+        f->xt_nocheck = 1;
+        LOGD("tuner", "%s: failure detected", name);
+        if (!f->xt_failure) {
+            f->xt_failure = 1;
+            return -1;
+        }
+        LOGD("tuner", "%s: duplicate failure in the same connection, not counted", name);
+    }
+    return 0;
+}
+
+/* circular: rr's step under the lock */
+static void rr_step(const xtune *t, rec *r, const xtune_pkt *k, const char *name, news *nw)
+{
+    int o;
+    if (t->final == r->arm)
+        return;
+    o = outcome(t, k, name);
+    if (o > 0) {
+        r->counter = 0;
+    } else if (o < 0) {
+        /* automate_failure_counter */
+        uint64_t tnow = k->now_ms / 1000;
+        if (!r->tlast)
+            r->tlast = tnow;
+        if (r->counter && tnow > r->tlast + (uint64_t)t->time_s)
+            r->counter = 0;
+        r->counter++;
+        r->tlast = tnow;
+        LOGD("tuner", "%s: failure counter %d/%d", name, r->counter, t->fails);
+        if (r->counter >= t->fails) {
+            int next = r->arm;
+            r->counter = 0;
+            /* the next arm; with propose, past the refused ones */
+            for (size_t i = 0; i < t->n; i++) {
+                next = next % (int)t->n + 1;
+                if (!t->propose || allowed(r, next, 0))
+                    break;
+            }
+            if (t->propose) {
+                propose(r, next, t->n, nw);
+            } else {
+                r->arm = next;
+                g.rotations++;
+                g.dirty = 1;
+                nw->arm = next;
+            }
+        }
+    }
+}
+
+/* ts's step under the lock: the connection's arm (1-based) */
+static int ts_step(const xtune *t, rec *r, const xtune_pkt *k, const char *name, uint32_t kh, news *nw)
+{
+    ct_flow *f = k->f;
+    int o, arm;
+    if (t->propose) {
+        f->xt_arm = (uint8_t)r->arm;
+    } else if (!f->xt_arm || f->xt_khash != kh) {
+        /* the connection's arm, once per key: settled, or a draw */
+        f->xt_arm = (uint8_t)(r->treat ? r->treat : ts_pick(t, r, 0));
+        if (!f->xt_arm)
+            f->xt_arm = 1;
+        LOGD("tuner", "%s: the connection runs arm %d", name, f->xt_arm);
+    }
+    f->xt_khash = kh;
+    arm = f->xt_arm;
+    o = outcome(t, k, name);
+    if (o) {
+        ts_outcome(t, r, arm, o > 0, nw);
+        if (o < 0 && t->propose && arm == r->arm)
+            propose(r, ts_pick(t, r, arm), t->n, nw);
+    }
+    return arm;
 }
 
 int xtune_packet(xtune *t, const xtune_pkt *k)
@@ -546,9 +891,11 @@ int xtune_packet(xtune *t, const xtune_pkt *k)
     char name[400];
     ct_flow *f = k->f;
     rec *r;
-    int arm, rot = 0;
+    int arm;
+    news nw;
     if (!t || !f || !full_name(t, f, name, sizeof(name)))
         return -1;
+    memset(&nw, 0, sizeof(nw));
     lock();
     r = rec_get(name, 1);
     if (!r) {
@@ -557,40 +904,17 @@ int xtune_packet(xtune *t, const xtune_pkt *k)
     }
     if (r->arm > (int)t->n)
         r->arm = 1; /* from a state file of more arms */
-    if (t->final != r->arm && !f->xt_nocheck) {
-        if (success(t, k)) {
-            f->xt_nocheck = 1;
-            LOGD("tuner", "%s: success detected", name);
-            r->counter = 0;
-        } else if (failure(t, k)) {
-            /* automate_failure_counter */
-            uint64_t tnow = k->now_ms / 1000;
-            f->xt_nocheck = 1;
-            LOGD("tuner", "%s: failure detected", name);
-            if (!f->xt_failure) {
-                f->xt_failure = 1;
-                if (!r->tlast)
-                    r->tlast = tnow;
-                if (r->counter && tnow > r->tlast + (uint64_t)t->time_s)
-                    r->counter = 0;
-                r->counter++;
-                r->tlast = tnow;
-                LOGD("tuner", "%s: failure counter %d/%d", name, r->counter, t->fails);
-                if (r->counter >= t->fails) {
-                    r->counter = 0;
-                    r->arm = r->arm % (int)t->n + 1;
-                    g.rotations++;
-                    g.dirty = 1;
-                    rot = 1;
-                }
-            }
-        }
+    if (r->treat > (int)t->n)
+        r->treat = 0;
+    if (t->ts) {
+        arm = ts_step(t, r, k, name, hash32(name), &nw);
+    } else {
+        rr_step(t, r, k, name, &nw);
+        arm = r->arm;
     }
-    arm = r->arm - 1;
     unlock();
-    if (rot)
-        rotated(t, name, arm + 1);
-    return arm;
+    tell(t, name, &nw);
+    return arm - 1;
 }
 
 int xtune_current(xtune *t, const ct_flow *f)
@@ -600,9 +924,13 @@ int xtune_current(xtune *t, const ct_flow *f)
     int arm = 0;
     if (!t || !f || !full_name(t, f, name, sizeof(name)))
         return -1;
+    if (t->ts && !t->propose && f->xt_arm && f->xt_khash == hash32(name) && f->xt_arm <= t->n)
+        return f->xt_arm - 1; /* the connection keeps its draw */
     lock();
     r = rec_get(name, 0);
-    if (r && r->arm <= (int)t->n)
+    if (r && t->ts && !t->propose)
+        arm = r->treat && r->treat <= (int)t->n ? r->treat - 1 : 0;
+    else if (r && r->arm <= (int)t->n)
         arm = r->arm - 1;
     unlock();
     return arm;
@@ -612,13 +940,21 @@ int xtune_current(xtune *t, const ct_flow *f)
 
 void xtune_status(jw *w)
 {
+    size_t props = 0, treated = 0;
     if (!g.on)
         return;
     lock();
+    for (int i = 0; i < NBUCKETS; i++)
+        for (rec *r = g.b[i]; r; r = r->next) {
+            props += r->prop != 0;
+            treated += r->treat != 0;
+        }
     jw_key(w, "tuner");
     jw_obj(w);
     jw_kuint(w, "keys", g.n);
     jw_kuint(w, "rotations", g.rotations);
+    jw_kuint(w, "proposals", props);
+    jw_kuint(w, "settled", treated);
     if (g.state)
         jw_kstr(w, "state", g.state);
     jw_obj_end(w);
@@ -639,8 +975,112 @@ void xtune_keys(jw *w, size_t max)
             jw_kstr(w, "key", r->name);
             jw_kint(w, "arm", r->arm);
             jw_kint(w, "fails", r->counter);
+            if (r->na) {
+                jw_key(w, "mean"); /* ts: the posterior mean of each arm's success */
+                jw_arr(w);
+                for (int k = 0; k < r->na; k++)
+                    jw_dbl(w, floor((1.0 + r->A[k]) / (2.0 + r->A[k] + r->B[k]) * 1000 + 0.5) / 1000);
+                jw_arr_end(w);
+                jw_kint(w, "settled", r->treat);
+            }
+            if (r->prop) {
+                jw_key(w, "proposal");
+                jw_obj(w);
+                jw_kuint(w, "id", r->prop_id);
+                jw_kint(w, "to", r->prop);
+                jw_obj_end(w);
+            }
+            if (r->rejected) {
+                jw_key(w, "rejected");
+                jw_arr(w);
+                for (int k = 0; k < XT_MAX_ARMS; k++)
+                    if (r->rejected >> k & 1)
+                        jw_int(w, k + 1);
+                jw_arr_end(w);
+            }
             jw_obj_end(w);
         }
     jw_arr_end(w);
     unlock();
+}
+
+static rec *by_id(uint64_t id)
+{
+    for (int i = 0; i < NBUCKETS; i++)
+        for (rec *r = g.b[i]; r; r = r->next)
+            if (r->prop && r->prop_id == id)
+                return r;
+    return NULL;
+}
+
+int xtune_control(const char *cmd, const json_val *req, jw *w, sbuf *err)
+{
+    int approve = !strcmp(cmd, "ext_approve");
+    if (!strcmp(cmd, "ext_proposals")) {
+        if (!w)
+            return 1;
+        jw_key(w, "proposals");
+        jw_arr(w);
+        if (g.on) {
+            lock();
+            for (int i = 0; i < NBUCKETS; i++)
+                for (rec *r = g.b[i]; r; r = r->next)
+                    if (r->prop) {
+                        jw_obj(w);
+                        jw_kuint(w, "id", r->prop_id);
+                        jw_kstr(w, "key", r->name);
+                        jw_kint(w, "from", r->prop_from);
+                        jw_kint(w, "to", r->prop);
+                        jw_kint(w, "arms", r->prop_arms);
+                        jw_obj_end(w);
+                    }
+            unlock();
+        }
+        jw_arr_end(w);
+        return 1;
+    }
+    if (approve || !strcmp(cmd, "ext_reject")) {
+        /* "proposal": a number, or a string of one ("geneva ctl ext_approve
+         * proposal=3"); "id" is the request's own */
+        const char *ids = json_get_str(req, "proposal", NULL);
+        int64_t id = ids ? strtoll(ids, NULL, 10) : json_get_int(req, "proposal", 0);
+        char name[400];
+        int to = 0, arms = 0;
+        rec *r;
+        if (!g.on) {
+            sb_puts(err, "no tuner (--ext-arm)");
+            return -1;
+        }
+        lock();
+        r = id > 0 ? by_id((uint64_t)id) : NULL;
+        if (r) {
+            to = r->prop;
+            arms = r->prop_arms;
+            snprintf(name, sizeof(name), "%s", r->name);
+            if (approve) {
+                r->arm = to;
+                r->counter = 0;
+                g.rotations++;
+            } else {
+                r->rejected |= 1ULL << (to - 1);
+            }
+            r->prop = 0;
+            g.dirty = 1;
+        }
+        unlock();
+        if (!r) {
+            sb_printf(err, "no proposal %lld (ext_proposals lists them)", (long long)id);
+            return -1;
+        }
+        if (approve)
+            arm_event(name, to, (size_t)arms, 0);
+        else
+            LOGI("tuner", "%s: arm %d refused", name, to);
+        if (w) {
+            jw_kstr(w, "key", name);
+            jw_kint(w, approve ? "arm" : "refused", to);
+        }
+        return 1;
+    }
+    return 0;
 }

@@ -98,6 +98,10 @@ int xtune_current(xtune *t, const ct_flow *f);
 void xtune_status(jw *w);
 void xtune_keys(jw *w, size_t max);
 
+/* ctl ext_proposals, ext_approve {"proposal"}, ext_reject {"proposal"}: 1 handled, -1
+ * with err, 0 not the tuner's */
+int xtune_control(const char *cmd, const json_val *req, jw *w, sbuf *err);
+
 /* For the tests: every key forgotten */
 void xtune_reset(void);
 

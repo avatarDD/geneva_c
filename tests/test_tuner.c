@@ -10,6 +10,7 @@
 #include "ext_opt.h"
 #include "pkt.h"
 #include "plat.h"
+#include "rng.h"
 #include "test.h"
 #include "util.h"
 
@@ -135,7 +136,19 @@ TEST(tune_args)
     xtune_free(t);
     t = NULL;
     sb_reset(&e);
-    CHECK_INT(xtune_set(&t, "ts", &e), -1);
+    CHECK_INT(xtune_set(&t, "ts:gamma=0.9:p=0.9:min_succ=3:propose", &e), 0);
+    xtune_free(t);
+    t = NULL;
+    CHECK_INT(xtune_set(&t, "ts:fails=2", &e), -1); /* rr's */
+    CHECK(strstr(e.data, "rr's") != NULL);
+    xtune_free(t);
+    t = NULL;
+    sb_reset(&e);
+    CHECK_INT(xtune_set(&t, "ts:gamma=2", &e), -1);
+    xtune_free(t);
+    t = NULL;
+    sb_reset(&e);
+    CHECK_INT(xtune_set(&t, "rr:propose=1", &e), -1);
     xtune_free(t);
     t = NULL;
     sb_reset(&e);
@@ -314,6 +327,156 @@ TEST(tune_rr)
     ctrack_free(c.ct);
 }
 
+/* a connection that succeeds when the arm it runs (known after the SYN)
+ * is in good (bit arm-1), else gets a RST; returns the arm (0-based) */
+static int conn_by(tctx *c, unsigned port, unsigned good)
+{
+    int arm;
+    static char big[1300];
+    memset(big, 'x', sizeof(big) - 1);
+    step(c, 1, port, 0x02, 1000, 0, NULL);
+    arm = c->arm;
+    step(c, 0, port, 0x12, 5000, 1001, NULL);
+    step(c, 1, port, 0x18, 1001, 5001, "GET / HTTP/1.1\r\n\r\n");
+    if (arm >= 0 && (good >> arm & 1)) {
+        for (uint32_t s = 5001; s < 5001 + 5 * 1299; s += 1299)
+            step(c, 0, port, 0x10, s, 1019, big);
+    } else {
+        step(c, 0, port, 0x04, 5001, 0, NULL);
+    }
+    CHECK_INT(c->arm, arm); /* the connection keeps its arm */
+    return arm;
+}
+
+/* ctl: the reply's text */
+static int tctl(const char *cmd, const char *req, char *out, size_t cap)
+{
+    sbuf sb, e;
+    jw w;
+    json_val *v = json_parse(req, NULL);
+    int r;
+    sb_init(&sb);
+    sb_init(&e);
+    jw_init(&w, &sb);
+    jw_obj(&w);
+    r = xtune_control(cmd, v, &w, &e);
+    jw_obj_end(&w);
+    snprintf(out, cap, "%s", r < 0 ? e.data : sb.data);
+    json_free(v);
+    sb_free(&sb);
+    sb_free(&e);
+    return r;
+}
+
+TEST(tune_ts)
+{
+    tctx c;
+    ct_config cc;
+    unsigned port = 41000;
+    int n3 = 0, n1 = 0;
+    ct_config_default(&cc);
+    memset(&c, 0, sizeof(c));
+    c.ct = ctrack_new(&cc);
+    c.now = 1000000;
+    xtune_start(NULL, NULL);
+    rng_global_seed(7);
+    c.t = mktune("ts", 4);
+    /* only arm 3 works: the draws find it and the key settles on it */
+    for (int i = 0; i < 60; i++, c.now += 1000)
+        n3 += conn_by(&c, port++, 1u << 2) == 2;
+    CHECK(n3 > 30);
+    for (int i = 0; i < 5; i++, c.now += 1000)
+        CHECK_INT(conn_by(&c, port++, 1u << 2), 2);
+    {
+        sbuf sb;
+        jw w;
+        sb_init(&sb);
+        jw_init(&w, &sb);
+        jw_obj(&w);
+        xtune_keys(&w, 10);
+        xtune_status(&w);
+        jw_obj_end(&w);
+        CHECK(strstr(sb.data, "\"settled\":3") != NULL);
+        CHECK(strstr(sb.data, "\"settled\":1}") != NULL);
+        sb_free(&sb);
+    }
+    /* arm 3 breaks and arm 1 works: the key explores again and moves */
+    for (int i = 0; i < 150; i++, c.now += 1000)
+        n1 += conn_by(&c, port++, 1u << 0) == 0;
+    CHECK(n1 > 60);
+    CHECK_INT(conn_by(&c, port++, 1u << 0), 0);
+    xtune_free(c.t);
+    xtune_stop();
+    ctrack_free(c.ct);
+}
+
+TEST(tune_propose)
+{
+    tctx c;
+    ct_config cc;
+    char out[600];
+    unsigned id;
+    ct_config_default(&cc);
+    memset(&c, 0, sizeof(c));
+    c.ct = ctrack_new(&cc);
+    c.now = 1000000;
+    xtune_start(NULL, NULL);
+
+    t_current = "propose: rr";
+    c.t = mktune("rr:fails=1:propose", 3);
+    CHECK_INT(conn_rst(&c, 41501), 0); /* a proposal, the arm stays */
+    CHECK_INT(conn_rst(&c, 41502), 0); /* one at a time */
+    CHECK_INT(tctl("ext_proposals", "{}", out, sizeof(out)), 1);
+    CHECK(strstr(out, "\"key\":\"p1/10.0.0.2\",\"from\":1,\"to\":2,\"arms\":3") != NULL);
+    CHECK(sscanf(strstr(out, "\"id\":") ? strstr(out, "\"id\":") : "", "\"id\":%u", &id) == 1);
+    {
+        char req[40];
+        snprintf(req, sizeof(req), "{\"proposal\":%u}", id);
+        CHECK_INT(tctl("ext_reject", req, out, sizeof(out)), 1);
+        CHECK(strstr(out, "\"refused\":2") != NULL);
+        CHECK_INT(tctl("ext_reject", req, out, sizeof(out)), -1); /* gone */
+        CHECK(strstr(out, "no proposal") != NULL);
+    }
+    CHECK_INT(conn_rst(&c, 41503), 0); /* past the refused arm 2: 3 */
+    tctl("ext_proposals", "{}", out, sizeof(out));
+    CHECK(strstr(out, "\"to\":3") != NULL);
+    CHECK(sscanf(strstr(out, "\"id\":") ? strstr(out, "\"id\":") : "", "\"id\":%u", &id) == 1);
+    {
+        char req[40];
+        snprintf(req, sizeof(req), "{\"proposal\":%u}", id);
+        CHECK_INT(tctl("ext_approve", req, out, sizeof(out)), 1);
+        CHECK(strstr(out, "\"arm\":3") != NULL);
+    }
+    CHECK_INT(conn_ok(&c, 41504), 2);
+    tctl("ext_proposals", "{}", out, sizeof(out));
+    CHECK_STR(out, "{\"proposals\":[]}");
+    CHECK_INT(tctl("ext_approve", "{}", out, sizeof(out)), -1);
+    CHECK_INT(tctl("ext_flows", "{}", out, sizeof(out)), 0); /* not the tuner's */
+    xtune_free(c.t);
+    xtune_reset();
+
+    t_current = "propose: ts";
+    rng_global_seed(3);
+    c.t = mktune("ts:propose", 3);
+    CHECK_INT(conn_ok(&c, 41510), 0);
+    CHECK_INT(conn_rst(&c, 41511), 0); /* a failure of the arm in use: a proposal */
+    tctl("ext_proposals", "{}", out, sizeof(out));
+    CHECK(strstr(out, "\"from\":1,\"to\":") != NULL && strstr(out, "\"to\":1,") == NULL);
+    CHECK(strstr(out, "\"selector\"") == NULL);
+    CHECK(sscanf(strstr(out, "\"id\":") ? strstr(out, "\"id\":") : "", "\"id\":%u", &id) == 1);
+    {
+        char req[40];
+        int to;
+        snprintf(req, sizeof(req), "{\"proposal\":%u}", id);
+        CHECK_INT(tctl("ext_approve", req, out, sizeof(out)), 1);
+        CHECK(sscanf(strstr(out, "\"arm\":") ? strstr(out, "\"arm\":") : "", "\"arm\":%d", &to) == 1);
+        CHECK_INT(conn_ok(&c, 41512), to - 1);
+    }
+    xtune_free(c.t);
+    xtune_stop();
+    ctrack_free(c.ct);
+}
+
 TEST(tune_state)
 {
     tctx c;
@@ -347,6 +510,47 @@ TEST(tune_state)
     CHECK_INT(xtune_start(path, &e), 0);
     CHECK_INT(conn_ok(&c, 40104), 0);
     xtune_stop();
+    remove(path);
+    /* ts's posteriors and refused arms go into the file and back */
+    xtune_free(c.t);
+    c.t = mktune("ts:propose", 3);
+    CHECK_INT(xtune_start(path, &e), 0);
+    conn_ok(&c, 40105);
+    conn_rst(&c, 40106);
+    {
+        char out[300], req[40];
+        unsigned id = 0;
+        tctl("ext_proposals", "{}", out, sizeof(out));
+        CHECK(sscanf(strstr(out, "\"id\":") ? strstr(out, "\"id\":") : "", "\"id\":%u", &id) == 1);
+        snprintf(req, sizeof(req), "{\"proposal\":%u}", id);
+        CHECK_INT(tctl("ext_reject", req, out, sizeof(out)), 1);
+    }
+    xtune_stop();
+    d = read_file(path, &n);
+    CHECK(d && strstr(d, "\"a\":[") && strstr(d, "\"b\":[") && strstr(d, "\"rejected\":["));
+    CHECK_INT(xtune_start(path, &e), 0);
+    xtune_save(); /* nothing changed: as it was */
+    {
+        char *d2;
+        xtune_stop();
+        d2 = read_file(path, &n);
+        CHECK(d && d2 && !strcmp(d, d2));
+        free(d2);
+    }
+    CHECK_INT(xtune_start(path, &e), 0);
+    {
+        sbuf sb;
+        jw w;
+        sb_init(&sb);
+        jw_init(&w, &sb);
+        jw_obj(&w);
+        xtune_keys(&w, 10);
+        jw_obj_end(&w);
+        CHECK(strstr(sb.data, "\"mean\":[") && strstr(sb.data, "\"rejected\":["));
+        sb_free(&sb);
+    }
+    xtune_stop();
+    free(d);
     remove(path);
     /* a file that cannot be written */
     CHECK_INT(xtune_start("/nonexistent-dir/x/state", &e), -1);
@@ -456,6 +660,8 @@ void suite_tuner(void)
 {
     RUN(tune_args);
     RUN(tune_rr);
+    RUN(tune_ts);
+    RUN(tune_propose);
     RUN(tune_state);
     RUN(tune_engine);
 }
