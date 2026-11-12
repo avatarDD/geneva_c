@@ -181,7 +181,7 @@ static int tw_verdict(eng_worker *w, const void *pctx, int accept, const uint8_t
         tw_wrong[w->id]++;
     if (accept)
         tw_acc[w->id]++;
-    if (__atomic_add_fetch(&tw_done, 1, __ATOMIC_SEQ_CST) == TW_N * TW_PKTS)
+    if (atomic_fetch_add_int(&tw_done, 1) + 1 == TW_N * TW_PKTS)
         atomic_store_int(&tw_stop, 1);
     return 0;
 }
