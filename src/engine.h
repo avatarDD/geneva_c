@@ -39,6 +39,7 @@ typedef struct {
 } eng_slots;
 
 struct ext_hooks; /* engine_int.h */
+struct backend;   /* engine_int.h */
 
 typedef struct {
     fw_config fw;              /* queue, mark, ports, directions */
@@ -66,6 +67,12 @@ typedef struct {
     /* --ext: the extensions' hooks (docs/EXT_ROADMAP.md, 6.4); NULL keeps
      * the engine exactly as without the extensions. */
     const struct ext_hooks *ext;
+    /* --ext-workers (docs/EXT.md, X10a): workers with a queue and a thread
+     * each (fw.queue .. fw.queue + workers - 1); 0 or 1: the main loop
+     * handles the one queue, as without it */
+    unsigned workers;
+    /* tests: this backend instead of the platform's (NULL) */
+    const struct backend *backend;
 } engine_opts;
 
 void engine_opts_default(engine_opts *o);

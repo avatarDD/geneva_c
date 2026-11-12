@@ -14,12 +14,16 @@
  * A packet belongs to a worker (eng_worker): the worker holds what one
  * packet path changes (counters, delayed packets, the --first flow table,
  * the state of the extensions), the engine what all workers share (the
- * strategy, the pcap writer, the control socket). There is one worker for
- * now, and every packet runs under e->lock. Two shared things still change
- * on the packet path: the strategy's trigger counters (gas, fired) and the
- * pcap writer; the multi-queue engine (docs/EXT_ROADMAP.md, X10) has to give
- * each worker its own copy of the former and lock the latter before workers
- * run without e->lock.
+ * strategy, the pcap writer, the control socket). With one worker (the
+ * default) every packet runs under e->lock in the main loop.
+ *
+ * --ext-workers N (X10a): each worker has its own queue, thread and lock
+ * (w->lock), and a copy of the strategy (w->st: trigger gas and counters
+ * are its own). A worker takes only its own lock and leaf locks (the pcap
+ * writer, the event queue, the log, the extensions' shared data). The main
+ * loop takes e->lock and then the workers' locks in order of their ids
+ * whenever it reads or changes what they use (control commands, stats,
+ * SIGHUP); never a worker lock first.
  */
 #ifndef GENEVA_ENGINE_INT_H
 #define GENEVA_ENGINE_INT_H
@@ -40,7 +44,7 @@ typedef struct engine engine;
 typedef struct eng_worker eng_worker;
 typedef struct ext_hooks ext_hooks;
 
-typedef struct {
+typedef struct backend {
     const char *name;
     size_t pctx_len;
     /* Starts capturing (and installs firewall rules). Returns an exit code;
@@ -86,6 +90,11 @@ typedef struct {
      * client's next segment, the one the reassembly waits for (zapret2
      * drops and resends too). NULL: the verdict stays pending. */
     void (*detach)(const void *pctx, void *out);
+    /* --ext-workers: the descriptor worker w polls, and reading what came
+     * (called with w->lock held; -1 on a fatal error). NULL: the backend
+     * has one queue only. */
+    sock_t (*worker_fd)(eng_worker *w);
+    int (*worker_ready)(eng_worker *w);
 } backend;
 
 /* A packet waiting for its sleep to end. */
@@ -165,6 +174,11 @@ struct eng_worker {
     int x_open;         /* worker_open succeeded: worker_close is due */
     const uint8_t *vdata; /* a held packet's bytes for an "unmodified" verdict (detach) */
     size_t vlen;
+    /* --ext-workers (e->threaded) */
+    plat_mutex_t lock;  /* what the worker changes, against the main loop */
+    plat_thread_t thread;
+    int thread_on;
+    strategy *st;       /* the worker's copy of e->st (NULL: e->st) */
 };
 
 struct engine {
@@ -183,7 +197,19 @@ struct engine {
     const char *err_where; /* set by a failing open(): "firewall", "nfqueue"... */
     int err_pos;      /* set by a failing open(): where the filter does not compile */
     plat_mutex_t lock;
+    /* --ext-workers */
+    int threaded;          /* the workers run on their own threads */
+    volatile int wstop;    /* to the workers: stop */
+    volatile int wfail;    /* from a worker: its queue failed */
+    plat_mutex_t pw_lock;  /* the pcap writer */
+    plat_mutex_t evq_lock; /* events for the control socket, sent by the main loop */
+    sbuf evq;
 };
+
+/* --ext-workers: the main loop takes e->lock and then these (no-ops with
+ * one worker) */
+void engine_lock_workers(engine *e);
+void engine_unlock_workers(engine *e);
 
 /* Sets up nw workers for e (e->o and e->be set): their flow tables for
  * --first and the extensions' state. Returns 0, or -1 with err (then

@@ -43,7 +43,10 @@
     {"uid", 0, 1, "UID[:GID,..]", EXT_HELP("the same with numbers")},                                          \
     {"ext-seccomp", 0, 2, "0|1", EXT_HELP("Linux: once running, forbid exec, kill, ptrace and file system "   \
                                           "changes (1; the root helper removes the rules on exit)")},         \
-    {"log-target", 0, 1, "syslog", EXT_HELP("also log to syslog (/dev/log)")}
+    {"log-target", 0, 1, "syslog", EXT_HELP("also log to syslog (/dev/log)")},                              \
+    {"ext-workers", 0, 1, "N|auto",                                                                           \
+     EXT_HELP("Linux: N worker threads, each with its own NFQUEUE (--queue .. --queue+N-1, the rules "        \
+              "balance the flows by address); auto: the CPUs, at most 4 (default 1)")}
 
 /* --ext-auto (run; src/ext/auto.h) */
 #define EXT_AUTO_OPTS                                                                                         \

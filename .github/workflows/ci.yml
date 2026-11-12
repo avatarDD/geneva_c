@@ -62,6 +62,8 @@ jobs:
       # X9c: no class on traffic without a censor (30 min locally, 5 here)
       - name: --ext-auto without a censor (long-poll, WebSocket, 50 MB downloads)
         run: sudo env DURATION=300 tests/e2e/auto_synth.sh build/geneva
+      - name: workers e2e (--ext-workers 4, iptables and nft; throughput of 1 and 4 workers)
+        run: sudo env BENCH=1 tests/e2e/workers.sh build/geneva
 
   # Lab censors 12-20 (--ext), and the official nfqws2 with reference
   # strategies getting past them (docs/CENSOR.md). zapret2 comes from its
@@ -125,8 +127,8 @@ jobs:
       # X7c (fuzz targets and seeds, geneva selftest): about 24 KB more
       # X8 (seqtrack, xoob/xtlsrec/xdrip): 8 KB more; X9a (NFLOG, detector): 12 KB more
       # X9c (the parallel plateau, the detector's own counts): 4 KB more
-      - run: tools/ext_size.sh 278528 CC=musl-gcc CFLAGS="-Werror"
-      - run: tools/ext_size.sh 274432 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
+      - run: tools/ext_size.sh 286720 CC=musl-gcc CFLAGS="-Werror"
+      - run: tools/ext_size.sh 282624 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
       # the fuzz targets on musl (fork, alarm, fmemopen), seeds and 2000 inputs each
       - run: build/geneva selftest --ext --fuzz 2000 --seed 1
       - run: ls -la build/geneva && file build/geneva

@@ -15,9 +15,11 @@
 #include "nfq.h"
 #include "rawsend.h"
 
+/* one queue and one raw sender per worker (--ext-workers: queue + i) */
 typedef struct {
-    nfq *q;
-    rawsend *rs;
+    nfq **q;
+    rawsend **rs;
+    unsigned n;
     int fw_on;
 } nfq_state;
 
@@ -38,13 +40,13 @@ static int nfq_be_verdict(eng_worker *w, const void *pctx, int accept, const uin
         if (!accept)
             return 0;
         /* with the packet's own mark (routing) besides the engine's */
-        if (!data || rawsend_send_x(s->rs, data, len, c.mark, NULL) < 0) {
+        if (!data || rawsend_send_x(s->rs[w->id], data, len, c.mark, NULL) < 0) {
             LOGD("engine", "sending held packet %u: %s", id, data ? strerror(errno) : "no bytes");
             return -1;
         }
         return 0;
     }
-    if (nfq_verdict(s->q, id, accept ? NFQ_ACCEPT : NFQ_DROP, data, len, 0, 0) < 0) {
+    if (nfq_verdict(s->q[w->id], id, accept ? NFQ_ACCEPT : NFQ_DROP, data, len, 0, 0) < 0) {
         LOGW("engine", "verdict for packet %u failed: %s", id, strerror(errno));
         return -1;
     }
@@ -54,7 +56,7 @@ static int nfq_be_verdict(eng_worker *w, const void *pctx, int accept, const uin
 static int nfq_be_inject(eng_worker *w, const void *pctx, const uint8_t *data, size_t len)
 {
     nfq_state *s = w->e->bs;
-    if (rawsend_send(s->rs, data, len) < 0) {
+    if (rawsend_send(s->rs[w->id], data, len) < 0) {
         LOGD("engine", "raw send: %s", strerror(errno));
         return -1;
     }
@@ -66,7 +68,7 @@ static int nfq_be_inject_x(eng_worker *w, const void *pctx, const uint8_t *data,
 {
     nfq_state *s = w->e->bs;
     (void)pctx;
-    if (rawsend_send_x(s->rs, data, len, mark, ifout) < 0) {
+    if (rawsend_send_x(s->rs[w->id], data, len, mark, ifout) < 0) {
         LOGD("engine", "raw send: %s", strerror(errno));
         return -1;
     }
@@ -122,24 +124,30 @@ static int nfq_be_open(engine *e, sbuf *err)
     int errnum;
 
     e->bs = s;
-    memset(&qc, 0, sizeof(qc));
-    qc.queue = o->fw.queue;
-    qc.maxlen = o->queue_maxlen;
-    qc.fail_open = o->fail_open;
-    qc.rcvbuf = 4 << 20;
-    s->q = nfq_open(&qc, &errnum, err);
-    if (!s->q) {
-        e->err_where = "nfqueue";
-        return (errnum == EPERM || errnum == EACCES || errnum == EPROTONOSUPPORT) ? EXIT_PRIV : EXIT_FAIL;
-    }
-    s->rs = rawsend_open(o->fw.mark, err);
-    if (!s->rs) {
-        e->err_where = "rawsend";
-        return EXIT_PRIV;
-    }
-    if (err->len) {
-        LOGW("engine", "%s", err->data);
-        sb_reset(err);
+    s->n = e->nw ? e->nw : 1;
+    s->q = xcalloc(s->n, sizeof(*s->q));
+    s->rs = xcalloc(s->n, sizeof(*s->rs));
+    for (unsigned i = 0; i < s->n; i++) {
+        memset(&qc, 0, sizeof(qc));
+        qc.queue = (uint16_t)(o->fw.queue + i);
+        qc.maxlen = o->queue_maxlen;
+        qc.fail_open = o->fail_open;
+        qc.rcvbuf = 4 << 20;
+        s->q[i] = nfq_open(&qc, &errnum, err);
+        if (!s->q[i]) {
+            e->err_where = "nfqueue";
+            return (errnum == EPERM || errnum == EACCES || errnum == EPROTONOSUPPORT) ? EXIT_PRIV : EXIT_FAIL;
+        }
+        s->rs[i] = rawsend_open(o->fw.mark, err);
+        if (!s->rs[i]) {
+            e->err_where = "rawsend";
+            return EXIT_PRIV;
+        }
+        if (err->len) {
+            if (!i)
+                LOGW("engine", "%s", err->data);
+            sb_reset(err);
+        }
     }
     if (o->apply_fw) {
         if (fw_up(&o->fw, err) < 0) {
@@ -150,7 +158,10 @@ static int nfq_be_open(engine *e, sbuf *err)
         e->fw_name = fw_backend_name(o->fw.backend);
         LOGI("engine", "firewall rules applied (%s)", e->fw_name);
     }
-    LOGI("engine", "listening on NFQUEUE %u", o->fw.queue);
+    if (s->n > 1)
+        LOGI("engine", "listening on NFQUEUE %u-%u", o->fw.queue, o->fw.queue + s->n - 1);
+    else
+        LOGI("engine", "listening on NFQUEUE %u", o->fw.queue);
     return EXIT_OK;
 }
 
@@ -163,13 +174,13 @@ static void nfq_be_stop(engine *e)
         fw_down(&e->o->fw);
         s->fw_on = 0;
     }
-    if (s->q) {
-        /* packets queued while the rules came down pass unchanged */
-        plat_mutex_lock(&e->lock);
-        while (nfq_read(s->q, pass_msg, &e->w[0], NULL) > 0)
+    /* packets queued while the rules came down pass unchanged (the
+     * workers' threads have ended) */
+    plat_mutex_lock(&e->lock);
+    for (unsigned i = 0; i < s->n; i++)
+        while (s->q[i] && nfq_read(s->q[i], pass_msg, &e->w[i], NULL) > 0)
             ;
-        plat_mutex_unlock(&e->lock);
-    }
+    plat_mutex_unlock(&e->lock);
 }
 
 static void nfq_be_close(engine *e)
@@ -177,8 +188,12 @@ static void nfq_be_close(engine *e)
     nfq_state *s = e->bs;
     if (!s)
         return;
-    nfq_close(s->q);
-    rawsend_close(s->rs);
+    for (unsigned i = 0; i < s->n; i++) {
+        nfq_close(s->q[i]);
+        rawsend_close(s->rs[i]);
+    }
+    free(s->q);
+    free(s->rs);
     free(s);
     e->bs = NULL;
 }
@@ -186,31 +201,41 @@ static void nfq_be_close(engine *e)
 static size_t nfq_be_pollfds(engine *e, plat_pollfd *fds, size_t max)
 {
     nfq_state *s = e->bs;
-    if (!max)
+    if (!max || e->threaded) /* the workers poll their own */
         return 0;
-    fds[0].fd = nfq_fd(s->q);
+    fds[0].fd = nfq_fd(s->q[0]);
     fds[0].events = POLLIN;
     fds[0].revents = 0;
     return 1;
 }
 
-static int nfq_be_ready(engine *e, const plat_pollfd *fds, size_t n)
+/* a batch of worker w's queue, then back to its timers */
+static int read_batch(eng_worker *w)
 {
-    nfq_state *s = e->bs;
-    if (!n || !(fds[0].revents & POLLIN))
-        return 0;
-    /* drain a batch, but keep timers responsive */
+    nfq_state *s = w->e->bs;
     for (int i = 0; i < 64; i++) {
-        /* one queue, one worker (several with X10 of docs/EXT_ROADMAP.md) */
-        int r = nfq_read(s->q, on_msg, &e->w[0], &e->w[0].c.overruns);
+        int r = nfq_read(s->q[w->id], on_msg, w, &w->c.overruns);
         if (r < 0) {
-            LOGE("engine", "NFQUEUE read: %s", strerror(errno));
+            LOGE("engine", "NFQUEUE %u read: %s", w->e->o->fw.queue + w->id, strerror(errno));
             return -1;
         }
         if (r == 0)
             break;
     }
     return 0;
+}
+
+static int nfq_be_ready(engine *e, const plat_pollfd *fds, size_t n)
+{
+    if (!n || !(fds[0].revents & POLLIN))
+        return 0;
+    return read_batch(&e->w[0]);
+}
+
+static sock_t nfq_be_worker_fd(eng_worker *w)
+{
+    nfq_state *s = w->e->bs;
+    return nfq_fd(s->q[w->id]);
 }
 
 const backend nfq_backend = {
@@ -229,6 +254,8 @@ const backend nfq_backend = {
     nfq_be_meta,
     nfq_be_inject_x,
     nfq_be_detach,
+    nfq_be_worker_fd,
+    read_batch,
 };
 
 #endif

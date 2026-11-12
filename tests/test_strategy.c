@@ -739,6 +739,51 @@ TEST(test_pcapng)
     sb_free(&err);
 }
 
+/* --ext-workers: each worker a copy with its own gas and counters */
+TEST(test_clone)
+{
+    static const char *const texts[] = {
+        "[TCP:flags:PA:2]-duplicate(tamper{TCP:seq:corrupt},)-| [TCP:flags:R]-drop-|",
+        "[TCP:flags:S]-fragment{tcp:-1:False}(,sleep{5})-| \\/ [UDP:dport:53:-1]-drop-|",
+        "\\/",
+    };
+    sbuf e, a, b;
+    sb_init(&e);
+    sb_init(&a);
+    sb_init(&b);
+    CHECK(strategy_clone(NULL) == NULL);
+    for (size_t i = 0; i < sizeof(texts) / sizeof(*texts); i++) {
+        strategy *s = strategy_parse(texts[i], &e), *c;
+        CHECK(s != NULL);
+        if (!s)
+            continue;
+        if (s->nout) {
+            s->out[0]->fired = 7;
+            s->out[0]->trig.gas = 0; /* spent */
+        }
+        c = strategy_clone(s);
+        CHECK(c != NULL);
+        if (c) {
+            sb_reset(&a);
+            sb_reset(&b);
+            strategy_print(s, &a);
+            strategy_print(c, &b);
+            CHECK_STR(b.data, a.data);
+            CHECK(c->nout == s->nout && c->nin == s->nin);
+            if (c->nout) {
+                CHECK_INT(c->out[0]->fired, 0);
+                CHECK_INT(c->out[0]->trig.gas, c->out[0]->trig.gas_init);
+                CHECK(c->out[0] != s->out[0]);
+            }
+            strategy_free(c);
+        }
+        strategy_free(s);
+    }
+    sb_free(&e);
+    sb_free(&a);
+    sb_free(&b);
+}
+
 TEST(test_pcap_garbage)
 {
     FILE *f = tmpfile();
@@ -756,6 +801,7 @@ void suite_strategy(void)
 {
     RUN(test_geneva_corpus);
     RUN(test_print_exact);
+    RUN(test_clone);
     RUN(test_parse_errors);
     RUN(test_fragment_random_order);
     RUN(test_actions_vs_scapy);

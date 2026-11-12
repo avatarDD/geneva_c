@@ -185,6 +185,10 @@ void strategy_new_serial(strategy *s);
  * its order at random) use the rng module. */
 strategy *strategy_parse(const char *text, sbuf *err);
 void strategy_free(strategy *s);
+/* A copy with fresh run-time state (gas, counters) and a serial of its
+ * own, for one worker of the multi-queue engine; NULL for NULL or when the
+ * canonical text does not parse again (never for a parsed strategy). */
+strategy *strategy_clone(const strategy *s);
 /* Geneva's str(strategy).strip(): "[TCP:flags:PA]-drop-| \/". */
 void strategy_print(const strategy *s, sbuf *out);
 /* Geneva's pretty_print(): one tree per block, drawn with box characters. */

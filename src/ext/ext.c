@@ -53,6 +53,12 @@ static int g_ct_disable;
 static xl7_config g_l7;
 static xprofiles g_prof;
 static int g_server_side; /* run --server-side: outbound packets come from the server's port */
+/* --ext-workers: the workers' hooks share the profiles, their lists and the
+ * autolist. A hook reads them with the lock shared; it takes it alone when
+ * a profile has an autolist (its counters and lists change on the packet
+ * path); the main loop's re-reading of the lists takes it alone. */
+static plat_rwlock_t g_xlock;
+static int g_threaded, g_ahl_any;
 
 /* --ext-payload-disable, --ext-reasm-disable: a payload list, "all" for
  * every type */
@@ -363,8 +369,14 @@ static void flow_ttl(ct_flow *f, int reverse, const char *ifin, const char *ifou
     if (!f || g_server_side || (f->proto != 6 && f->proto != 17))
         return;
     if (reverse) {
-        if (f->incoming_ttl)
-            xipc_put_ttl(f->ver, f->srv, ifin, f->incoming_ttl, now);
+        if (f->incoming_ttl) {
+            /* once a second per flow: the cache counts in seconds, and
+             * the workers share it (a lock) */
+            if (f->ttl_put != (uint32_t)(now / 1000)) {
+                f->ttl_put = (uint32_t)(now / 1000);
+                xipc_put_ttl(f->ver, f->srv, ifin, f->incoming_ttl, now);
+            }
+        }
         else
             f->incoming_ttl = xipc_get_ttl(f->ver, f->srv, ifin);
     } else if (!f->incoming_ttl) {
@@ -424,7 +436,15 @@ typedef struct {
     ifname_slot ifn[8]; /* the last interfaces seen */
     unsigned ifn_next;
     int closed; /* the capture is closed: held packets cannot get a verdict */
+    strategy **pst; /* --ext-workers: the worker's copies of the profiles' strategies */
 } xworker;
+
+/* prof_st with the worker's copy of a profile's own strategy */
+static strategy *wprof_st(const xworker *x, int i, strategy *cmd)
+{
+    strategy *st = prof_st(i, cmd);
+    return x->pst && st && st != cmd ? x->pst[i] : st;
+}
 
 /* A held packet of a flow the conntrack forgets, or at the end: it goes
  * on as it is (v is NULL) */
@@ -446,6 +466,8 @@ static void xw_clear(ct_flow *f, void *ud)
     xact_flow_clear(f);
 }
 
+static void xw_close(eng_worker *w);
+
 static int xw_open(eng_worker *w, sbuf *err)
 {
     xworker *x = xcalloc(1, sizeof(*x));
@@ -458,6 +480,24 @@ static int xw_open(eng_worker *w, sbuf *err)
     if (!g_ct_disable)
         x->ct = ctrack_new(&c);
     x->l7 = xl7_new(&g_l7);
+    if (w->e->threaded) {
+        if (w->id == 0) {
+            /* before the threads start */
+            plat_rwlock_init(&g_xlock);
+            g_threaded = 1;
+            g_ahl_any = 0;
+            for (size_t i = 0; i < g_prof.n; i++)
+                g_ahl_any |= g_prof.v[i]->ahl != NULL;
+            xipc_threads();
+        }
+        x->pst = xcalloc(g_prof.n ? g_prof.n : 1, sizeof(*x->pst));
+        for (size_t i = 0; i < g_prof.n; i++)
+            if (!g_prof.v[i]->cmd && g_prof.v[i]->st && !(x->pst[i] = strategy_clone(g_prof.v[i]->st))) {
+                sb_printf(err, "cannot copy the strategy of profile %zu for worker %u", i + 1, w->id);
+                xw_close(w); /* the engine closes only the opened ones */
+                return -1;
+            }
+    }
     /* one observer for the process, opened before the rules go up */
     return w->id == 0 ? xauto_open(err) : 0;
 }
@@ -482,8 +522,15 @@ static void xw_close(eng_worker *w)
         xauto_close();
     ctrack_free(x->ct);
     xl7_free(x->l7);
+    for (size_t i = 0; x->pst && i < g_prof.n; i++)
+        strategy_free(x->pst[i]);
+    free(x->pst);
     free(x);
     w->x = NULL;
+    if (g_threaded && w->id == 0) { /* the threads have ended: no hook runs any more */
+        plat_rwlock_destroy(&g_xlock);
+        g_threaded = 0;
+    }
 }
 
 static const char *ifname(xworker *x, uint32_t idx)
@@ -542,7 +589,7 @@ static void xw_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, c
     meta(u->w->x, u->w, pctx, &c);
     c.l7 = v;
     if (g_prof.n)
-        st = prof_st(pick(NULL, c.f, dir, c.reverse, v->l7, v->host, c.mark, plat_now_ms()), u->st);
+        st = wprof_st(u->w->x, pick(NULL, c.f, dir, c.reverse, v->l7, v->host, c.mark, plat_now_ms()), u->st);
     c.st = st;
     engine_replay(u->w, st, raw, len, dir, pctx, &c);
 }
@@ -597,8 +644,8 @@ static void xw_emit(void *ud, const uint8_t *pkt, size_t len)
     engine_inject(u->w, u->pctx, pkt, len);
 }
 
-static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, const uint8_t *data, size_t len,
-                     const void *pctx)
+static int xw_packet_in(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, const uint8_t *data, size_t len,
+                        const void *pctx)
 {
     uint8_t *mb = NULL; /* p as seqtrack changed it */
     size_t ml = 0;
@@ -634,9 +681,10 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
         }
     }
     if (g_prof.n) {
-        xlists_reload(now, 0);
+        if (!g_threaded) /* else the main loop does (xw_ready) */
+            xlists_reload(now, 0);
         i = pick(p, c->f, dir, c->reverse, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, c->mark, now);
-        st = prof_st(i, cmd);
+        st = wprof_st(x, i, cmd);
     }
     c->st = st;
     if ((has = found(c->f, i, st)))
@@ -668,7 +716,7 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
     if (has && x->view.l7p == L7P_DNS_RESPONSE && p->l4 == LAYER_UDP)
         xipc_dns_response(p->payload, p->payload_len, now);
     if (g_prof.n) {
-        strategy *st2 = prof_st(pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, c->mark, now), cmd);
+        strategy *st2 = wprof_st(x, pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, c->mark, now), cmd);
         if (has)
             flow_autolist(0, p, c->f, c->reverse, x->view.l7p, now, NULL, NULL);
         if (st2 != st) {
@@ -687,6 +735,25 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
     w->xctx = c;
     *stp = st;
     return 0;
+}
+
+static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, const uint8_t *data, size_t len,
+                     const void *pctx)
+{
+    int r;
+    /* the lock guards the profiles' lists: without profiles none */
+    if (!g_threaded || !g_prof.n)
+        return xw_packet_in(w, stp, p, dir, data, len, pctx);
+    if (g_ahl_any)
+        plat_rwlock_wrlock(&g_xlock);
+    else
+        plat_rwlock_rdlock(&g_xlock);
+    r = xw_packet_in(w, stp, p, dir, data, len, pctx);
+    if (g_ahl_any)
+        plat_rwlock_wrunlock(&g_xlock);
+    else
+        plat_rwlock_rdunlock(&g_xlock);
+    return r;
 }
 
 /* "reload_lists": every list file read again */
@@ -847,6 +914,13 @@ static size_t xw_pollfds(engine *e, plat_pollfd *fds, size_t max)
 
 static void xw_ready(engine *e, const plat_pollfd *fds, size_t n)
 {
+    if (g_threaded && g_prof.n) {
+        /* the lists' files, at most once a second (xlists_reload): the
+         * hooks wait meanwhile */
+        plat_rwlock_wrlock(&g_xlock);
+        xlists_reload(plat_now_ms(), 0);
+        plat_rwlock_wrunlock(&g_xlock);
+    }
     (void)e;
     xauto_ready(fds, n);
 }

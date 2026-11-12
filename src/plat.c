@@ -99,6 +99,19 @@ void plat_mutex_init(plat_mutex_t *m) { InitializeCriticalSection(m); }
 void plat_mutex_destroy(plat_mutex_t *m) { DeleteCriticalSection(m); }
 void plat_mutex_lock(plat_mutex_t *m) { EnterCriticalSection(m); }
 void plat_mutex_unlock(plat_mutex_t *m) { LeaveCriticalSection(m); }
+void plat_rwlock_init(plat_rwlock_t *l) { InitializeSRWLock(l); }
+void plat_rwlock_destroy(plat_rwlock_t *l) { (void)l; }
+void plat_rwlock_rdlock(plat_rwlock_t *l) { AcquireSRWLockShared(l); }
+void plat_rwlock_rdunlock(plat_rwlock_t *l) { ReleaseSRWLockShared(l); }
+void plat_rwlock_wrlock(plat_rwlock_t *l) { AcquireSRWLockExclusive(l); }
+void plat_rwlock_wrunlock(plat_rwlock_t *l) { ReleaseSRWLockExclusive(l); }
+
+unsigned plat_ncpu(void)
+{
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return si.dwNumberOfProcessors ? (unsigned)si.dwNumberOfProcessors : 1;
+}
 
 #else
 
@@ -137,6 +150,18 @@ void plat_mutex_init(plat_mutex_t *m) { pthread_mutex_init(m, NULL); }
 void plat_mutex_destroy(plat_mutex_t *m) { pthread_mutex_destroy(m); }
 void plat_mutex_lock(plat_mutex_t *m) { pthread_mutex_lock(m); }
 void plat_mutex_unlock(plat_mutex_t *m) { pthread_mutex_unlock(m); }
+void plat_rwlock_init(plat_rwlock_t *l) { pthread_rwlock_init(l, NULL); }
+void plat_rwlock_destroy(plat_rwlock_t *l) { pthread_rwlock_destroy(l); }
+void plat_rwlock_rdlock(plat_rwlock_t *l) { pthread_rwlock_rdlock(l); }
+void plat_rwlock_rdunlock(plat_rwlock_t *l) { pthread_rwlock_unlock(l); }
+void plat_rwlock_wrlock(plat_rwlock_t *l) { pthread_rwlock_wrlock(l); }
+void plat_rwlock_wrunlock(plat_rwlock_t *l) { pthread_rwlock_unlock(l); }
+
+unsigned plat_ncpu(void)
+{
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (unsigned)n : 1;
+}
 
 #endif
 

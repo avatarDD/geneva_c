@@ -66,7 +66,8 @@
 | `passed_first` | (`--first` на Windows) пакеты сверх первых N своего потока, пропущенные без стратегии |
 | `flow_evictions` | (`--first` на Windows) живые потоки, вытесненные из заполненной таблицы (65536) |
 | `held` | (`--ext`) пакеты, задержанные до конца сборки ClientHello; потом они отправляются заново через стратегию |
-| `out_trees`, `in_trees` | `[{"tree": "...", "fired": N}]` — срабатывания каждого дерева |
+| `workers`, `worker_pkts` | (`--ext-workers` больше 1) число воркеров и пакеты каждого из них (`pkts_out + pkts_in`, по порядку очередей): как правила разложили потоки |
+| `out_trees`, `in_trees` | `[{"tree": "...", "fired": N}]` — срабатывания каждого дерева (с `--ext-workers` — сумма по копиям стратегии всех воркеров) |
 
 ## Управляющий сокет
 
@@ -103,7 +104,7 @@ long»), и соединение закрывается. Подписчику с
 | `ping` | — | `ts` |
 | `version` | — | `version`, `proto` |
 | `subscribe` / `unsubscribe` | — | включить / выключить поток событий в это соединение |
-| `status` | — | `mode`, `state`, `version`, `pid`, `uptime_ms`, `backend`, `queue`, `ports`, `server_side`, `firewall`, `filter` (текущее выражение WinDivert; на Linux `null`), `filter_file`, `log_level`, `strategy`, `strategy_file` |
+| `status` | — | `mode`, `state`, `version`, `pid`, `uptime_ms`, `backend`, `queue`, `ports`, `server_side`, `firewall`, `filter` (текущее выражение WinDivert; на Linux `null`), `filter_file`, `log_level`, `strategy`, `strategy_file`; с `--ext-workers` больше 1 ещё `workers` (очереди — `queue` .. `queue + workers - 1`) |
 | `stats` | — | поля `stats` |
 | `reset_stats` | — | обнулить счётчики и состояние стратегии (gas триггеров) |
 | `set_strategy` | `strategy` | заменить стратегию; ответ — каноническая `strategy`. Ошибка разбора оставляет прежнюю |

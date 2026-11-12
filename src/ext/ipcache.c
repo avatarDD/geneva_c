@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "log.h"
+#include "plat.h"
 #include "util.h"
 
 #define BUCKETS0 256 /* doubled while the entries outnumber the buckets 2:1 */
@@ -28,6 +29,29 @@ static size_t g_nb, g_n;
 static unsigned g_lifetime = XIPC_LIFETIME;
 static int g_hostname;
 static uint64_t g_purged;
+static volatile int g_purged_s; /* g_purged for a look without the lock */
+/* --ext-workers: the workers share the cache (xipc_threads) */
+static plat_mutex_t g_mu;
+static int g_mt;
+
+#define LOCK()                         \
+    do {                               \
+        if (g_mt)                      \
+            plat_mutex_lock(&g_mu);    \
+    } while (0)
+#define UNLOCK()                       \
+    do {                               \
+        if (g_mt)                      \
+            plat_mutex_unlock(&g_mu);  \
+    } while (0)
+
+void xipc_threads(void)
+{
+    if (!g_mt) {
+        plat_mutex_init(&g_mu);
+        g_mt = 1;
+    }
+}
 
 void xipc_config(unsigned lifetime_s, int hostname)
 {
@@ -56,6 +80,7 @@ void xipc_reset(void)
     g_b = NULL;
     g_nb = g_n = 0;
     g_purged = 0;
+    atomic_store_int(&g_purged_s, 0);
     g_lifetime = XIPC_LIFETIME;
     g_hostname = 0;
 }
@@ -128,7 +153,7 @@ static ent *touch(int ver, const uint8_t *a, const char *ifn, uint64_t now_ms)
     return e;
 }
 
-void xipc_put_host(int ver, const uint8_t *a, const char *host, int is_ip, uint64_t now_ms)
+static void put_host(int ver, const uint8_t *a, const char *host, int is_ip, uint64_t now_ms)
 {
     ent *e;
     if (!g_hostname || !host || !*host || !(e = touch(ver, a, NULL, now_ms)))
@@ -141,7 +166,7 @@ void xipc_put_host(int ver, const uint8_t *a, const char *host, int is_ip, uint6
     }
 }
 
-int xipc_get_host(int ver, const uint8_t *a, char *out, size_t cap, int *is_ip)
+static int get_host(int ver, const uint8_t *a, char *out, size_t cap, int *is_ip)
 {
     unsigned b;
     ent *e;
@@ -153,26 +178,27 @@ int xipc_get_host(int ver, const uint8_t *a, char *out, size_t cap, int *is_ip)
     return 1;
 }
 
-void xipc_put_ttl(int ver, const uint8_t *a, const char *iface, uint8_t ttl, uint64_t now_ms)
+static void put_ttl(int ver, const uint8_t *a, const char *iface, uint8_t ttl, uint64_t now_ms)
 {
     ent *e = ttl ? touch(ver, a, iface, now_ms) : NULL;
     if (e)
         e->ttl = ttl;
 }
 
-uint8_t xipc_get_ttl(int ver, const uint8_t *a, const char *iface)
+static uint8_t get_ttl(int ver, const uint8_t *a, const char *iface)
 {
     unsigned b;
     ent *e = ver == 4 || ver == 6 ? find(ver, a, iface, &b) : NULL;
     return e ? e->ttl : 0;
 }
 
-void xipc_purge(uint64_t now_ms)
+static void purge(uint64_t now_ms)
 {
     uint64_t now = now_ms / 1000;
     if (!g_lifetime || now == g_purged)
         return;
     g_purged = now;
+    atomic_store_int(&g_purged_s, (int)now);
     for (size_t i = 0; i < g_nb; i++)
         for (ent **pe = &g_b[i]; *pe;) {
             ent *e = *pe;
@@ -245,7 +271,7 @@ static int skip_name(const uint8_t **a, size_t *len)
     }
 }
 
-int xipc_dns_response(const uint8_t *d, size_t n, uint64_t now_ms)
+static int dns_response(const uint8_t *d, size_t n, uint64_t now_ms)
 {
     const uint8_t *a = d, *e = d + n, *p;
     size_t len = n;
@@ -287,11 +313,64 @@ int xipc_dns_response(const uint8_t *d, size_t n, uint64_t now_ms)
         if (a[2] == 0 && a[3] == 1) {
             unsigned typ = (unsigned)a[0] << 8 | a[1];
             if ((typ == 1 && dlen == 4) || (typ == 28 && dlen == 16)) {
-                xipc_put_host(typ == 1 ? 4 : 6, a + 10, name, 0, now_ms);
+                put_host(typ == 1 ? 4 : 6, a + 10, name, 0, now_ms);
                 ct++;
             }
         }
         a += dlen + 10, len -= dlen + 10;
     }
     return ct;
+}
+
+/* ---- the locked interface ---------------------------------------------- */
+
+void xipc_put_host(int ver, const uint8_t *a, const char *host, int is_ip, uint64_t now_ms)
+{
+    LOCK();
+    put_host(ver, a, host, is_ip, now_ms);
+    UNLOCK();
+}
+
+int xipc_get_host(int ver, const uint8_t *a, char *out, size_t cap, int *is_ip)
+{
+    int r;
+    LOCK();
+    r = get_host(ver, a, out, cap, is_ip);
+    UNLOCK();
+    return r;
+}
+
+void xipc_put_ttl(int ver, const uint8_t *a, const char *iface, uint8_t ttl, uint64_t now_ms)
+{
+    LOCK();
+    put_ttl(ver, a, iface, ttl, now_ms);
+    UNLOCK();
+}
+
+uint8_t xipc_get_ttl(int ver, const uint8_t *a, const char *iface)
+{
+    uint8_t r;
+    LOCK();
+    r = get_ttl(ver, a, iface);
+    UNLOCK();
+    return r;
+}
+
+void xipc_purge(uint64_t now_ms)
+{
+    /* once a second: the other packets do not take the lock */
+    if (!g_lifetime || atomic_load_int(&g_purged_s) == (int)(now_ms / 1000))
+        return;
+    LOCK();
+    purge(now_ms);
+    UNLOCK();
+}
+
+int xipc_dns_response(const uint8_t *d, size_t n, uint64_t now_ms)
+{
+    int r;
+    LOCK();
+    r = dns_response(d, n, now_ms);
+    UNLOCK();
+    return r;
 }
