@@ -19,7 +19,7 @@
 # --ext against nfqws2's posdebug on the same packets (stage X3).
 # The section "diff" (also with NFQWS2_DIR) checks x-actions against
 # nfqws2 packet by packet.
-# The section "tune" (or tune14, tune18) runs the tuner (--ext-arm) against 14 and 18,
+# The section "tune" (or tune14, tune18, tunets, tunepropose) runs the tuner (--ext-arm) against 14 and 18,
 # and with NFQWS2_DIR zapret2's circular against 14 for comparison.
 # The section "xact" (or x14 ... x20 for one censor) runs geneva --ext with x-action strategies (the
 # nfqws2 references as x-actions, and combinators) against 14, 15, 18-20.
@@ -834,6 +834,54 @@ tune_case() {
 }
 tune_case 14 "" 443 'https ultrasurf.example' 0 '[TCP:flags:PA]-xsplit{pos=1}-| \/'
 tune_case 18 "" 80 "http /secret.html -H 'Host: ultrasurf.example'" "200 27" '[TCP:flags:PA]-xsplit{pos=method+2}-| \/'
+# ts (X11b): Thompson sampling over three arms, one of which beats 14; the
+# key settles on it (ext_tuned) and the requests get through
+if on tune || on tunets; then
+    echo "== the tuner (ts) against censor 14"
+    if start_censor 14 && tune_start 443 --ext-arm '\/' --ext-arm '[TCP:flags:S]-duplicate-| \/' \
+        --ext-arm '[TCP:flags:PA]-xsplit{pos=1}-| \/' --ext-tune ts:inseq=1024:min_succ=3 --rng-seed 1; then
+        n=0
+        while [ $n -lt 40 ]; do
+            n=$((n + 1))
+            https ultrasurf.example > /dev/null
+            grep '"ev":"ext_tuned"' "$WORK/tune.jsonl" | grep -q '"key":"p1/ultrasurf.example","arm":3' && break
+        done
+        grep '"ev":"ext_tuned"' "$WORK/tune.jsonl" | grep -q '"key":"p1/ultrasurf.example","arm":3' &&
+            ok "ext_tuned: ultrasurf.example settled on arm 3 after $n request(s)" ||
+            bad "not settled after $n requests" "$WORK/tune.log"
+        k=0
+        for _ in 1 2 3; do [ "$(https ultrasurf.example)" = 0 ] && k=$((k + 1)); done
+        [ $k = 3 ] && ok "settled: 3 of 3 get through" || bad "settled: $k of 3 get through" "$WORK/tune.log"
+        tune_stop
+    fi
+    kill "$CPID" 2>/dev/null
+    wait "$CPID" 2>/dev/null
+    CPID=
+fi
+# propose (X11b): the change waits for ext_approve on the control socket
+if on tune || on tunepropose; then
+    echo "== the tuner (rr, propose) against censor 14"
+    if start_censor 14 && tune_start 443 --ext-arm '\/' --ext-arm '[TCP:flags:PA]-xsplit{pos=1}-| \/' \
+        --ext-tune rr:fails=1:inseq=1024:propose; then
+        r=$(https ultrasurf.example)
+        [ "$r" != 0 ] && ok "arm 1: blocked ($r)" || bad "arm 1 got through"
+        sleep 0.3
+        id=$(grep '"ev":"ext_proposal"' "$WORK/tune.jsonl" | grep '"key":"p1/ultrasurf.example"' | grep '"to":2' |
+            sed 's/.*"id":\([0-9]*\).*/\1/' | head -1)
+        [ -n "$id" ] && ok "ext_proposal $id: arm 2" || bad "no ext_proposal" "$WORK/tune.jsonl"
+        r=$(https ultrasurf.example)
+        [ "$r" != 0 ] && ok "before the consent: still arm 1 ($r)" || bad "changed without consent"
+        grep -q '"ev":"ext_arm"' "$WORK/tune.jsonl" && bad "ext_arm without consent"
+        ip netns exec "$NC" "$GENEVA" ctl --control "unix:$WORK/tune.sock" ext_approve proposal="${id:-0}" > "$WORK/ctl.out" 2>&1 &&
+            ok "ctl ext_approve" || bad "ctl ext_approve" "$WORK/ctl.out"
+        r=$(https ultrasurf.example)
+        [ "$r" = 0 ] && ok "approved arm 2 gets through" || bad "approved arm 2 blocked ($r)" "$WORK/tune.log"
+        tune_stop
+    fi
+    kill "$CPID" 2>/dev/null
+    wait "$CPID" 2>/dev/null
+    CPID=
+fi
 # The same scenario with zapret2's circular (NFQWS2_DIR): the reference of
 # the tuner's rr. nfqws2 sees the client's packets and the server's first
 # ones (circular's detectors need them); the first request is blocked, the

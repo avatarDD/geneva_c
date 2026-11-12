@@ -173,10 +173,11 @@
     {"ext-arm", 0, 1, "STRATEGY",                                                                              \
      EXT_HELP("an arm of the tuner (arm 1, 2, ... in order; repeatable): the profile's flows get the arm "    \
               "their key is at instead of -s")},                                                              \
-    {"ext-tune", 0, 1, "rr[:ARG..]",                                                                          \
-     EXT_HELP("how the profile's keys move between arms: rr is zapret2's circular (fails=3, time=60, final=N, " \
-              "key=NAME, nld=N, reqhost, maxseq, inseq, retrans, udp_out, udp_in, no_rst, no_http_redirect, "   \
-              "reset; default rr)")},                                                                         \
+    {"ext-tune", 0, 1, "rr|ts[:ARG..]",                                                                       \
+     EXT_HELP("how the profile's keys move between arms: rr is zapret2's circular (fails=3, time=60, final=N), "  \
+              "ts Thompson sampling of each connection's arm (gamma=0.98, p=0.95, min_succ=5: the key settles "   \
+              "on an arm); both: key=NAME, nld=N, reqhost, maxseq, inseq, retrans, udp_out, udp_in, no_rst, "     \
+              "no_http_redirect, reset, propose (a change waits for ctl ext_approve); default rr")},            \
     {"ext-profile", 0, 1, "FILE", EXT_HELP("profiles from FILE ([profile NAME] sections; after those of the "  \
                                            "command line); repeatable")}
 

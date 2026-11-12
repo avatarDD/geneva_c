@@ -130,8 +130,9 @@ jobs:
       # X8 (seqtrack, xoob/xtlsrec/xdrip): 8 KB more; X9a (NFLOG, detector): 12 KB more
       # X9c (the parallel plateau, the detector's own counts): 4 KB more
       # X11a (the tuner: circular, its detectors, --ext-state): 12 KB more
-      - run: tools/ext_size.sh 299008 CC=musl-gcc CFLAGS="-Werror"
-      - run: tools/ext_size.sh 290816 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
+      # X11b (ts: Thompson sampling, proposals): 12 KB more (16 without crypto: libm)
+      - run: tools/ext_size.sh 311296 CC=musl-gcc CFLAGS="-Werror"
+      - run: tools/ext_size.sh 307200 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
       # the fuzz targets on musl (fork, alarm, fmemopen), seeds and 2000 inputs each
       - run: build/geneva selftest --ext --fuzz 2000 --seed 1
       - run: ls -la build/geneva && file build/geneva

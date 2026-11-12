@@ -102,6 +102,10 @@ struct ct_flow {
      * circular (crec: nocheck, failure, retrans) */
     uint8_t xt_nocheck, xt_failure;
     uint16_t xt_retrans;
+    /* ts: the arm the connection runs (1-based, 0: none yet) and the hash
+     * of the key it was picked for (a host name replaces the address) */
+    uint8_t xt_arm;
+    uint32_t xt_khash;
 
     /* table links */
     ct_flow *hnext, *lprev, *lnext;

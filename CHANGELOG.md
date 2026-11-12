@@ -209,6 +209,13 @@
   хранит их между перезапусками. Событие `ext_arm`, `tuner` в
   `ext_status` и `ext_keys`. e2e `tests/e2e/censors_x.sh tune` (цензоры 14
   и 18, сверка с `circular` nfqws2).
+- X11b: селектор `--ext-tune ts` — Thompson sampling: у ключа и руки
+  Beta-распределение с дисконтом `gamma` (0.98), рука соединения —
+  выборка Томпсона, ключ оседает на руке при P(лучшая) ≥ `p` (0.95) и
+  `min_succ` (5) успехах (событие `ext_tuned`). Аргумент `propose` (у
+  `rr` и `ts`): смена руки — событие `ext_proposal`, применяется командой
+  `ext_approve {"proposal": N}`, `ext_reject` отклоняет руку для ключа;
+  `ext_proposals` их перечисляет. e2e `censors_x.sh tunets tunepropose`.
 
 ## v1.2.0
 
