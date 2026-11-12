@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y tcpdump ethtool nftables iptables curl
+      - run: sudo apt-get update && sudo apt-get install -y tcpdump ethtool nftables iptables curl conntrack
       - run: make -j"$(nproc)" CFLAGS="-O1 -g -Werror"
       - name: e2e (auto, iptables, nft)
         run: sudo env FIREWALLS="auto iptables nft" tests/e2e/run.sh build/geneva
@@ -64,6 +64,8 @@ jobs:
         run: sudo env DURATION=300 tests/e2e/auto_synth.sh build/geneva
       - name: workers e2e (--ext-workers 4, iptables and nft; throughput of 1 and 4 workers)
         run: sudo env BENCH=1 tests/e2e/workers.sh build/geneva
+      - name: surgical path e2e (healthy connections skip the queue, iptables and nft)
+        run: sudo tests/e2e/surgical.sh build/geneva
 
   # Lab censors 12-20 (--ext), and the official nfqws2 with reference
   # strategies getting past them (docs/CENSOR.md). zapret2 comes from its

@@ -11,8 +11,12 @@
 #include "fw.h"
 #include "util.h"
 
+/* The default of --ext-healthy-mark: a bit zapret2 does not use */
+#define XFW_HEALTHY_MARK 0x10000000u
+
 /* Reads --ext-first, --ext-wan, --ext-lan, --ext-notrack, --ext-ttl-icmp,
- * --ext-flowoffload, --fw-hook-pre/post and the --wf-* options into c.
+ * --ext-flowoffload, --ext-healthy-mark, --fw-hook-pre/post and the --wf-*
+ * options into c.
  * windows tells the platform (a parameter for tests). A --wf-* filter goes
  * to c->filter (whole, with c->filter_whole) and its text to *owned (free
  * it), --wf-save to *save. Returns 0, or -1 with a message in err. */

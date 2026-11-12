@@ -22,7 +22,7 @@ enum {
     NFQ_HOOK_POST_ROUTING = 4,
 };
 
-enum { NFQ_DROP = 0, NFQ_ACCEPT = 1 };
+enum { NFQ_DROP = 0, NFQ_ACCEPT = 1, NFQ_REPEAT = 4 /* the hook again, from its first rule */ };
 
 typedef struct nfq nfq;
 

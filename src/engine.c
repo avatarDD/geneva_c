@@ -381,6 +381,19 @@ void engine_held(eng_worker *w, const void *pctx, const void *kept)
         w->c.verdict_errors++;
 }
 
+int engine_healthy_on(const engine *e) { return e->o->fw.healthy_mark && e->be->healthy && !e->o->slots; }
+
+int engine_healthy(eng_worker *w, const void *pctx, int first)
+{
+    engine *e = w->e;
+    if (!engine_healthy_on(e))
+        return 0;
+    e->be->healthy(w, pctx);
+    if (first)
+        w->c.healthy++;
+    return 1;
+}
+
 int engine_workers_init(engine *e, unsigned nw, sbuf *err)
 {
     if (e->w)
@@ -720,6 +733,8 @@ static void stats_fields(engine *e, jw *w)
     jw_kuint(w, "passed_first", c->passed_first);
     jw_kuint(w, "flow_evictions", c->flow_evictions);
     jw_kuint(w, "held", c->held);
+    if (e->o->fw.healthy_mark)
+        jw_kuint(w, "healthy", c->healthy);
     if (e->threaded) {
         /* the packets of each worker: how the rules spread the flows */
         jw_kuint(w, "workers", e->nw);

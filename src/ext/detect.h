@@ -97,6 +97,10 @@ const char *xdet_class_name(int c);
 
 enum { XK_PORT = 0, XK_NET, XK_IP, XK_HOST, XK_LEVELS };
 const char *xdet_level_name(int level);
+/* A flow's keys by level, as the detector names them ("tcp/443",
+ * "203.0.113.0/24", "203.0.113.7", the host or ""); f in the client's
+ * orientation */
+void xdet_flow_keys(const ct_flow *f, const char *host, char names[XK_LEVELS][300]);
 
 typedef struct {
     int retrans;               /* 3 */

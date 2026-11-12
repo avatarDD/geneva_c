@@ -70,6 +70,10 @@ typedef struct {
     int obs;
     uint16_t obs_group;
     int obs_first;
+    /* --ext surgical path (docs/EXT.md, X10b): a connection whose conntrack
+     * mark has these bits no longer goes to the queue (the engine sets them
+     * once no strategy can apply to it any more); 0: off */
+    uint32_t healthy_mark;
 } fw_config;
 
 #define FW_FILTER_FILE_MAX 65536 /* bytes of a --filter-file */

@@ -77,6 +77,10 @@
     {"ext-flowoffload", 0, 1, "none|software|hardware",                                                      \
      EXT_HELP("Linux, nft: our flowtable over --iface/--ext-wan and --ext-lan, the queued flows kept out of " \
               "it while queued (turn the system's flow offload off)")},                                      \
+    {"ext-healthy-mark", 0, 1, "on|MASK",                                                                    \
+     EXT_HELP("Linux: mark connections the engine is done with (no strategy can apply any more, none of "     \
+              "its keys blocked) in conntrack, and the rules let them go past the queue (on: 0x10000000; "    \
+              "off by default)")},                                                                             \
     {"fw-hook-pre", 0, 1, "FILE", EXT_HELP("Linux: run FILE up|down BACKEND QUEUE before the rules go up or down")}, \
     {"fw-hook-post", 0, 1, "FILE", EXT_HELP("Linux: the same after them")},                                    \
     {"wf-tcp-out", 0, 1, "[~]P[-P],..", EXT_HELP("WinDivert filter of winws2 (replaces the one from -p): TCP to " \

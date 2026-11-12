@@ -455,6 +455,26 @@ int xfw_parse(const args_t *a, int windows, fw_config *c, char **owned, const ch
         }
     }
     c->ttl_icmp = arg_has(a, "ext-ttl-icmp");
+    /* the surgical path (X10b): asked for (it changes the rules, and
+     * several instances on the same traffic need bits of their own), Linux
+     * only, not for a router's forwarding */
+    c->healthy_mark = 0;
+    if ((s = arg_str(a, "ext-healthy-mark", NULL)) != NULL && !windows) {
+        char *end;
+        unsigned long m = strtoul(s, &end, 0);
+        if (!strcmp(s, "on"))
+            m = XFW_HEALTHY_MARK;
+        else if (!*s || *end || m > 0xffffffffUL) {
+            sb_printf(err, "bad --ext-healthy-mark %s (on, a mask, 0: off)", s);
+            return -1;
+        }
+        c->healthy_mark = c->forward ? 0 : (uint32_t)m;
+    }
+    if (c->healthy_mark & c->mark) {
+        sb_printf(err, "--ext-healthy-mark 0x%x shares bits with --mark 0x%x", (unsigned)c->healthy_mark,
+                  (unsigned)c->mark);
+        return -1;
+    }
     if ((s = arg_str(a, "ext-flowoffload", NULL)) != NULL) {
         if (!strcmp(s, "none"))
             c->offload = 0;
@@ -485,8 +505,8 @@ int xfw_parse(const args_t *a, int windows, fw_config *c, char **owned, const ch
         (c->hook_post && hook_path("fw-hook-post", c->hook_post, err) < 0))
         return -1;
     if (windows) {
-        static const char *const linux_only[] = {"ext-lan", "ext-notrack", "ext-ttl-icmp",
-                                                 "ext-flowoffload", "fw-hook-pre", "fw-hook-post"};
+        static const char *const linux_only[] = {"ext-lan", "ext-notrack", "ext-ttl-icmp", "ext-flowoffload",
+                                                 "fw-hook-pre", "fw-hook-post", "ext-healthy-mark"};
         for (size_t i = 0; i < sizeof(linux_only) / sizeof(*linux_only); i++)
             if (arg_has(a, linux_only[i])) {
                 sb_printf(err, "--%s is Linux only", linux_only[i]);

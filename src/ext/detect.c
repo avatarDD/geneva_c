@@ -278,7 +278,7 @@ static void key_freeze(xdet *d, xkey *k, uint64_t b, uint64_t now)
 }
 
 /* the flow's keys, from the most general */
-static void flow_keys(const ct_flow *f, const char *host, char names[XK_LEVELS][300])
+void xdet_flow_keys(const ct_flow *f, const char *host, char names[XK_LEVELS][300])
 {
     char a[64];
     uint8_t net[16];
@@ -435,7 +435,7 @@ static void decide(xdet *d, ct_flow *f, int ok, int cls, const char *why, uint64
     else
         d->failed++;
     flow_event(d, f, ok, cls, why);
-    flow_keys(f, flow_host(f), names);
+    xdet_flow_keys(f, flow_host(f), names);
     for (int l = 0; l < XK_LEVELS; l++) {
         xkey *k;
         if (!names[l][0] || !(k = key_get(d, names[l], l, now, 1)))
@@ -470,7 +470,7 @@ static void redecide(xdet *d, ct_flow *f, int cls, uint64_t b, const char *why, 
     fs->decided = 1;
     fs->ok = 0;
     flow_event(d, f, 0, cls, why);
-    flow_keys(f, flow_host(f), names);
+    xdet_flow_keys(f, flow_host(f), names);
     for (int l = 0; l < XK_LEVELS; l++) {
         xkey *k;
         if (!names[l][0] || (fs->dns_stub && l != XK_HOST) || !(k = key_get(d, names[l], l, now, 1)))
@@ -492,7 +492,7 @@ static void strict_ok(xdet *d, ct_flow *f, uint64_t rbytes, double rate, uint64_
     char names[XK_LEVELS][300];
     if (!fs->skipmask)
         return;
-    flow_keys(f, flow_host(f), names);
+    xdet_flow_keys(f, flow_host(f), names);
     for (int l = 0; l < XK_LEVELS; l++) {
         xkey *k;
         if (!(fs->skipmask & (1 << l)) || !(k = key_get(d, names[l], l, now, 0)))
@@ -871,7 +871,7 @@ static void check_throttle(xdet *d, ct_flow *f, vwatch *w, uint64_t now)
         snprintf(why, sizeof(why), "a plateau of %.0f B/s, capacity %.0f B/s", med, d->cap);
         redecide(d, f, XC_THROTTLE, 0, why, now);
         /* the keys impaired by it want 3 times the plateau from now on */
-        flow_keys(f, flow_host(f), names);
+        xdet_flow_keys(f, flow_host(f), names);
         for (int l = 0; l < XK_LEVELS; l++) {
             xkey *k = names[l][0] ? key_get(d, names[l], l, now, 0) : NULL;
             if (k && k->impaired && k->cls == XC_THROTTLE && !k->strict_b)

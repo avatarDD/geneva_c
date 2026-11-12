@@ -95,6 +95,10 @@ typedef struct backend {
      * has one queue only. */
     sock_t (*worker_fd)(eng_worker *w);
     int (*worker_ready)(eng_worker *w);
+    /* --ext surgical path (X10b): the verdict of the captured packet pctx
+     * also puts fw.healthy_mark into its connection's mark, and the rules
+     * stop queueing the connection. NULL: the backend cannot. */
+    void (*healthy)(eng_worker *w, const void *pctx);
 } backend;
 
 /* A packet waiting for its sleep to end. */
@@ -113,11 +117,12 @@ typedef struct {
  * new counter goes here and nowhere else (plus its line in "stats").
  * passed_first: --first, packets past the first N of their flow;
  * flow_evictions: --first, live flows pushed out of a full table;
- * held: --ext, packets whose verdict waited for a reassembly. */
+ * held: --ext, packets whose verdict waited for a reassembly;
+ * healthy: --ext, connections the engine let go (surgical path). */
 #define ENG_COUNTERS(X)                                                             \
     X(pkts_out) X(pkts_in) X(triggered) X(accepted) X(modified) X(dropped)            \
     X(injected) X(delayed) X(send_errors) X(verdict_errors) X(parse_errors) X(overruns) \
-    X(passed_first) X(flow_evictions) X(held)
+    X(passed_first) X(flow_evictions) X(held) X(healthy)
 
 typedef struct {
 #define ENG_COUNTER_FIELD(n) uint64_t n;
@@ -237,6 +242,14 @@ void engine_hold(eng_worker *w);
 const void *engine_detach(eng_worker *w, const void *pctx, void *out);
 /* After the hold: the captured packet goes (detached: dropped now) */
 void engine_held(eng_worker *w, const void *pctx, const void *kept);
+/* --ext surgical path: no strategy can apply to the captured packet's
+ * connection any more; its verdict marks it so that the rules let it go
+ * past the queue (fw.healthy_mark). first: counted (once per flow; later
+ * packets that still came, the mark not yet set, call it again). Returns 1
+ * when the backend marks connections, else 0. */
+int engine_healthy(eng_worker *w, const void *pctx, int first);
+/* Does the engine mark connections (fw.healthy_mark and a backend that can)? */
+int engine_healthy_on(const engine *e);
 /* A held packet back: runs it through st (NULL, or paused: it goes as it
  * is) with xctx for the triggers of the extensions; the first result rides
  * on its verdict, as for a packet that was never held. */

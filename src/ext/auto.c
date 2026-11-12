@@ -10,6 +10,7 @@
 #include "ctnl.h"
 #include "detect.h"
 #include "log.h"
+#include "policy.h"
 #include "nflog.h"
 #include "pkt.h"
 #include "wdsniff.h"
@@ -130,6 +131,12 @@ static void on_flow(void *ud, const xdet_flow_ev *ev)
 static void on_key(void *ud, const xdet_key_ev *ev)
 {
     (void)ud;
+    /* the policy the workers read (surgical path: an impaired key keeps
+     * its connections in the queue) */
+    if (!ev->class_change) {
+        xpol_set(ev->key, ev->impaired ? XPOL_IMPAIRED : XPOL_HEALTHY);
+        xpol_publish();
+    }
     if (ev->impaired)
         LOGI("auto", "%s %s %s: %s (%u of %u flows failed)", xdet_level_name(ev->level), ev->key,
              ev->class_change ? "changed its class" : "impaired", xdet_class_name(ev->cls), ev->fails, ev->flows);
