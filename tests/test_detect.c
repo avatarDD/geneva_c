@@ -68,7 +68,7 @@ static size_t mk(uint8_t *b, const fl *f, int from_server, unsigned flags, uint3
 /* ---- the sink ---- */
 
 typedef struct {
-    int flows_ok, flows_bad, last_cls;
+    int flows_ok, flows_bad, last_cls, flows_prov;
     int links, link_deg;
     unsigned link_bad, link_active;
     char last_host[64], last_why[128];
@@ -82,7 +82,9 @@ typedef struct {
 static void on_flow(void *ud, const xdet_flow_ev *ev)
 {
     rec *r = ud;
-    if (ev->ok)
+    if (ev->ok && ev->provisional)
+        r->flows_prov++;
+    else if (ev->ok)
         r->flows_ok++;
     else
         r->flows_bad++, r->last_cls = ev->cls;
@@ -579,9 +581,14 @@ TEST(detect_freeze)
     keys_json(d, &s);
     CHECK(strstr(s.data, "{\"key\":\"10.9.20.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"FREEZE_N\","
                          "\"flows\":5,\"fails\":3,\"classes\":{\"FREEZE_N\":3}}") != NULL);
-    /* now a success needs more than twice B (20500) */
+    /* now a success needs more than twice B (20500): the flow's success is
+     * provisional until then */
+    r.flows_ok = r.flows_prov = 0;
     ok_flow(d, &f);
+    CHECK_INT(r.flows_prov, 1);
+    CHECK_INT(r.flows_ok, 0);
     ctr(d, &f, 30000, 0, g_now);
+    CHECK_INT(r.flows_ok, 0);
     keys_json(d, &s);
     CHECK(strstr(s.data, "\"10.9.20.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"FREEZE_N\",\"flows\":5,") !=
           NULL);
@@ -589,6 +596,11 @@ TEST(detect_freeze)
     ok_flow(d, &f);
     ctr(d, &f, 30000, 1, g_now);
     ctr(d, &f, 50000, 1, g_now + 1000);
+    CHECK_INT(r.flows_prov, 2);
+    CHECK_INT(r.flows_ok, 1); /* "the stricter success" */
+    CHECK_STR(r.last_why, "the stricter success");
+    ctr(d, &f, 60000, 1, g_now + 2000);
+    CHECK_INT(r.flows_ok, 1); /* once */
     keys_json(d, &s);
     CHECK(strstr(s.data, "\"10.9.20.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"FREEZE_N\",\"flows\":6,") !=
           NULL);
@@ -659,6 +671,14 @@ TEST(detect_throttle)
     keys_json(d, &s);
     CHECK(strstr(s.data, "\"10.9.31.2\",\"level\":\"ip\",\"impaired\":true,\"class\":\"THROTTLE\",\"flows\":3,") !=
           NULL);
+    /* a download over before its first rate window: its mean rate decides */
+    r.flows_ok = 0;
+    ok_flow(d, &f);
+    ctr(d, &f, 2000000, 0, g_now + 500);
+    CHECK_INT(r.flows_ok, 1);
+    CHECK_STR(r.last_why, "the stricter success");
+    f.cport++;
+    g_now += 1000;
     /* a rate that varies is no plateau, nor is one with a burst */
     f.srv = 32;
     {
@@ -1149,17 +1169,20 @@ TEST(detect_fw)
 
 static const optdef g_defs[] = {
     EXT_AUTO_OPTS,
+    {"ext-seccomp", 0, 2, "0|1", NULL},
+    {"user", 0, 1, "NAME", NULL},
     {NULL, 0, 0, NULL, NULL},
 };
 
-static int auto_parse(fw_config *c, sbuf *err, const char *w0, const char *w1, const char *w2, const char *w3)
+static int auto_parse6(fw_config *c, sbuf *err, const char *w0, const char *w1, const char *w2, const char *w3,
+                       const char *w4, const char *w5)
 {
-    const char *words[] = {"x", w0, w1, w2, w3};
-    char *argv[6], e[128];
+    const char *words[] = {"x", w0, w1, w2, w3, w4, w5};
+    char *argv[8], e[128];
     int argc = 1, r;
     args_t a;
     argv[0] = (char *)words[0];
-    for (int i = 1; i < 5 && words[i]; i++)
+    for (int i = 1; i < 7 && words[i]; i++)
         argv[argc++] = (char *)words[i];
     argv[argc] = NULL;
     sb_reset(err);
@@ -1171,6 +1194,11 @@ static int auto_parse(fw_config *c, sbuf *err, const char *w0, const char *w1, c
     r = xauto_parse(&a, c, err);
     args_free(&a);
     return r;
+}
+
+static int auto_parse(fw_config *c, sbuf *err, const char *w0, const char *w1, const char *w2, const char *w3)
+{
+    return auto_parse6(c, err, w0, w1, w2, w3, NULL, NULL);
 }
 
 TEST(detect_options)
@@ -1206,6 +1234,33 @@ TEST(detect_options)
     CHECK_INT(xtreat_mode(), XTR_PROPOSE);
     CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", NULL, NULL), 0);
     CHECK_INT(xtreat_mode(), XTR_OFF);
+    /* --ext-ga: the treatment's, starts geneva evolve (Linux, no seccomp) */
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", "--ext-ga", NULL), -1);
+    CHECK_STR(e.data, "--ext-ga is for --ext-auto propose or apply");
+    CHECK_INT(auto_parse(&c, &e, "--ext-ga", NULL, NULL, NULL), -1);
+    CHECK_STR(e.data, "--ext-ga is for --ext-auto");
+    if (!FW_WINDOWS) {
+        CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-ga", NULL), -1);
+        CHECK_STR(e.data, "--ext-ga starts geneva evolve: it needs --ext-seccomp 0");
+        CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga", "--ext-seccomp=0", NULL, NULL), 0);
+        CHECK_INT(xga_on(), 1);
+        CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga=20:3", "--ext-seccomp=0", NULL, NULL), 0);
+        CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga=20:x", "--ext-seccomp=0", NULL, NULL), -1);
+        CHECK_STR(e.data, "bad --ext-ga 20:x (POP:GEN, population 2-1000, generations 1-100)");
+        CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga=1", "--ext-seccomp=0", NULL, NULL), -1);
+        CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga", "--ext-seccomp=0", "--user", "nobody"), -1);
+        CHECK_STR(e.data, "--ext-ga: the search needs root, not with --user or --uid");
+    } else {
+        CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-ga", NULL), -1);
+        CHECK_STR(e.data, "--ext-ga is Linux-only");
+    }
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", "--ext-treat-arms", "1"), -1);
+    CHECK_STR(e.data, "--ext-treat-arms is for --ext-auto propose or apply");
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-treat-arms", "1,9"), -1);
+    CHECK_STR(e.data, "bad --ext-treat-arms 1,9 (arm numbers 1-7, comma-separated)");
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-treat-arms", "1,5"), 0);
+    xauto_reset();
+    CHECK_INT(xga_on(), 0);
     strategy_set_xact(NULL);
     CHECK_INT(auto_parse(&c, &e, "--ext-auto", "watch", NULL, NULL), -1);
     CHECK_STR(e.data, "bad --ext-auto watch (observe, propose, apply)");

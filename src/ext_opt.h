@@ -61,6 +61,14 @@
               "fake Initial, fragments), Thompson sampling over its connections, the best one kept while " \
               "it works (events ext_treat); its connections must reach the queue (-p, --proto). propose: " \
               "the same after ctl ext_approve proposal=N (event ext_proposal, ctl ext_proposals)")},        \
+    {"ext-treat-arms", 0, 1, "N,..",                                                                         \
+     EXT_HELP("with --ext-auto apply|propose: only these arms of the built-in portfolio (1-7, as ctl "       \
+              "ext_keys numbers them; default all)")},                                                      \
+    {"ext-ga", 0, 2, "POP:GEN",                                                                               \
+     EXT_HELP("Linux, with --ext-auto apply|propose: a key whose arms all failed gets a genetic search, "    \
+              "geneva evolve as a child (its own queue, --queue+64, and rules) seeded with Geneva's "         \
+              "library and probing the key (tls or http); the arm it finds is tried on the key's "            \
+              "connections. POP:GEN population and generations (50:5); needs --ext-seccomp 0")},             \
     {"ext-nflog-group", 0, 1, "N", EXT_HELP("Linux: the NFLOG group of --ext-auto (the queue number)")},       \
     {"ext-observe-first", 0, 1, "N",                                                                          \
      EXT_HELP("Linux: --ext-auto's packets of each direction observed per flow (16)")}

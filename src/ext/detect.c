@@ -307,6 +307,7 @@ typedef struct {
     uint8_t redecided;     /* the success was taken back or turned */
     uint8_t dns_seen, dns_ttl;
     uint8_t dns_stub;      /* the failure is a stub address: the host's only */
+    uint8_t strict_told;   /* the stricter success went out as a flow event */
     uint16_t dns_id;
 } fstate;
 
@@ -406,12 +407,13 @@ static const char *flow_host(ct_flow *f)
     return NULL;
 }
 
-static void flow_event(xdet *d, ct_flow *f, int ok, int cls, const char *why)
+static void flow_event(xdet *d, ct_flow *f, int ok, int provisional, int cls, const char *why)
 {
     xdet_flow_ev ev;
     memset(&ev, 0, sizeof(ev));
     ev.f = f;
     ev.ok = ok;
+    ev.provisional = provisional;
     ev.cls = ok ? XC_NONE : cls;
     ev.host = flow_host(f);
     ev.why = why;
@@ -426,6 +428,7 @@ static void decide(xdet *d, ct_flow *f, int ok, int cls, const char *why, uint64
 {
     fstate *fs = fs_of(f);
     char names[XK_LEVELS][300];
+    int provisional = 0;
     if (fs->decided)
         return;
     fs->decided = 1;
@@ -434,8 +437,14 @@ static void decide(xdet *d, ct_flow *f, int ok, int cls, const char *why, uint64
         d->ok++;
     else
         d->failed++;
-    flow_event(d, f, ok, cls, why);
     xdet_flow_keys(f, flow_host(f), names);
+    /* a key of the flow wants the stricter success: this one may be a
+     * freeze yet (the flow event says so) */
+    for (int l = 0; ok && f->proto == 6 && l < XK_LEVELS; l++) {
+        xkey *k = names[l][0] ? key_get(d, names[l], l, now, 0) : NULL;
+        provisional |= k && strict(k);
+    }
+    flow_event(d, f, ok, provisional, cls, why);
     for (int l = 0; l < XK_LEVELS; l++) {
         xkey *k;
         if (!names[l][0] || !(k = key_get(d, names[l], l, now, 1)))
@@ -469,7 +478,7 @@ static void redecide(xdet *d, ct_flow *f, int cls, uint64_t b, const char *why, 
     d->failed++;
     fs->decided = 1;
     fs->ok = 0;
-    flow_event(d, f, 0, cls, why);
+    flow_event(d, f, 0, 0, cls, why);
     xdet_flow_keys(f, flow_host(f), names);
     for (int l = 0; l < XK_LEVELS; l++) {
         xkey *k;
@@ -501,6 +510,10 @@ static void strict_ok(xdet *d, ct_flow *f, uint64_t rbytes, double rate, uint64_
             key_outcome(d, k, 1, XC_NONE, now);
             fs->skipmask &= (uint8_t)~(1 << l);
             fs->okmask |= (uint8_t)(1 << l);
+            if (!fs->strict_told) {
+                fs->strict_told = 1;
+                flow_event(d, f, 1, 0, XC_NONE, "the stricter success");
+            }
         }
     }
 }
@@ -924,6 +937,10 @@ static void counters_of(xdet *d, ct_flow *f, const xdet_ctr *c, uint64_t now)
     if (!c->found || !c->open) {
         if (w->nrate)
             check_throttle(d, f, w, now);
+        else if (w->rbytes && now > w->t_start)
+            /* over before a rate window (a fast download): the stricter
+             * success by its mean rate */
+            strict_ok(d, f, w->rbytes, (double)w->rbytes * 1000.0 / (double)(now - w->t_start), now);
         if (!w->done)
             LOGD("detect", "the flow from port %u ended (%s) after %llu bytes, %d rate windows", f->cport,
                  c->found ? "closed" : "gone", (unsigned long long)w->rbytes, w->nrate);

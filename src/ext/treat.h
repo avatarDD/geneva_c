@@ -33,26 +33,33 @@
 #include "util.h"
 
 enum { XTR_OFF = 0, XTR_PROPOSE, XTR_APPLY };
+/* the portfolio's arms; the index of a key's arm from --ext-ga */
+enum { XTR_NARMS = 7, XTR_GA_ARM = XTR_NARMS };
 
 /* After --ext-auto: the portfolio parsed (the x-actions registered). 0 or
  * -1 with err. */
 int xtreat_start(int mode, sbuf *err);
 void xtreat_stop(void);
 int xtreat_mode(void);
+/* --ext-treat-arms N,..: only these arms of the portfolio (after start) */
+int xtreat_allow(const char *list, sbuf *err);
 /* The portfolio's arms (the workers copy them) */
 size_t xtreat_narms(void);
 strategy *xtreat_arm(size_t i);
 
 /* A worker: the arm (index) flow f runs, -1 none. host: the L7's (NULL:
- * f->chost). f in the client's orientation. */
-int xtreat_flow(ct_flow *f, const char *host, uint64_t now_ms);
+ * f->chost). f in the client's orientation. XTR_GA_ARM: the key's arm from
+ * the genetic search, *ga its id (xtreat_ga_text; the worker keeps its own
+ * copy by id). */
+int xtreat_flow(ct_flow *f, const char *host, uint64_t now_ms, uint32_t *ga);
+int xtreat_ga_text(uint32_t id, char *out, size_t cap);
 
 /* The main thread, from the detector: a key's state changed (1: the key is
  * in treatment, the policy keeps it impaired) */
 int xtreat_key(const xdet_key_ev *ev, uint64_t now_ms);
 /* ... a flow's outcome */
 void xtreat_outcome(const xdet_flow_ev *ev, uint64_t now_ms);
-/* ... once a second: the rechecks of UNTREATABLE keys */
+/* ... once a second: the rechecks of UNTREATABLE keys, the genetic search */
 void xtreat_tick(uint64_t now_ms);
 
 /* ctl: ext_status "treat": {...}; ext_keys "treat": [...]; the pending
@@ -62,5 +69,27 @@ void xtreat_status(jw *w);
 void xtreat_keys(jw *w, size_t max);
 void xtreat_proposals(jw *w);
 int xtreat_decide(uint64_t id, int approve, jw *w);
+
+/* --ext-ga: the genetic search for a key whose arms all failed ("geneva
+ * evolve" as a child, src/ext/treatga.c) */
+typedef struct {
+    char exe[512];       /* "": /proc/self/exe */
+    char firewall[16];   /* --firewall of the run */
+    char log[256];       /* the child's --log-file ("" none) */
+    char rng_seed[24];   /* the child's --rng-seed ("" none) */
+    uint32_t mark;
+    uint16_t queue;      /* its own NFQUEUE */
+    int pop, gen;
+} xga_config;
+
+/* NULL: off; -1 with err */
+int xga_set(const xga_config *c, sbuf *err);
+int xga_on(void);
+int xga_running(void);
+/* probe "http" or "tls"; 0 started, -1 with err */
+int xga_launch(const char *probe, const char *host, const char *ip, unsigned port, sbuf *err);
+/* 1: the search ended; out the best strategy ("" none), fit its fitness */
+int xga_poll(char *out, size_t cap, double *fit);
+void xga_stop(void);
 
 #endif

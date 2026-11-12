@@ -43,7 +43,60 @@ void xauto_reset(void)
 {
     xauto_close();
     xtreat_stop();
+    xga_set(NULL, NULL);
     memset(&g, 0, sizeof(g));
+}
+
+/* --ext-ga [POP:GEN] */
+static int ga_parse(const args_t *a, const fw_config *c, sbuf *err)
+{
+    xga_config gc;
+    const char *v, *sc;
+    char *end;
+    long pop = 50, gen = 5;
+    if (!arg_has(a, "ext-ga"))
+        return 0;
+    if (g.mode == XTR_OFF) {
+        sb_puts(err, "--ext-ga is for --ext-auto propose or apply");
+        return -1;
+    }
+    if (FW_WINDOWS) {
+        sb_puts(err, "--ext-ga is Linux-only");
+        return -1;
+    }
+    sc = arg_str(a, "ext-seccomp", NULL);
+    if (!sc || strcmp(sc, "0")) {
+        sb_puts(err, "--ext-ga starts geneva evolve: it needs --ext-seccomp 0");
+        return -1;
+    }
+    if (arg_has(a, "user") || arg_has(a, "uid")) {
+        sb_puts(err, "--ext-ga: the search needs root, not with --user or --uid");
+        return -1;
+    }
+    v = arg_str(a, "ext-ga", "");
+    if (*v) {
+        pop = strtol(v, &end, 10);
+        if (*end == ':')
+            gen = strtol(end + 1, &end, 10);
+        if (*end || pop < 2 || pop > 1000 || gen < 1 || gen > 100) {
+            sb_printf(err, "bad --ext-ga %s (POP:GEN, population 2-1000, generations 1-100)", v);
+            return -1;
+        }
+    }
+    if (c->queue > 65535 - 64) {
+        sb_puts(err, "--ext-ga takes the queue --queue+64: give a lower --queue");
+        return -1;
+    }
+    memset(&gc, 0, sizeof(gc));
+    gc.pop = (int)pop;
+    gc.gen = (int)gen;
+    gc.queue = (uint16_t)(c->queue + 64);
+    gc.mark = c->mark;
+    snprintf(gc.firewall, sizeof(gc.firewall), "%s", arg_str(a, "firewall", "auto"));
+    snprintf(gc.rng_seed, sizeof(gc.rng_seed), "%s", arg_str(a, "rng-seed", ""));
+    if ((v = arg_str(a, "log-file", NULL)) != NULL)
+        snprintf(gc.log, sizeof(gc.log), "%s.ga", v);
+    return xga_set(&gc, err);
 }
 
 int xauto_parse(const args_t *a, fw_config *c, sbuf *err)
@@ -52,7 +105,7 @@ int xauto_parse(const args_t *a, fw_config *c, sbuf *err)
     int64_t v;
     xauto_reset();
     if (!s) {
-        static const char *const dep[] = {"ext-nflog-group", "ext-observe-first"};
+        static const char *const dep[] = {"ext-nflog-group", "ext-observe-first", "ext-ga", "ext-treat-arms"};
         for (size_t i = 0; i < sizeof(dep) / sizeof(*dep); i++)
             if (arg_has(a, dep[i])) {
                 sb_printf(err, "--%s is for --ext-auto", dep[i]);
@@ -84,8 +137,16 @@ int xauto_parse(const args_t *a, fw_config *c, sbuf *err)
     if (arg_int(a, "ext-observe-first", XAUTO_FIRST, 4, 1000, &v) < 0)
         return -1;
     g.first = (int)v;
-    if (xtreat_start(g.mode, err) < 0)
+    if (xtreat_start(g.mode, err) < 0 || ga_parse(a, c, err) < 0)
         return -1;
+    if (arg_has(a, "ext-treat-arms")) {
+        if (g.mode == XTR_OFF) {
+            sb_puts(err, "--ext-treat-arms is for --ext-auto propose or apply");
+            return -1;
+        }
+        if (xtreat_allow(arg_str(a, "ext-treat-arms", ""), err) < 0)
+            return -1;
+    }
     xdet_config_default(&g.dc);
     g.on = 1;
     if (FW_WINDOWS) {
@@ -253,6 +314,7 @@ int xauto_open(sbuf *err)
 
 void xauto_close(void)
 {
+    xga_stop(); /* --ext-ga: the search takes its rules down */
     wdsniff_close(g.sn);
     g.sn = NULL;
     if (g.nl)
