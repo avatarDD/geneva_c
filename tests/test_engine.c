@@ -46,7 +46,7 @@ static int fake_inject(eng_worker *w, const void *pctx, const uint8_t *data, siz
 }
 
 static const backend fake_backend = {
-    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, fake_verdict, fake_inject, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, fake_verdict, fake_inject, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 };
 
 static void load_base(void)
@@ -206,7 +206,7 @@ static int tw_worker_ready(eng_worker *w)
 
 static const backend tw_backend = {
     "threads", sizeof(uint32_t), tw_open, tw_nop, tw_nop, tw_pollfds, tw_ready, tw_verdict, tw_inject, 0,
-    NULL, NULL, NULL, NULL, NULL, tw_fd, tw_worker_ready,
+    NULL, NULL, NULL, NULL, NULL, tw_fd, tw_worker_ready, NULL,
 };
 
 #  define TW_STRATEGY "[TCP:flags:PA]-duplicate(tamper{TCP:seq:corrupt},sleep{5})-| \\/"

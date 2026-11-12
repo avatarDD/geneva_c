@@ -1129,7 +1129,7 @@ static int x_inject_x(eng_worker *w, const void *pctx, const uint8_t *data, size
 }
 
 static const backend xbe = {
-    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, x_verdict, x_inject, 0, NULL, NULL, NULL, x_inject_x, NULL, NULL, NULL,
+    "fake", sizeof(uint32_t), NULL, NULL, NULL, NULL, NULL, x_verdict, x_inject, 0, NULL, NULL, NULL, x_inject_x, NULL, NULL, NULL, NULL,
 };
 
 static const char *events(void)

@@ -21,6 +21,10 @@ typedef struct {
     rawsend **rs;
     unsigned n;
     int fw_on;
+    /* per worker: the packet whose verdict also marks its connection
+     * healthy (heal_on), surgical path */
+    uint32_t *heal_id;
+    uint8_t *heal_on;
 } nfq_state;
 
 /* the NFQUEUE packet id first, then what the extensions read (meta);
@@ -46,7 +50,23 @@ static int nfq_be_verdict(eng_worker *w, const void *pctx, int accept, const uin
         }
         return 0;
     }
-    if (nfq_verdict(s->q[w->id], id, accept ? NFQ_ACCEPT : NFQ_DROP, data, len, 0, 0) < 0) {
+    int v = accept ? NFQ_ACCEPT : NFQ_DROP, set_mark = 0;
+    uint32_t mark = 0;
+    if (s->heal_on[w->id] && s->heal_id[w->id] == id) {
+        /* the surgical path: the packet goes through the hook again with
+         * healthy_mark, and the rules at its top move the bit into the
+         * connection's mark (CONNMARK, ct mark set), take it off the packet
+         * and let it go. (A verdict's NFQA_CT would set the ct mark at once,
+         * but needs CONFIG_NETFILTER_NETLINK_GLUE_CT, which many kernels
+         * lack.) */
+        s->heal_on[w->id] = 0;
+        if (accept) {
+            v = NFQ_REPEAT;
+            set_mark = 1;
+            mark = ((const nfq_pctx *)pctx)->mark | w->e->o->fw.healthy_mark;
+        }
+    }
+    if (nfq_verdict(s->q[w->id], id, v, data, len, set_mark, mark) < 0) {
         LOGW("engine", "verdict for packet %u failed: %s", id, strerror(errno));
         return -1;
     }
@@ -73,6 +93,17 @@ static int nfq_be_inject_x(eng_worker *w, const void *pctx, const uint8_t *data,
         return -1;
     }
     return 0;
+}
+
+static void nfq_be_healthy(eng_worker *w, const void *pctx)
+{
+    nfq_state *s = w->e->bs;
+    nfq_pctx c;
+    memcpy(&c, pctx, sizeof(c));
+    if (c.detached) /* sent anew, no verdict to carry it */
+        return;
+    s->heal_id[w->id] = c.id;
+    s->heal_on[w->id] = 1;
 }
 
 static void nfq_be_meta(const void *pctx, uint32_t *mark, uint32_t *ifin, uint32_t *ifout)
@@ -127,6 +158,8 @@ static int nfq_be_open(engine *e, sbuf *err)
     s->n = e->nw ? e->nw : 1;
     s->q = xcalloc(s->n, sizeof(*s->q));
     s->rs = xcalloc(s->n, sizeof(*s->rs));
+    s->heal_id = xcalloc(s->n, sizeof(*s->heal_id));
+    s->heal_on = xcalloc(s->n, sizeof(*s->heal_on));
     for (unsigned i = 0; i < s->n; i++) {
         memset(&qc, 0, sizeof(qc));
         qc.queue = (uint16_t)(o->fw.queue + i);
@@ -194,6 +227,8 @@ static void nfq_be_close(engine *e)
     }
     free(s->q);
     free(s->rs);
+    free(s->heal_id);
+    free(s->heal_on);
     free(s);
     e->bs = NULL;
 }
@@ -256,6 +291,7 @@ const backend nfq_backend = {
     nfq_be_detach,
     nfq_be_worker_fd,
     read_batch,
+    nfq_be_healthy,
 };
 
 #endif

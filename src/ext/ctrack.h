@@ -94,6 +94,10 @@ struct ct_flow {
      * ah_final: decided, ah_retrans: the retransmission counter) */
     char *chost;
     uint8_t chost_ip, chost_disc, xcheck, ah_check, ah_final, ah_retrans;
+    /* the surgical path (src/ext/ext.c, X10b): the engine let the
+     * connection go (its verdicts mark it, the rules stop queueing it):
+     * how many verdicts marked it */
+    uint8_t xhealthy;
 
     /* table links */
     ct_flow *hnext, *lprev, *lnext;

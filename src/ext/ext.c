@@ -18,6 +18,8 @@
 #include "json.h"
 #include "log.h"
 #include "plat.h"
+#include "policy.h"
+#include "detect.h"
 #include "profile.h"
 #include "rawsend.h"
 #include "seqtrack.h"
@@ -59,6 +61,7 @@ static int g_server_side; /* run --server-side: outbound packets come from the s
  * path); the main loop's re-reading of the lists takes it alone. */
 static plat_rwlock_t g_xlock;
 static int g_threaded, g_ahl_any;
+static int g_healthy; /* the surgical path: the engine marks connections it is done with */
 
 /* --ext-payload-disable, --ext-reasm-disable: a payload list, "all" for
  * every type */
@@ -480,6 +483,11 @@ static int xw_open(eng_worker *w, sbuf *err)
     if (!g_ct_disable)
         x->ct = ctrack_new(&c);
     x->l7 = xl7_new(&g_l7);
+    if (w->id == 0) {
+        /* before the threads start: the workers read the policy */
+        xpol_init(w->e->nw);
+        g_healthy = engine_healthy_on(w->e);
+    }
     if (w->e->threaded) {
         if (w->id == 0) {
             /* before the threads start */
@@ -518,8 +526,11 @@ static void xw_close(eng_worker *w)
     if (!x)
         return;
     x->closed = 1; /* xw_flush gave held packets their verdicts */
-    if (w->id == 0)
+    if (w->id == 0) {
         xauto_close();
+        xpol_free(); /* the threads have ended */
+        g_healthy = 0;
+    }
     ctrack_free(x->ct);
     xl7_free(x->l7);
     for (size_t i = 0; x->pst && i < g_prof.n; i++)
@@ -644,6 +655,67 @@ static void xw_emit(void *ud, const uint8_t *pkt, size_t len)
     engine_inject(u->w, u->pctx, pkt, len);
 }
 
+/* ---- the surgical path (X10b) ---- */
+
+/* marks of one connection at most (the first included) */
+#define HEAL_TRIES 4
+
+/* L7 protocols whose first client message names the host */
+static int host_l7(int l7) { return l7 == L7_HTTP || l7 == L7_TLS || l7 == L7_QUIC; }
+
+/* No tree of st's forest of direction d can fire on f any more */
+static int dir_done(const strategy *s, strat_dir d, ct_flow *f)
+{
+    size_t n = d == DIR_IN ? s->nin : s->nout;
+    return !n || xtrig_all_cut(s, d, f);
+}
+
+/* Is the engine done with f, st being the strategy its packets get? Only
+ * when nothing can change that: the profile search is over (the L7 known,
+ * the host too where the protocol names one, the search done with both),
+ * no autolist watches the flow, no seqtrack shifts it, no tree of st can
+ * fire on it again, and none of its keys is impaired in the policy. Then
+ * the packet's verdict marks the connection and the rules let it go. Later
+ * packets that still come (the mark not set yet) mark it again, up to
+ * HEAL_TRIES in all. */
+static void flow_healthy(eng_worker *w, const xpkt_ctx *c, const strategy *st, const void *pctx)
+{
+    ct_flow *f = c->f;
+    const xpol_snap *ps;
+    int bad = 0;
+    if (!g_healthy || !f || f->xseq || w->e->paused || g_server_side)
+        return;
+    if (f->xhealthy) {
+        /* in the queue before the rule saw the mark, or the mark did not
+         * stick: a few times more. Not forever: a packet without conntrack
+         * (the user's NOTRACK) keeps coming back after each repeat */
+        if (f->xhealthy < HEAL_TRIES && engine_healthy(w, pctx, 0))
+            f->xhealthy++;
+        return;
+    }
+    if (g_prof.n) {
+        if (!f->xprof_done || !f->l7proto || f->xprof_l7 != f->l7proto || f->xprof_host != f->chost_disc ||
+            (host_l7(f->l7proto) && !f->chost_disc))
+            return;
+        if (f->xprof >= 0 && g_prof.v[f->xprof]->ahl)
+            return;
+    }
+    if (st && !(dir_done(st, DIR_OUT, f) && dir_done(st, DIR_IN, f)))
+        return;
+    ps = xpol_enter(w->id);
+    if (xpol_count(ps)) {
+        char names[XK_LEVELS][300];
+        const char *k[XPOL_KEYS];
+        xdet_flow_keys(f, f->chost, names);
+        for (int i = 0; i < XPOL_KEYS; i++)
+            k[i] = names[i];
+        bad = xpol_any_impaired(ps, k);
+    }
+    xpol_leave(w->id);
+    if (!bad && engine_healthy(w, pctx, 1))
+        f->xhealthy = 1;
+}
+
 static int xw_packet_in(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, const uint8_t *data, size_t len,
                         const void *pctx)
 {
@@ -726,11 +798,16 @@ static int xw_packet_in(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, c
     }
     if (bypass || (mb && ml && (w->e->paused || !st))) {
         /* (the engine would let the packet go as it came) */
+        flow_healthy(w, c, st, pctx);
         engine_verdict(w, pctx, 1, data, len, mb && ml);
         free(mb);
         return 1;
     }
     free(mb);
+    /* no strategy, or none for this direction (the engine lets the packet
+     * go as it came): the other direction may be done too */
+    if (!st || (c->f && dir_done(st, dir, c->f)))
+        flow_healthy(w, c, st, pctx);
     c->l7 = &x->view;
     w->xctx = c;
     *stp = st;
@@ -893,8 +970,11 @@ static int xw_control(engine *e, const char *cmd, const json_val *req, jw *w, sb
         return 1;
     }
     if (!strcmp(cmd, "ext_status")) {
-        if (w)
+        if (w) {
             xauto_status(w);
+            xpol_json(w);
+            jw_kbool(w, "surgical", g_healthy);
+        }
         return 1;
     }
     if (strcmp(cmd, "reload_lists"))
@@ -914,6 +994,7 @@ static size_t xw_pollfds(engine *e, plat_pollfd *fds, size_t max)
 
 static void xw_ready(engine *e, const plat_pollfd *fds, size_t n)
 {
+    xpol_publish(); /* what waited for a slot, and the replaced snapshots freed */
     if (g_threaded && g_prof.n) {
         /* the lists' files, at most once a second (xlists_reload): the
          * hooks wait meanwhile */

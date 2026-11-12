@@ -222,6 +222,16 @@ static void gen_ipt_queue(const fw_config *c, fwlist *l, int v6, const char *cha
         }
     }
     ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j RETURN", chain, c->mark, c->mark);
+    if (c->healthy_mark) {
+        /* --ext surgical path: the engine is done with the connection. Its
+         * verdict sent the packet through the hook again with the bit: into
+         * the connection's mark with it, off the packet, and the
+         * connection's later packets go past */
+        uint32_t h = c->healthy_mark;
+        ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j CONNMARK --or-mark 0x%x", chain, h, h, h);
+        ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j MARK --and-mark 0x%x", chain, h, h, ~h);
+        ipt(l, K_REQ, v6, "-t mangle -A %s -m connmark --mark 0x%x/0x%x -j RETURN", chain, h, h);
+    }
     for (int k = 0; k < (nif ? nif : 1); k++) {
         char ifm[64] = "";
         if (nif)
@@ -269,6 +279,16 @@ static void gen_ipt_forward(const fw_config *c, fwlist *l, int v6, const char *c
         snprintf(bypass, sizeof(bypass), " --queue-bypass");
     ipt(l, K_REQ, v6, "-t mangle -N %s", chain);
     ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j RETURN", chain, c->mark, c->mark);
+    if (c->healthy_mark) {
+        /* --ext surgical path: the engine is done with the connection. Its
+         * verdict sent the packet through the hook again with the bit: into
+         * the connection's mark with it, off the packet, and the
+         * connection's later packets go past */
+        uint32_t h = c->healthy_mark;
+        ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j CONNMARK --or-mark 0x%x", chain, h, h, h);
+        ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j MARK --and-mark 0x%x", chain, h, h, ~h);
+        ipt(l, K_REQ, v6, "-t mangle -A %s -m connmark --mark 0x%x/0x%x -j RETURN", chain, h, h);
+    }
     for (int k = 0; k < (nif ? nif : 1); k++) {
         char ifm[64] = "";
         if (nif)
@@ -295,6 +315,9 @@ static void gen_ipt_obs(const fw_config *c, fwlist *l, int v6, const char *chain
     ipt(l, K_REQ, v6, "-t mangle -N %s", chain);
     if (outdir)
         ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j RETURN", chain, c->mark, c->mark);
+    if (c->healthy_mark) /* seen already: the surgical path's second pass */
+        ipt(l, K_REQ, v6, "-t mangle -A %s -m mark --mark 0x%x/0x%x -j RETURN", chain, c->healthy_mark,
+            c->healthy_mark);
     ipt(l, K_REQ, v6, "-t mangle -A %s %s lo -j RETURN", chain, outdir ? "-o" : "-i");
     for (int k = 0; k < (nif ? nif : 1); k++) {
         char ifm[64] = "";
@@ -414,6 +437,13 @@ static void nft_queue_chain(const fw_config *c, sbuf *s, int outdir)
     sb_printf(s, "\tchain %s {\n\t\ttype filter hook %s priority %d; policy accept;\n",
               outdir ? "out" : "in", outdir ? "postrouting" : "prerouting", prio);
     sb_printf(s, "\t\tmeta mark & 0x%x == 0x%x return\n", c->mark, c->mark);
+    if (c->healthy_mark) {
+        /* --ext surgical path, as for iptables (gen_ipt_queue) */
+        uint32_t h = c->healthy_mark;
+        sb_printf(s, "\t\tmeta mark & 0x%x == 0x%x ct mark set ct mark or 0x%x meta mark set meta mark and 0x%x return\n",
+                  h, h, h, ~h);
+        sb_printf(s, "\t\tct mark & 0x%x == 0x%x return\n", h, h);
+    }
     for (int p = 0; p < 2; p++) {
         int first = fw_first(c, p, !outdir);
         if (!protos[p])
@@ -493,6 +523,8 @@ static void nft_obs_chain(const fw_config *c, sbuf *s, int outdir)
               outdir ? "postrouting" : "prerouting", prio);
     if (outdir)
         sb_printf(s, "\t\tmeta mark & 0x%x == 0x%x return\n", c->mark, c->mark);
+    if (c->healthy_mark) /* seen already: the surgical path's second pass */
+        sb_printf(s, "\t\tmeta mark & 0x%x == 0x%x return\n", c->healthy_mark, c->healthy_mark);
     sb_printf(s, "\t\t%s \"lo\" return\n", outdir ? "oifname" : "iifname");
     sb_puts(s, "\t\t");
     if (c->ipv4 != c->ipv6)
@@ -532,6 +564,8 @@ static void nft_offload(const fw_config *c, sbuf *s)
     sb_puts(s, "meta l4proto { tcp, udp } ");
     nft_ifname(c, s, "oifname");
     sb_puts(s, "jump flow_offload\n\t}\n\tchain flow_offload {\n");
+    if (c->healthy_mark) /* the queue is done with these */
+        sb_printf(s, "\t\tct mark & 0x%x == 0x%x flow add @ft\n", c->healthy_mark, c->healthy_mark);
     for (int p = 0; p < 2; p++) {
         /* the connection's original direction: out on the client side */
         int lim[2], always = 0;

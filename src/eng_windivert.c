@@ -537,6 +537,7 @@ const backend windivert_backend = {
     NULL, /* detach: WinDivert keeps a copy, the stack is not held up */
     NULL, /* worker_fd: one handle (--ext-workers is Linux only for now) */
     NULL,
+    NULL, /* healthy: no rules to let a connection go past (Linux only) */
 };
 
 #endif
