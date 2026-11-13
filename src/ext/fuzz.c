@@ -279,6 +279,12 @@ static const char *const ext_strategies[] = {
     "[FLOW:n:1-]-xoob{urp=midsld}-| \\/",
     "[FLOW:n:1-]-xtlsrec{pos=sniext+1}-| \\/",
     "[TCP:flags:PA]-xdrip{n=3;delay=5}-| \\/",
+#if GENEVA_EXT_CRYPTO
+    "[UDP:dport:51820]-xwgobfs{secret=s;padmax=4}-| \\/ [UDP:sport:51820]-xwgobfs{secret=s}-|",
+#endif
+    "[TCP:dport:443]-xippxor{ippxor=192;dataxor=0xABCD}-| \\/ [IP:proto:198]-xippxor{ippxor=192}-|",
+    "[UDP:dport:443]-xudp2icmp{dataxor=0x12}-| \\/ [IP:proto:1]-xudp2icmp{server=1}-|",
+    "[TCP:flags:S]-xsynhide{ghost=3;magic=urp;xorseq=01020304}-| \\/ [TCP:sport:443]-xsynhide{synack}-|",
     NULL,
 };
 

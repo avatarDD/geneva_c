@@ -51,6 +51,7 @@ geneva run --ext -s '...'
 | X11d | лечение `FREEZE_N` и `THROTTLE` (строгий успех), генетический поиск `--ext-ga` для ключей без рабочей руки, `--ext-treat-arms` | ниже |
 | X12a | `geneva resolve` (mdig zapret2) и `geneva ip2net` (ip2net zapret2) | ниже |
 | X12b | `geneva blockcheck`: `blockcheck2.sh` zapret2 со всей сеткой `blockcheck2.d/standard`, строки nfqws2 переведены в стратегии geneva; уровни, повторы, отчёт SUMMARY/COMMON/COVERAGE | ниже |
+| X13a | двусторонняя обфускация `zapret-obfs.lua`: `xwgobfs`, `xippxor`, `xudp2icmp`, `xsynhide` | ниже |
 | X12c | `geneva blockcheck`: проверка DNS (системный резолвер против публичных DNS, UDP против TCP), DoH через curl при подмене, тесты блокировки по порту и по IP | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
@@ -2051,11 +2052,68 @@ TLS 1.2 с `wssize`, если первый ничего не нашёл.
 цензора 17 (блокировка по IP): DNS стенда даёт всем именам один адрес
 (подмена), DoH-сервер стенда (Python, https) — настоящие, через curl.
 
+## Двусторонняя обфускация (X13a)
+
+Функции `zapret-obfs.lua` zapret2 как x-действия. Обфускация нужна с
+обеих сторон: одно и то же действие стоит в исходящем лесу одного конца
+и во входящем лесу другого (на другом конце может быть и nfqws2 с теми же
+функциями Lua — e2e проверяет оба варианта).
+
+```
+# клиент WireGuard (порт сервера 51820)
+geneva run --ext -p 51820 --proto udp \
+  -s '[UDP:dport:51820]-xwgobfs{secret=пароль}-| \/ [UDP:sport:51820]-xwgobfs{secret=пароль}-|'
+# сервер
+geneva run --ext --server-side -p 51820 --proto udp \
+  -s '[UDP:sport:51820]-xwgobfs{secret=пароль}-| \/ [UDP:dport:51820]-xwgobfs{secret=пароль}-|'
+```
+
+| Действие | Функция zapret2 | Параметры | Что делает |
+|---|---|---|---|
+| `xwgobfs` | `wgobfs` | `secret` (обязателен), `padmin` (0), `padmax` (16) | рукопожатия WireGuard (initiation, response, cookie) шифруются AES-128-GCM с ключом HKDF-SHA256(соль `wgobfs_salt`, `secret`) и случайной добивкой: `iv(12) tag(16) E(длина(2) сообщение добивка)`; входящий UDP подходящего размера расшифровывается, если сходится тег. Данные и keepalive идут как есть. Нужна сборка с криптографией (не `EXT_CRYPTO=0`) |
+| `xippxor` | `ippxor` | `ippxor=N` (0–255, обязателен), `dataxor=БЛОБ`, `rebuild` | номер протокола IP XOR N, payload TCP, UDP или ICMP XOR блоб (с начала); пакет, ставший TCP, UDP или ICMP, разбирается заново как он (всегда, `rebuild` принимается для совместимости) |
+| `xudp2icmp` | `udp2icmp` | `server=0\|1` (0), `ctype`, `stype`, `ccode`, `scode` (парами), `dataxor` | датаграмма UDP уходит сообщением ICMP того же размера: от клиента — `ctype` (echo request), от сервера — `stype` (echo reply); в слове данных ICMP — `sport^dport` и порт другой стороны; принятое ICMP своего типа и кода становится UDP |
+| `xsynhide` | `synhide` | `magic=x2\|urp\|opt\|tsecr` (`x2`), `x2` (1), `kind` (172), `opt=HEX`, `xorseq=HEX4`, `ghost`, `ghost6`, `synack` | SYN клиента уходит как ACK с меткой (бит `x2`, `urgptr`, опция TCP или младшие байты `tsecr`), сервер возвращает SYN; с `synack` так же SYN,ACK сервера идёт как RST,ACK; `ghost` — сначала копия SYN с этим TTL (пробить NAT) |
+
+Чтобы пакеты другого протокола дошли до движка, профиль берёт их
+фильтрами: `--filter-ipp 209` для `xippxor` (UDP 17 XOR 192),
+`--filter-icmp 0` (клиент) или `8` (сервер) для `xudp2icmp`. Триггер
+входящего дерева — по тому, что придёт: `[IP:proto:209]`,
+`[IP:proto:1]`, `[TCP:dport:8080]` (у `xsynhide` метка `x2=1` — флаг NS,
+триггер `[TCP:flags:A]` его не примет).
+
+Отличия от zapret2:
+
+- Режима сервера у `xudp2icmp` по умолчанию из `--server` nfqws2 нет:
+  сторона задаётся параметром `server`.
+- Пакет с новым протоколом собирается заново из байтов: длины и
+  контрольные суммы (TCP, UDP, ICMP, ICMPv6 — с псевдозаголовком) считаются
+  для нового протокола. `xippxor` перед сменой номера считает сумму TCP,
+  UDP или ICMP по их правилам, так что другой конец получает пакет с
+  верной суммой и без `dataxor`.
+- `xsynhide` не перекармливает conntrack geneva восстановленным SYN
+  (zapret2 вызывает `conntrack_feed`): conntrack видит пакет таким, каким
+  он пришёл.
+- IV для `xwgobfs` — из системного генератора (`/dev/urandom`, на
+  Windows `RtlGenRandom`), как `bcryptorandom` у zapret2; если он
+  недоступен, сообщение уходит незашифрованным (повтор IV ломает AES-GCM).
+- `xsynhide{magic=opt}`: если опция не помещается в 40 байт опций TCP,
+  SYN уходит как есть и в журнал пишется `no room for the option`
+  (иначе ушёл бы ACK без метки).
+
+Проверки: юнит-тесты (`tests/test_obfs.c`: каждое действие туда и
+обратно для IPv4 и IPv6, неверный ключ, свои типы ICMP, все режимы метки
+`xsynhide`, `synack`, `ghost`); `tests/e2e/obfs.sh` (в CI с официальным
+nfqws2): эхо UDP через `xwgobfs`, `xippxor`, `xudp2icmp` и HTTP через
+`xsynhide` между двумя geneva и между geneva и nfqws2 с функциями Lua
+zapret2; счётчики на сервере до очереди показывают на проводе только
+обфусцированные пакеты.
+
 ## Код zapret2
 
 Распознавание L7, маркеры, сборка, conntrack и x-действия
 (`src/ext/l7.c`, `markers.c`, `xl7.c`, `ctrack.c`, `xact.c`, `xact_tcp.c`,
-`xact_http.c`, `xact_misc.c`, `xact_comb.c`, `xact_seq.c` (функция `oob`), `profile.c`, `hostlist.c`, `ipset.c`, `lists.c`, `autolist.c`, `ipcache.c`, список системных вызовов seccomp в `svc.c`, `tls.c` — `tls_mod`, `genhost`, `tls_clone.c`, `tools.c` — `mdig` и `ip2net`, `blockcheck.c` — сетка `blockcheck2.d/standard`) перенесены из zapret2
+`xact_http.c`, `xact_misc.c`, `xact_comb.c`, `xact_seq.c` (функция `oob`), `profile.c`, `hostlist.c`, `ipset.c`, `lists.c`, `autolist.c`, `ipcache.c`, список системных вызовов seccomp в `svc.c`, `tls.c` — `tls_mod`, `genhost`, `tls_clone.c`, `tools.c` — `mdig` и `ip2net`, `blockcheck.c` — сетка `blockcheck2.d/standard`, `xact_obfs.c` — `zapret-obfs.lua`) перенесены из zapret2
 (https://github.com/bol-van/zapret2) и распространяются на условиях его
 лицензии:
 

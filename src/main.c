@@ -90,6 +90,13 @@ static void usage(FILE *f)
                "  blockcheck2.d/standard translated into geneva, scan levels, the report\n"
                "  SUMMARY / COMMON / COVERAGE with nfqws2 and geneva strategies side by side\n"
                "  (blockcheck --help; --print-grid lists the grid without probes).\n"
+               "  Obfuscation of zapret2's zapret-obfs.lua, the same action on both ends\n"
+               "  (outbound forest here, inbound there): xwgobfs{secret=S;padmin;padmax}\n"
+               "  (WireGuard handshakes encrypted, AES-GCM), xippxor{ippxor=N;dataxor=BLOB}\n"
+               "  (the IP protocol number XOR N), xudp2icmp{server=0|1;ctype;stype;ccode;\n"
+               "  scode;dataxor} (UDP as ICMP echo), xsynhide{magic=x2|urp|opt|tsecr;ghost;\n"
+               "  synack;xorseq} (the SYN sent as a marked ACK), e.g.\n"
+               "  [UDP:dport:51820]-xwgobfs{secret=S}-| \\/ [UDP:sport:51820]-xwgobfs{secret=S}-|\n"
                "  See docs/EXT.md.\n");
 #endif
 }

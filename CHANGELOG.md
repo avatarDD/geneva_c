@@ -256,6 +256,11 @@
   перенаправление на чужой домен — неудача. Фича `ext_blockcheck`.
   `tests/e2e/blockcheck_grid.sh` сверяет сетку со скриптами релиза
   zapret2 строка в строку на всех уровнях, IPv4 и IPv6.
+- X13a: двусторонняя обфускация `zapret-obfs.lua` zapret2 — x-действия
+  `xwgobfs` (рукопожатия WireGuard под AES-GCM), `xippxor` (номер протокола
+  и payload XOR), `xudp2icmp` (UDP как ICMP echo), `xsynhide` (SYN как ACK
+  с меткой). Совместимы сами с собой и с nfqws2 (e2e `tests/e2e/obfs.sh`
+  в CI). Перевод строк nfqws2 (`blockcheck`) знает эти функции.
 - X12c: проверки `blockcheck2.sh` вокруг стратегий в `geneva blockcheck`:
   DNS (системный резолвер против публичных DNS, уникальность адресов;
   сверх zapret2 — сравнение ответов UDP и TCP), DoH через curl при

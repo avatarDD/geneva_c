@@ -21,6 +21,7 @@ static const xa_kind *const kinds[] = {
     &xa_fakedsplit, &xa_fakeddisorder, &xa_synacksplit, &xa_synack, &xa_wsize, &xa_wssize, &xa_syndata,
     &xa_rst,      &xa_http,   &xa_tlsclone, &xa_udplen, &xa_dhtdn, &xa_xlog,  &xa_tag,     &xa_pcap,
     &xa_when,     &xa_stop,   &xa_repeat, &xa_cutoffk, &xa_oob,    &xa_tlsrec, &xa_drip,
+    &xa_wgobfs,   &xa_ippxor, &xa_udp2icmp, &xa_synhide,
 };
 
 /* ---- keys ------------------------------------------------------------------ */
