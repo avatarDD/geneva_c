@@ -499,6 +499,19 @@ static void test_dns(void)
     cfg_init(&c, PROBE_DNS, dns.port);
     c.host = "blocked.example";
     atomic_store_int(&dns.mode, 0);
+    {
+        /* the answer's addresses for blockcheck's DNS check */
+        char addrs[4][46];
+        int na = 0;
+        c.dns_out = addrs;
+        c.dns_out_max = 4;
+        c.dns_out_n = &na;
+        probe_run(&c, &lp, &r);
+        CHECK_INT(na, 1);
+        CHECK_STR(addrs[0], "1.2.3.4");
+        c.dns_out = NULL;
+        c.dns_out_n = NULL;
+    }
     probe_run(&c, &lp, &r);
     CHECK_INT(r.outcome, PO_OK);
     CHECK_STR(r.detail, "1.2.3.4");

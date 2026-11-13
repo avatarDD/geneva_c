@@ -256,6 +256,14 @@
   перенаправление на чужой домен — неудача. Фича `ext_blockcheck`.
   `tests/e2e/blockcheck_grid.sh` сверяет сетку со скриптами релиза
   zapret2 строка в строку на всех уровнях, IPv4 и IPv6.
+- X12c: проверки `blockcheck2.sh` вокруг стратегий в `geneva blockcheck`:
+  DNS (системный резолвер против публичных DNS, уникальность адресов;
+  сверх zapret2 — сравнение ответов UDP и TCP), DoH через curl при
+  подмене DNS (`--secure-dns`, `--doh`, `--doh-servers`), тесты
+  блокировки по порту и по IP с подсказкой, что заблокировано
+  (`--skip-dnscheck`, `--skip-ipblock`, `--unblocked-domain`); в `--json`
+  поля `dns`, `doh`, `checks`. Проба `tcp` с `connect_only`, адреса ответа
+  пробы `dns` (`dns_out`), `probe_spawn` для команд.
 
 ## v1.2.0
 

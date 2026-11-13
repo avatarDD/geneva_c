@@ -471,6 +471,11 @@ static void run_stream(const probe_cfg *c, probe_ports *lp, probe_res *r, int ht
     sock_t s = tcp_connect(c, lp, r);
     if (s == SOCK_INVALID)
         return;
+    if (c->connect_only) {
+        set_res(r, PO_OK, "connected");
+        plat_sock_close(s);
+        return;
+    }
     sb_init(&req);
     if (http) {
         sb_printf(&req, "GET %s", c->path && *c->path ? c->path : "/");
@@ -804,6 +809,13 @@ static void dns_verdict(const probe_cfg *c, const uint8_t *msg, size_t n, uint16
 {
     char addrs[16][46];
     int rcode = 0, na = probe_dns_parse(msg, n, id, addrs, 16, &rcode);
+    if (c->dns_out && na > 0) {
+        int k = MIN(na, c->dns_out_max);
+        for (int i = 0; i < k; i++)
+            memcpy(c->dns_out[i], addrs[i], 46);
+        if (c->dns_out_n)
+            *c->dns_out_n = k;
+    }
     if (na < 0) {
         set_res(r, PO_BROKEN, "malformed DNS answer");
         return;
@@ -962,7 +974,7 @@ void probe_expand_cmd(const probe_cfg *c, const probe_ports *lp, sbuf *out)
 
 /* Runs cmd, collecting its output. Returns the exit code, -1 if it could
  * not start, -2 on timeout (the command is killed). */
-static int spawn(const char *cmd, double timeout, sbuf *output)
+int probe_spawn(const char *cmd, double timeout, sbuf *output)
 {
     uint64_t end = plat_now_ms() + (uint64_t)ms_of(timeout);
 #ifdef _WIN32
@@ -1137,7 +1149,7 @@ static void run_exec(const probe_cfg *c, probe_ports *lp, probe_res *r)
     sb_init(&out);
     probe_expand_cmd(c, lp, &cmd);
     LOGD("probe", "exec: %s", cmd.data);
-    rc = spawn(cmd.data, limit, &out);
+    rc = probe_spawn(cmd.data, limit, &out);
     r->bytes = out.len;
     if (rc == -1)
         set_res(r, PO_FAILED, "cannot run the command");

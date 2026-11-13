@@ -22,7 +22,8 @@
 # The section "tune" (or tune14, tune18, tunets, tunepropose) runs the tuner (--ext-arm) against 14 and 18,
 # and with NFQWS2_DIR zapret2's circular against 14 for comparison.
 # The section "treat" (or treat14 ... treat20, treatpropose) runs --ext-auto apply|propose against 14-20.
-# The section "blockcheck" runs geneva blockcheck --ext against no censor, 18 and 14.
+# The section "blockcheck" runs geneva blockcheck --ext against no censor, 18 and 14, and its DNS,
+# DoH, port and IP block tests against 17.
 # The section "xact" (or x14 ... x20 for one censor) runs geneva --ext with x-action strategies (the
 # nfqws2 references as x-actions, and combinators) against 14, 15, 18-20.
 #   tests/e2e/censors_x.sh [path/to/geneva] [censor ... | xact | tune | nfqws2 | diff | posdebug]
@@ -41,6 +42,7 @@ cleanup() {
     for p in ${NPID:-} ${TPID:-}; do kill "$p" 2>/dev/null; done
     [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null
     for n in "$NC" "$NR" "$NS"; do ip netns del "$n" 2>/dev/null; done
+    rm -rf "/etc/netns/$NC"
     [ -n "${KEEP:-}" ] && cp -r "$WORK" "$KEEP"
     [ -n "${KEEP_WORK:-}" ] && cp -r "$WORK" "$KEEP_WORK"; rm -rf "$WORK"
 }
@@ -70,11 +72,12 @@ mkdir "$WORK/www"
 echo "the page behind the censor" > "$WORK/www/secret.html"
 head -c 300000 /dev/zero > "$WORK/www/big.bin"
 head -c 8000000 /dev/zero > "$WORK/www/huge.bin"
-openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=lab -keyout "$WORK/key.pem" \
+# the IP in the certificate: blockcheck's DoH goes to https://10.81.2.2/ with curl
+openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=lab -addext subjectAltName=IP:10.81.2.2 -keyout "$WORK/key.pem" \
     -out "$WORK/cert.pem" >/dev/null 2>&1 || { echo "openssl failed"; exit 1; }
 # HTTP on 80, HTTPS on 443 (any name), and a UDP echo on 443 for QUIC
 cat > "$WORK/srv.py" <<'EOF'
-import http.server, os, socket, socketserver, ssl, sys, threading
+import base64, http.server, os, socket, socketserver, ssl, sys, threading
 work = sys.argv[1]
 class Srv(http.server.ThreadingHTTPServer):
     # HTTPServer.server_bind asks getfqdn("0.0.0.0"): a reverse lookup that
@@ -87,6 +90,25 @@ class H(http.server.SimpleHTTPRequestHandler):
     timeout = 10
     def log_message(self, *a):
         pass
+    def do_GET(self):
+        # DoH (RFC 8484, GET): names under blocked. are 10.81.2.3, the rest 10.81.2.2
+        if not self.path.startswith("/dns-query?dns="):
+            return super().do_GET()
+        b = self.path.split("dns=", 1)[1].split("&")[0]
+        q = base64.urlsafe_b64decode(b + "=" * (-len(b) % 4))
+        off, labels = 12, []
+        while q[off]:
+            labels.append(q[off + 1:off + 1 + q[off]].decode())
+            off += 1 + q[off]
+        end = off + 5
+        ip = [10, 81, 2, 3] if labels[0] == "blocked" else [10, 81, 2, 2]
+        r = q[:2] + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00" + q[12:end]
+        r += b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04" + bytes(ip)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/dns-message")
+        self.send_header("Content-Length", str(len(r)))
+        self.end_headers()
+        self.wfile.write(r)
 def serve(port, tls):
     s = Srv(("0.0.0.0", port), H)
     if tls:
@@ -1104,7 +1126,7 @@ bc() { # name "blockcheck options" grep-patterns...
     shift 2
     # shellcheck disable=SC2086
     ip netns exec "$NC" "$GENEVA" blockcheck --ext --ip 10.81.2.2 --level quick --max-ttl 2 --max-autottl-delta 1 \
-        $opts ultrasurf.example > "$WORK/bc.txt" 2> "$WORK/bc.log"
+        --skip-dnscheck --skip-ipblock $opts ultrasurf.example > "$WORK/bc.txt" 2> "$WORK/bc.log"
     rc=$?
     [ $rc = 0 ] && ok "$name: exit 0" || bad "$name: exit $rc" "$WORK/bc.log"
     for p in "$@"; do
@@ -1133,6 +1155,39 @@ if on blockcheck; then
             '"nfqws2":"--payload=tls_client_hello --lua-desync=multisplit:pos=sniext+1"'
         stop_censor
     fi
+    # X12c: the DNS check (the lab's DNS gives every name 10.81.2.80: not
+    # unique, spoofed), DoH through curl to the lab's server (blocked.* is
+    # 10.81.2.3, the rest 10.81.2.2), the port and IP block tests against
+    # censor 17 (10.81.2.3 blocked)
+    echo "== geneva blockcheck: DNS, DoH, IP and port block tests"
+    mkdir -p "/etc/netns/$NC" && echo "nameserver 10.81.2.2" > "/etc/netns/$NC/resolv.conf"
+    if start_censor 17 --block-ip 10.81.2.3 --port 80,443; then
+        ip netns exec "$NC" env -u http_proxy -u https_proxy -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
+            CURL_CA_BUNDLE="$WORK/cert.pem" "$GENEVA" blockcheck --ext --level quick --test tls12 --scripts 10 \
+            --dns-servers 10.81.2.2 --dns-domains a.example,b.example --unblocked-domain lab.example \
+            --doh-servers https://10.81.2.9/dns-query,https://10.81.2.2/dns-query --json blocked.example \
+            > "$WORK/bc.txt" 2> "$WORK/bc.log"
+        rc=$?
+        [ $rc = 1 ] && ok "dns: exit 1 (nothing works)" || bad "dns: exit $rc" "$WORK/bc.log"
+        for p in "system DNS is working" "comparing system resolver to public DNS : 10.81.2.2" "a.example : OK" \
+            "(2 total, 1 unique)" "-- POSSIBLE DNS HIJACK DETECTED." "https://10.81.2.9/dns-query : FAIL" \
+            "https://10.81.2.2/dns-query : OK" "* port block tests ipv4 blocked.example:443" \
+            "10.81.2.3 does not connect" "> testing lab.example on it's original ip" \
+            "> testing blocked.example on 10.81.2.2 (lab.example)" \
+            "geneva: blocked.example gets through on another address: the block is by its IP" \
+            "> testing lab.example on 10.81.2.3 (blocked.example)" \
+            "geneva: 10.81.2.3 blocks another name too: the address is blocked"; do
+            grep -qF -- "$p" "$WORK/bc.log" && ok "dns: $p" || bad "dns: no $p" "$WORK/bc.log"
+        done
+        for p in '"dns":{"system":true,"public":"10.81.2.2","spoofed":true}' '"doh":"https://10.81.2.2/dns-query"' \
+            '"kind":"port","ipv":4,"domain":"blocked.example","ip":"10.81.2.3","port":443,"ok":false' \
+            '"kind":"ip","test":"curl_test_https_tls12","ipv":4,"domain":"blocked.example","ip":"10.81.2.2","on":"lab.example","port":0,"ok":true' \
+            '"result":"nfqws2 not working"'; do
+            grep -qF -- "$p" "$WORK/bc.txt" && ok "dns: $p" || bad "dns: no $p" "$WORK/bc.txt"
+        done
+        stop_censor
+    fi
+    rm -rf "/etc/netns/$NC"
 fi
 
 if [ $fails -eq 0 ]; then echo "all passed"; else echo "$fails failure(s)"; fi

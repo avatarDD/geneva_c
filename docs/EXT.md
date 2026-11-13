@@ -51,6 +51,7 @@ geneva run --ext -s '...'
 | X11d | лечение `FREEZE_N` и `THROTTLE` (строгий успех), генетический поиск `--ext-ga` для ключей без рабочей руки, `--ext-treat-arms` | ниже |
 | X12a | `geneva resolve` (mdig zapret2) и `geneva ip2net` (ip2net zapret2) | ниже |
 | X12b | `geneva blockcheck`: `blockcheck2.sh` zapret2 со всей сеткой `blockcheck2.d/standard`, строки nfqws2 переведены в стратегии geneva; уровни, повторы, отчёт SUMMARY/COMMON/COVERAGE | ниже |
+| X12c | `geneva blockcheck`: проверка DNS (системный резолвер против публичных DNS, UDP против TCP), DoH через curl при подмене, тесты блокировки по порту и по IP | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
 
@@ -1953,10 +1954,46 @@ TLS 1.2 с `wssize`, если первый ничего не нашёл.
 | `--scripts N,..` | только эти скрипты (как NOTEST_* наоборот) | все |
 | `--ip АДРЕС` | соединяться с этим адресом, а не с адресом домена (curl `--connect-to`) | — |
 | `--timeout СЕК` | тайм-аут пробы (CURL_MAX_TIME) | 2 |
-| `--curl ПУТЬ` | curl с HTTP/3 для `http3` | `curl` |
+| `--curl ПУТЬ` | curl для `http3` (с HTTP/3) и для DoH | `curl` |
+| `--skip-dnscheck` | без проверки DNS (SKIP_DNSCHECK) | — |
+| `--dns-servers IP,..` | публичные DNS проверки (DNSCHECK_DNS) | `8.8.8.8,1.1.1.1,77.88.8.1` |
+| `--dns-domains ИМЯ,..` | домены проверки (DNSCHECK_DOM) | `pornhub.com,ej.ru,rutracker.org,www.torproject.org,bbc.com` |
+| `--secure-dns 0\|1` | имена тестов через DoH: 1 — всегда, 0 — никогда (SECURE_DNS) | при подмене DNS |
+| `--doh URL` | этот DoH без поиска (DOH_SERVER) | — |
+| `--doh-servers URL,..` | DoH для поиска рабочего (DOH_SERVERS) | cloudflare, google, quad9, adguard, yandex |
+| `--skip-ipblock` | без тестов блокировки по порту и IP (SKIP_IPBLOCK) | — |
+| `--unblocked-domain ИМЯ` | незаблокированный домен тестов по IP (UNBLOCKED_DOM) | `iana.org` |
 | `--print-grid` | без проб: строки сетки (`nfqws2<TAB>geneva`) так, будто ничего не сработало; без root | — |
 | `--grid-ok ФАЙЛ` | с `--print-grid`: эти строки nfqws2 «работают» (для сверки с zapret2) | — |
 | `--queue`, `--mark`, `--firewall`, `--local-ports` | как у `geneva eval` | 311, … |
+
+**Проверки вокруг стратегий (X12c)** — как в `blockcheck2.sh`:
+
+- **DNS** (`check_dns`), до всех тестов: системный резолвер должен
+  отвечать (`iana.org`); первый ответивший публичный DNS из
+  `--dns-servers` сравнивается с системным по доменам `--dns-domains`
+  (адрес системного, которого нет у публичного, — MISMATCH); без
+  публичного DNS — только системный. Затем адреса всех доменов должны
+  быть разными (цензор часто отдаёт один адрес заглушки). Итог — «DNS
+  looks good» или «POSSIBLE DNS HIJACK DETECTED».
+- **DoH** (`SECURE_DNS`): при подмене DNS (или `--secure-dns 1`) ищется
+  рабочий сервер из `--doh-servers` (запрос `iana.org`), и все имена
+  тестов разрешаются через него: curl, RFC 8484 GET
+  (`URL?dns=BASE64URL`, `accept: application/dns-message`). Нет рабочего —
+  выход с кодом 1, как `exitp 7` у zapret2. Имена кешируются на весь
+  прогон (`mdig_cache`).
+- **Порт** (`check_domain_port_block`): перед тестом `http` — соединение
+  TCP с каждым адресом домена на порт 80, перед первым тестом TLS — на
+  443 (2 с, как `nc -z -w 2`): «connects» или «does not connect».
+- **IP** (`check_dpi_ip_block`), для `http`, `tls12`, `tls13`, когда домен
+  без обхода не открылся: незаблокированный домен на своём адресе, затем
+  проверяемый домен на адресе незаблокированного и незаблокированный на
+  каждом адресе проверяемого. Ответ HTTP здесь не оценивается (как
+  `detail` у zapret2): нужен любой целый ответ.
+
+В `--json` — `dns` (`system`, `public`, `spoofed`), `doh` (сервер или
+`null`) и `checks`: `kind` (`port` или `ip`), `test`, `ipv`, `domain`
+(какое имя), `ip`, `on` (чей это адрес), `port`, `ok`, `detail`.
 
 Проба HTTP проверяет ответ как `curl_test_http`: код 400 («сервер
 получил фейки») — неудача, перенаправление 301/302/307/308 на чужой
@@ -1965,7 +2002,23 @@ TLS 1.2 с `wssize`, если первый ничего не нашёл.
 
 Отличия от zapret2:
 
-- Проверки DNS, блокировки по IP и порту и DoH — следующий этап (X12c).
+- Проверка DNS без `ping` и `nslookup`: публичный DNS «работает», если
+  ответил на `iana.org` (UDP, свой клиент DNS); адреса сравниваются
+  целиком, а не подстрокой (`grep -F` у zapret2 считает `1.2.3.4` частью
+  `11.2.3.45`).
+- Сверх zapret2: публичный DNS спрашивается и по TCP; если у ответов UDP и
+  TCP нет ни одного общего адреса — это подмена на пути (DPI отвечает на
+  UDP раньше сервера), DNS считается подменённым. Один общий адрес —
+  балансировщик, не подмена.
+- Сверх zapret2: тесты по IP читаются за пользователя — строки
+  «geneva: ... the block is by its IP» (домен прошёл на чужом адресе),
+  «... by its name (DPI)» (не прошёл и там), «... the address is
+  blocked» (адрес домена не пропускает и чужое имя). Решение остаётся за
+  человеком: тест «requires manual interpretation», как и у zapret2.
+- Адрес теста — первый из ответа DNS, а не случайный (`mdig_resolve`
+  берёт случайный); `--ip` задаёт его явно и для тестов порта и IP.
+- Нет рабочего DoH — код 1, а не 7 (7 у geneva — «цель доступна без
+  стратегии» у `evolve`).
 - Строки с Lua-кодом (`luaexec`: шаблон seqovl `padencap` в 23-seqovl,
   3 строки на каждый проход TLS) перевести нельзя (решение 11.1): они
   считаются неудачными, в ходе проверки — «geneva: none». `--lua-init` с
@@ -1994,7 +2047,9 @@ TLS 1.2 с `wssize`, если первый ничего не нашёл.
 с `--print-grid` на всех уровнях, IPv4 и IPv6, когда ничего не работает
 и когда работает каждая 7-я, 61-я или 397-я строка; раздел `blockcheck`
 `tests/e2e/censors_x.sh` прогоняет `geneva blockcheck` против цензоров 18
-(HTTP, перенаправление) и 14 (SNI) и без цензора.
+(HTTP, перенаправление) и 14 (SNI) и без цензора, а проверки X12c — против
+цензора 17 (блокировка по IP): DNS стенда даёт всем именам один адрес
+(подмена), DoH-сервер стенда (Python, https) — настоящие, через curl.
 
 ## Код zapret2
 
