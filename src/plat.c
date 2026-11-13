@@ -309,12 +309,48 @@ int plat_getpid(void)
 #endif
 }
 
+int plat_is_android(void)
+{
+#ifdef __linux__
+    static int known = -1;
+    if (known < 0) {
+        const char *r = getenv("ANDROID_ROOT");
+        FILE *f = fopen("/system/build.prop", "r");
+        known = (r && *r) || f;
+        if (f)
+            fclose(f);
+    }
+    return known;
+#else
+    return 0;
+#endif
+}
+
+const char *plat_tmpdir(void)
+{
+#ifdef _WIN32
+    static char buf[MAX_PATH + 1];
+    DWORD n = GetTempPathA(sizeof(buf), buf);
+    if (n && n < sizeof(buf)) {
+        if (n > 1 && (buf[n - 1] == '\\' || buf[n - 1] == '/'))
+            buf[n - 1] = 0;
+        return buf;
+    }
+    return ".";
+#else
+    const char *t = getenv("TMPDIR");
+    if (t && *t)
+        return t;
+    return plat_is_android() ? "/data/local/tmp" : "/tmp";
+#endif
+}
+
 const char *plat_os_name(void)
 {
 #if defined(_WIN32)
     return "windows";
 #elif defined(__linux__)
-    return "linux";
+    return plat_is_android() ? "android" : "linux";
 #elif defined(__FreeBSD__)
     return "freebsd";
 #elif defined(__OpenBSD__)

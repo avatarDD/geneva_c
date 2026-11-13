@@ -293,6 +293,49 @@ try {
 }
 $script:Events = $null
 
+# ---- X13c: --nlm-list, --nlm-filter and --ssid-filter (winws2's) ----
+# The strategies run only while the network is there; otherwise every packet
+# passes untouched. The runner's own network comes from --nlm-list.
+$nl = & $Bin run --ext --nlm-list 2>&1
+Check ($LASTEXITCODE -eq 0 -and ($nl -match '^NetID   : ')) "--nlm-list: exit 0, networks listed"
+$nlAll = & $Bin run --ext --nlm-list=all 2>&1
+Check ($LASTEXITCODE -eq 0 -and @($nlAll -match '^NetID').Count -ge @($nl -match '^NetID').Count) "--nlm-list=all: at least the connected ones"
+$netId = ($nl -match '^NetID   : ' | Select-Object -First 1) -replace '^NetID   : ', ''
+$netName = (($nl -match '^Name    : ' | Select-Object -First 1) -replace '^Name    : ', '') -replace ' \(connected\).*$', ''
+Write-Host "    the runner's network: $netName ($netId)"
+$EvN = Join-Path $Work "nlm.jsonl"; $LogN = Join-Path $Work "nlm.log"
+function Nlm-Case([string]$name, [string[]]$filter, [bool]$fires) {
+    $p = Start-Engine (@("--ext", "-s", "`"$strategy`"", "-p", "80", "-c", $Ctl) + $filter) $EvN $LogN
+    try {
+        Check (Wait-Event "ready" 20) "${name}: engine is ready"
+        Start-Sleep -Milliseconds 500
+        Check ((Fetch) -match '^[23]') "${name}: HTTP works"
+        Start-Sleep -Milliseconds 1500
+        $s = Ctl @("stats")
+        if ($fires) { Check ($s.triggered -ge 1) "${name}: the strategy runs ($($s.triggered))" }
+        else { Check ($s.triggered -eq 0 -and $s.pkts_out -gt 0) "${name}: packets pass untouched ($($s.pkts_out) out, $($s.triggered) fired)" }
+        $r = Ctl @("stop")
+        Check ($p.WaitForExit(15000) -and $p.ExitCode -eq 0) "${name}: engine exits with 0"
+    } finally {
+        if (!$p.HasExited) { $p.Kill(); $p.WaitForExit() }
+        if ($script:Failed -and (Test-Path $LogN)) { Write-Host "---- $name log"; Get-Content $LogN | Select-Object -Last 30 }
+    }
+}
+if ($netId) {
+    Nlm-Case "--nlm-filter GUID" @("--nlm-filter", $netId) $true
+    Nlm-Case "--nlm-filter name" @("--nlm-filter", "`"$netName`"") $true
+    Nlm-Case "--nlm-filter of another network" @("--nlm-filter", "no-such-network") $false
+    Nlm-Case "--nlm-filter-neg of another network" @("--nlm-filter", "no-such-network", "--nlm-filter-neg") $true
+    Nlm-Case "--nlm-filter-neg of this network" @("--nlm-filter", $netId, "--nlm-filter-neg=1") $false
+} else {
+    Fail "--nlm-list named no connected network"
+}
+# a server without the WLAN service has no wlanapi.dll: a clear error then
+$ws = & $Bin run --ext -s '\/' -p 80 --ssid-filter no-such-ssid --duration 2 2>&1
+Write-Host "    --ssid-filter: exit $LASTEXITCODE`: $($ws -join ' | ')"
+Check (($LASTEXITCODE -eq 0 -and ($ws -match 'not present')) -or ($LASTEXITCODE -ne 0 -and ($ws -match 'wlanapi'))) "--ssid-filter: absent network or a clear wlanapi error"
+$script:Events = $null
+
 # The evaluator: probes from its own port block, strategies through the
 # embedded engine (geneva eval prints "fitness<TAB>strategy").
 Check ((Eval @("--no-engine")) -eq 0) "eval: http baseline succeeds"

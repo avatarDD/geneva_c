@@ -41,6 +41,8 @@ typedef struct {
     int reverse;    /* the packet comes from the flow's server */
     strategy *st;   /* the strategy running (NULL: none): cut bits are about it */
     const char *ifin, *ifout; /* NULL: unknown */
+    const char *ssid;         /* --filter-ssid: the Wi-Fi network of the packet's interface (NULL: none) */
+    char ssid_buf[33];
     uint32_t mark;
     int has_meta;
     const xl7_view *l7; /* NULL: not looked at */

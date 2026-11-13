@@ -132,7 +132,14 @@ void plat_random_bytes(void *buf, size_t len);
 /* Returns non-zero when running with the privileges the engine needs. */
 int plat_is_privileged(void);
 int plat_getpid(void);
+/* "linux", "android" (a Linux build on Android, seen at run time), ... */
 const char *plat_os_name(void);
+/* Android: /system/build.prop or $ANDROID_ROOT (the static Linux build runs
+ * there as it is: no /etc/resolv.conf, no /tmp) */
+int plat_is_android(void);
+/* where temporary files go: $TMPDIR, else /data/local/tmp on Android, else
+ * /tmp (Windows: GetTempPath) */
+const char *plat_tmpdir(void);
 const char *plat_arch_name(void);
 
 #endif

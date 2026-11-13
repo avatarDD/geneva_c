@@ -208,6 +208,9 @@ static void prof_free(xprofile *p)
     free(p->udp);
     free(p->icf);
     free(p->ipp);
+    for (size_t i = 0; i < p->nssid; i++)
+        free(p->ssid[i]);
+    free(p->ssid);
     free(p->text);
     free(p->src);
     strategy_free(p->st);
@@ -255,6 +258,15 @@ static const xprofile *find_name(const xprofiles *ps, const char *name)
 /* dp_copy: L3 is added, L7 replaced, the lists appended (not the mark); the strategy is
  * taken when the profile has none of its own (zapret2 appends the
  * template's functions: a Geneva strategy is one whole) */
+static void ssid_add(xprofile *p, const char *s, size_t l)
+{
+    char *v = xmalloc(l + 1);
+    memcpy(v, s, l);
+    v[l] = 0;
+    p->ssid = xrealloc(p->ssid, sizeof(*p->ssid) * (p->nssid + 1));
+    p->ssid[p->nssid++] = v;
+}
+
 static int prof_import(xprofile *to, const xprofile *from, sbuf *err)
 {
 #define AH_COPY(bit, f)              \
@@ -291,6 +303,12 @@ static int prof_import(xprofile *to, const xprofile *from, sbuf *err)
     APPEND(to->udp, to->nudp, from->udp, from->nudp);
     APPEND(to->icf, to->nicf, from->icf, from->nicf);
     APPEND(to->ipp, to->nipp, from->ipp, from->nipp);
+    for (size_t i = 0; i < from->nssid; i++)
+        ssid_add(to, from->ssid[i], strlen(from->ssid[i]));
+    if (from->ssid_neg_set) {
+        to->ssid_neg = from->ssid_neg;
+        to->ssid_neg_set = 1;
+    }
     xlistref_copy(&to->hl, &from->hl);
     xlistref_copy(&to->hl_ex, &from->hl_ex);
     xlistref_copy(&to->ips, &from->ips);
@@ -480,6 +498,28 @@ int xprof_opt(xprofile *p, const char *name, const char *value, const xprofiles 
             sb_printf(err, "bad --filter-mark %s (MARK[/MASK], decimal or 0x hex)", value);
             return -1;
         }
+    } else if (!strcmp(name, "filter-ssid")) {
+        /* zapret2's parse_strlist: names separated by commas, added */
+        const char *s = value;
+        for (;;) {
+            const char *e = strchr(s, ',');
+            size_t l = e ? (size_t)(e - s) : strlen(s);
+            if (!l || l > 32) {
+                sb_printf(err, "bad --filter-ssid %s (names of 1 to 32 bytes, separated by commas)", value);
+                return -1;
+            }
+            ssid_add(p, s, l);
+            if (!e)
+                break;
+            s = e + 1;
+        }
+    } else if (!strcmp(name, "filter-ssid-neg")) {
+        if (*value && strcmp(value, "0") && strcmp(value, "1")) {
+            sb_printf(err, "bad --filter-ssid-neg %s (0 or 1)", value);
+            return -1;
+        }
+        p->ssid_neg = !*value || !strcmp(value, "1");
+        p->ssid_neg_set = 1;
     } else if (!strcmp(name, "name")) {
         if (!*value) {
             sb_puts(err, "--name needs a name");
@@ -538,7 +578,8 @@ static int prof_strategy(xprofile *p, int file, const char *value, sbuf *err)
 
 static int has_filters(const xprofile *p)
 {
-    return p->b_l3 || p->b_l7 || p->ntcp || p->nudp || p->nicf || p->nipp || p->mark_mask || p->name || p->text ||
+    return p->b_l3 || p->b_l7 || p->ntcp || p->nudp || p->nicf || p->nipp || p->mark_mask || p->nssid ||
+           p->ssid_neg_set || p->name || p->text ||
            p->tune || p->hl.n || p->hl_ex.n || p->ips.n || p->ips_ex.n;
 }
 
@@ -618,7 +659,7 @@ static int option(builder *b, const char *name, const char *value)
 
 static const char *const prof_opts[] = {"new",       "skip",       "name",        "template",   "import",
                                          "filter-l3", "filter-tcp", "filter-udp",  "filter-icmp", "filter-ipp",
-                                         "filter-l7", "filter-mark", "ext-profile", "hostlist",  "hostlist-domains",
+                                         "filter-l7", "filter-mark", "filter-ssid", "filter-ssid-neg", "ext-profile", "hostlist",  "hostlist-domains",
                                          "hostlist-exclude", "hostlist-exclude-domains", "ipset", "ipset-ip",
                                          "ipset-exclude", "ipset-exclude-ip", "ext-arm", "ext-tune"};
 
@@ -975,6 +1016,14 @@ int xprof_match(const xprofile *p, const xmatch *m, int any_l7)
     int hl_empty;
     if ((m->mark & p->mark_mask) != p->mark)
         return 0;
+    if (p->nssid) {
+        /* zapret2: !strlist_search(filter_ssid, ssid) ^ filter_ssid_neg */
+        int found = 0;
+        for (size_t i = 0; m->ssid && i < p->nssid && !found; i++)
+            found = !strcmp(p->ssid[i], m->ssid);
+        if (!found ^ p->ssid_neg)
+            return 0;
+    }
     if ((m->ver == 4 && !p->ipv4) || (m->ver == 6 && !p->ipv6))
         return 0;
     if (!any_l7 && !l7_proto_match(m->l7, p->l7))
@@ -996,6 +1045,14 @@ int xprof_match(const xprofile *p, const xmatch *m, int any_l7)
     if (hl_empty || !m->host)
         return 1;
     return xprof_hosts(p, m->host, m->host_ip, NULL);
+}
+
+int xprof_wants_ssid(const xprofiles *ps)
+{
+    for (size_t i = 0; i < ps->n; i++)
+        if (ps->v[i]->nssid)
+            return 1;
+    return 0;
 }
 
 int xprof_find(const xprofiles *ps, const xmatch *m, int any_l7)

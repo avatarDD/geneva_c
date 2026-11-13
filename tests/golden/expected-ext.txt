@@ -178,6 +178,8 @@ Extensions (with --ext):
       --filter-ipp PROTO,..|*    the profile takes these other IP protocols
       --filter-l7 LIST           the profile takes flows of these L7 protocols (tls,quic,http,...)
       --filter-mark MARK[/MASK]  the profile takes packets with this fwmark
+      --filter-ssid NAME,..      Linux: the profile takes packets of an interface connected to one of these Wi-Fi networks
+      --filter-ssid-neg[=0|1]    ... of an interface that is not (inverts --filter-ssid)
       --hostlist FILE            the profile takes hosts of FILE and their subdomains (^NAME: no subdomains, !NAME: never; gzip ok; re-read on change); repeatable
       --hostlist-domains NAME,.. the same with the names given here
       --hostlist-exclude FILE    the profile does not take hosts of FILE
@@ -220,6 +222,11 @@ Extensions (with --ext):
       --ext-healthy-mark on|MASK Linux: mark connections the engine is done with (no strategy can apply any more, none of its keys blocked) in conntrack, and the rules let them go past the queue (on: 0x10000000; off by default)
       --fw-hook-pre FILE         Linux: run FILE up|down BACKEND QUEUE before the rules go up or down
       --fw-hook-post FILE        Linux: the same after them
+      --ssid-filter SSID,..      Windows: the strategies run only while a Wi-Fi interface is connected to one of these networks (otherwise every packet passes untouched)
+      --ssid-filter-neg[=0|1]    ... while none is (inverts --ssid-filter)
+      --nlm-filter NAME|GUID,..  Windows: ... while one of these Network List Manager networks is connected (--nlm-list)
+      --nlm-filter-neg[=0|1]     ... while none is (inverts --nlm-filter)
+      --nlm-list[=all]           Windows: print the connected Network List Manager networks (all: every known one) and exit
       --wf-tcp-out [~]P[-P],..   WinDivert filter of winws2 (replaces the one from -p): TCP to these ports
       --wf-tcp-in [~]P[-P],..    ... TCP from these ports (incoming connections)
       --wf-udp-out [~]P[-P],..   ... UDP to these ports

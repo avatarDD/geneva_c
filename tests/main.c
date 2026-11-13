@@ -48,6 +48,7 @@ void suite_surgical(void);
 void suite_tuner(void);
 void suite_treat(void);
 void suite_tools(void);
+void suite_wlan(void);
 void suite_blockcheck(void);
 void suite_obfs(void);
 
@@ -85,6 +86,7 @@ int main(void)
     suite_tuner();
     suite_treat();
     suite_tools();
+    suite_wlan();
     suite_blockcheck();
     suite_obfs();
     printf("%d checks, %d failures\n", t_checks, t_failures);

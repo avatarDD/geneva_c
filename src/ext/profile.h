@@ -20,6 +20,7 @@
  *   --filter-ipp PROTO,...|*          (IP protocols other than TCP, UDP, ICMP)
  *   --filter-l7 PROTO,...             (tls, quic, http, known, unknown, ...)
  *   --filter-mark MARK[/MASK]
+ *   --filter-ssid NAME,..., --filter-ssid-neg[=0|1]   (Linux: wlan.h)
  *   --hostlist FILE, --hostlist-domains NAME,...       (the host name)
  *   --hostlist-exclude FILE, --hostlist-exclude-domains NAME,...
  *   --ipset FILE, --ipset-ip CIDR,...                  (the server's address)
@@ -82,6 +83,10 @@ typedef struct {
     int b_l7;
     uint64_t l7; /* 0: every protocol */
     uint32_t mark, mark_mask;
+    /* --filter-ssid (Linux): the Wi-Fi networks, --filter-ssid-neg */
+    char **ssid;
+    size_t nssid;
+    int ssid_neg, ssid_neg_set;
     /* the strategy: text as given (-s, or the file's text), where it came
      * from ("-s", the file), and the parsed one (NULL for profile 0 of the
      * command line: the command's) */
@@ -122,6 +127,7 @@ typedef struct {
     const uint8_t *ip; /* the server's address (4 or 16 bytes) */
     const char *host;  /* the host name (lower case, no port), NULL when not known */
     int host_ip;       /* the host name is an IP address: no subdomains */
+    const char *ssid;  /* the SSID of the packet's interface, NULL: none (not Wi-Fi) */
 } xmatch;
 
 /* A profile with an autolist takes a flow once its host name is known,
@@ -129,6 +135,9 @@ typedef struct {
  * a host that passes them (xprof_hosts). */
 int xprof_hosts(const xprofile *p, const char *host, int host_ip, int *excluded);
 int xprof_hostlists_empty(const xprofile *p);
+
+/* Does a profile have --filter-ssid? (the Wi-Fi table is then read) */
+int xprof_wants_ssid(const xprofiles *ps);
 
 /* Does a command line use profiles (any profile option)? */
 int xprof_wanted(const args_t *a);

@@ -4,6 +4,7 @@
 
 #include "args.h"
 #include "json.h"
+#include "plat.h"
 #include "rng.h"
 #include "test.h"
 #include "util.h"
@@ -163,8 +164,33 @@ TEST(test_rng)
         CHECK(seen[i] > 100);
 }
 
+/* temporary files and the OS name (Android: the static Linux build) */
+TEST(test_plat_tmpdir)
+{
+    const char *os = plat_os_name();
+#ifndef _WIN32
+    char *old = getenv("TMPDIR") ? strdup(getenv("TMPDIR")) : NULL;
+    setenv("TMPDIR", "/somewhere/tmp", 1);
+    CHECK_STR(plat_tmpdir(), "/somewhere/tmp");
+    unsetenv("TMPDIR");
+    CHECK_STR(plat_tmpdir(), plat_is_android() ? "/data/local/tmp" : "/tmp");
+    if (old) {
+        setenv("TMPDIR", old, 1);
+        free(old);
+    }
+#else
+    CHECK(plat_tmpdir()[0] != 0);
+#endif
+#ifdef __linux__
+    CHECK_STR(os, plat_is_android() ? "android" : "linux");
+#else
+    CHECK(!plat_is_android() && os[0]);
+#endif
+}
+
 void suite_base(void)
 {
+    RUN(test_plat_tmpdir);
     RUN(test_sbuf);
     RUN(test_url_quote);
     RUN(test_hex);

@@ -82,6 +82,14 @@ static void set_res(probe_res *r, probe_outcome o, const char *fmt, ...)
 
 /* ---- addresses ----------------------------------------------------------- */
 
+static int probe_have_resolv(void)
+{
+    FILE *f = fopen("/etc/resolv.conf", "r");
+    if (f)
+        fclose(f);
+    return f != NULL;
+}
+
 int probe_resolve(probe_cfg *c, sbuf *err)
 {
     const char *name = c->ip ? c->ip : c->host;
@@ -102,6 +110,8 @@ int probe_resolve(probe_cfg *c, sbuf *err)
     rc = getaddrinfo(name, port, &hints, &ai);
     if (rc || !ai) {
         sb_printf(err, "cannot resolve %s: %s", name, rc ? gai_strerror(rc) : "no address");
+        if (plat_is_android() && !probe_have_resolv())
+            sb_puts(err, " (Android has no /etc/resolv.conf for this static build: give the address with --ip)");
         return -1;
     }
     memcpy(&c->addr, ai->ai_addr, ai->ai_addrlen);
