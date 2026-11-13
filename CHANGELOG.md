@@ -238,6 +238,24 @@
   `treat.search`/`treat.ga` в `ext_status`, `ga` в `ext_keys`.
   `--ext-treat-arms N,..` ограничивает портфель. e2e `censors_x.sh
   treat treatga`.
+- X12a: `geneva resolve --ext` (перенос `mdig` zapret2: имена со stdin
+  в адреса, потоки, `--family 4|6|46`, повторы `EAI_AGAIN`, журналы,
+  `--dns-make-query`/`--dns-parse-query`) и `geneva ip2net --ext` (перенос
+  `ip2net`: адреса в подсети, `--prefix-length`, `--v4-threshold`,
+  `--v6-threshold`). `tests/e2e/tools.sh` сверяет их с бинарниками
+  релиза zapret2.
+- X12b: `geneva blockcheck --ext` — перенос `blockcheck2.sh` zapret2 со
+  всей сеткой `blockcheck2.d/standard` (13 скриптов): тесты `http`,
+  `tls12`, `tls13`, `http3`, проверка без обхода, уровни `veryquick`,
+  `quick`, `standard`, `force`, повторы, ярлыки `need_*` и второй проход
+  с `wssize`; каждая строка nfqws2 переводится в стратегию geneva
+  (`src/ext/z2xlate.c`: x-действия, фильтры `--payload`/`--out-range` —
+  `xwhen`) и проверяется вычислителем. Отчёт SUMMARY/COMMON/COVERAGE со
+  стратегиями nfqws2 и geneva рядом, `--json`, `--print-grid` (сетка без
+  проб), `--scripts`, `--ip`. Проба HTTP в режиме blockcheck2: код 400 и
+  перенаправление на чужой домен — неудача. Фича `ext_blockcheck`.
+  `tests/e2e/blockcheck_grid.sh` сверяет сетку со скриптами релиза
+  zapret2 строка в строку на всех уровнях, IPv4 и IPv6.
 
 ## v1.2.0
 

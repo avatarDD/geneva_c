@@ -45,6 +45,8 @@ const char *const ext_features[] = {
     "ext_fw",       /* X7b: --ext-first, --ext-wan/--ext-lan, --ext-notrack, --ext-ttl-icmp, --ext-flowoffload, --fw-hook-*, --wf-* */
     "ext_selftest", /* X7c: geneva selftest --ext --fuzz N, fuzz targets for libFuzzer/AFL++ */
     "ext_auto",     /* X9: --ext-auto observe (NFLOG, detector), ext_flow/ext_impaired/ext_class, ext_status */
+    "ext_tools",    /* X12a: geneva resolve --ext (mdig), geneva ip2net --ext */
+    "ext_blockcheck", /* X12b: geneva blockcheck --ext (blockcheck2 and its grid) */
     0,
 };
 

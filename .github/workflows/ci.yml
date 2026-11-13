@@ -90,6 +90,10 @@ jobs:
           echo "NFQWS2_DIR=$dir" >> "$GITHUB_ENV"
       - name: censors 12-20, nfqws2 against them, posdebug parity
         run: sudo env NFQWS2_DIR="$NFQWS2_DIR" tests/e2e/censors_x.sh build/geneva
+      - name: resolve and ip2net against zapret2's mdig and ip2net
+        run: tests/e2e/tools.sh build/geneva
+      - name: blockcheck's grid against zapret2's blockcheck2.d/standard
+        run: tests/e2e/blockcheck_grid.sh build/geneva
 
   # Fuzzing (docs/EXT_ROADMAP.md, 7.2): selftest's random inputs under
   # ASan and UBSan, then libFuzzer 60 s per target. A crash prints its
@@ -131,8 +135,8 @@ jobs:
       # X9c (the parallel plateau, the detector's own counts): 4 KB more
       # X11a (the tuner: circular, its detectors, --ext-state): 12 KB more
       # X11b (ts: Thompson sampling, proposals): 12 KB more (16 without crypto: libm)
-      - run: tools/ext_size.sh 335872 CC=musl-gcc CFLAGS="-Werror"
-      - run: tools/ext_size.sh 327680 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
+      - run: tools/ext_size.sh 393216 CC=musl-gcc CFLAGS="-Werror"
+      - run: tools/ext_size.sh 380928 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
       # the fuzz targets on musl (fork, alarm, fmemopen), seeds and 2000 inputs each
       - run: build/geneva selftest --ext --fuzz 2000 --seed 1
       - run: ls -la build/geneva && file build/geneva

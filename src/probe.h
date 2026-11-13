@@ -50,6 +50,7 @@ typedef struct {
     const char *injected_contains; /* http, tls, tcp, exec: the censor's answer contains this */
     size_t min_bytes;        /* http, tls, tcp: at least this much must arrive */
     size_t max_bytes;        /* http, tcp: enough; stop reading (default 4 MB) */
+    int strict_http;         /* http: 400 is broken, a redirect off the host injected (blockcheck2) */
 
     int tls_version;         /* tls: 12, 13, or 0 for both */
     const char *alpn;        /* tls: default http/1.1 */
