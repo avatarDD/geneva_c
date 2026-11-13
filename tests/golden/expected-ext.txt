@@ -57,6 +57,13 @@ Extensions (with --ext):
   blockcheck2.d/standard translated into geneva, scan levels, the report
   SUMMARY / COMMON / COVERAGE with nfqws2 and geneva strategies side by side
   (blockcheck --help; --print-grid lists the grid without probes).
+  Obfuscation of zapret2's zapret-obfs.lua, the same action on both ends
+  (outbound forest here, inbound there): xwgobfs{secret=S;padmin;padmax}
+  (WireGuard handshakes encrypted, AES-GCM), xippxor{ippxor=N;dataxor=BLOB}
+  (the IP protocol number XOR N), xudp2icmp{server=0|1;ctype;stype;ccode;
+  scode;dataxor} (UDP as ICMP echo), xsynhide{magic=x2|urp|opt|tsecr;ghost;
+  synack;xorseq} (the SYN sent as a marked ACK), e.g.
+  [UDP:dport:51820]-xwgobfs{secret=S}-| \/ [UDP:sport:51820]-xwgobfs{secret=S}-|
   See docs/EXT.md.
 [exit 0]
 ### help-ext-censor

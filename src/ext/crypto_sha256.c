@@ -137,7 +137,8 @@ int hkdf_expand(const uint8_t prk[32], const uint8_t *info, size_t info_len, uin
         return -1;
     for (uint8_t i = 1; done < out_len; i++) {
         size_t k;
-        memcpy(t + tl, info, info_len);
+        if (info_len) /* info may be NULL then */
+            memcpy(t + tl, info, info_len);
         t[tl + info_len] = i;
         hmac_sha256(prk, 32, t, tl + info_len + 1, ti);
         k = out_len - done < 32 ? out_len - done : 32;

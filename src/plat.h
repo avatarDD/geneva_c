@@ -125,6 +125,8 @@ int plat_write_atomic(const char *path, const void *data, size_t len);
 
 /* ---- misc ---------------------------------------------------------------- */
 
+/* The system generator only: 0, or -1 when it failed (buf then unusable). */
+int plat_random_secure(void *buf, size_t len);
 /* Fill buf with OS randomness; falls back to time-derived bytes. */
 void plat_random_bytes(void *buf, size_t len);
 /* Returns non-zero when running with the privileges the engine needs. */

@@ -245,9 +245,8 @@ int plat_poll(plat_pollfd *fds, unsigned n, int timeout_ms)
 
 /* ---- misc ---------------------------------------------------------------- */
 
-void plat_random_bytes(void *buf, size_t len)
+int plat_random_secure(void *buf, size_t len)
 {
-    unsigned char *p = buf;
     size_t got = 0;
 #ifdef _WIN32
     /* RtlGenRandom lives in advapi32 as SystemFunction036. */
@@ -266,6 +265,13 @@ void plat_random_bytes(void *buf, size_t len)
         fclose(f);
     }
 #endif
+    return got == len ? 0 : -1;
+}
+
+void plat_random_bytes(void *buf, size_t len)
+{
+    unsigned char *p = buf;
+    size_t got = plat_random_secure(buf, len) == 0 ? len : 0;
     if (got < len) {
         uint64_t x = plat_wall_ms() ^ ((uint64_t)plat_getpid() << 32) ^ (uint64_t)(uintptr_t)buf;
         for (size_t i = got; i < len; i++) {

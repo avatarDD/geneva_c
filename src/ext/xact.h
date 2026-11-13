@@ -226,5 +226,6 @@ extern const xa_kind xa_synacksplit, xa_synack, xa_wsize, xa_wssize, xa_syndata,
 extern const xa_kind xa_http, xa_tlsclone, xa_udplen, xa_dhtdn, xa_xlog, xa_tag, xa_pcap;
 extern const xa_kind xa_when, xa_stop, xa_repeat, xa_cutoffk;
 extern const xa_kind xa_oob, xa_tlsrec, xa_drip;
+extern const xa_kind xa_wgobfs, xa_ippxor, xa_udp2icmp, xa_synhide;
 
 #endif

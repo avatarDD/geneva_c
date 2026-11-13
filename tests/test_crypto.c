@@ -134,6 +134,12 @@ static void test_sha_hkdf(void)
     CHECK(eqhex(okm, 42, "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"));
     CHECK_INT(hkdf_expand(prk, info, in, okm, 255 * 32 + 1), -1);
 
+    t_current = "HKDF (RFC 5869 case 3: no salt, no info)";
+    hkdf_extract(NULL, 0, key, kn, prk);
+    CHECK(eqhex(prk, 32, "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04"));
+    CHECK_INT(hkdf_expand(prk, NULL, 0, okm, 42), 0);
+    CHECK(eqhex(okm, 42, "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"));
+
     t_current = "ct_memcmp";
     CHECK_INT(ct_memcmp("abcd", "abcd", 4), 0);
     CHECK(ct_memcmp("abcd", "abce", 4) != 0);
