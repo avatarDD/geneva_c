@@ -256,6 +256,13 @@
   перенаправление на чужой домен — неудача. Фича `ext_blockcheck`.
   `tests/e2e/blockcheck_grid.sh` сверяет сетку со скриптами релиза
   zapret2 строка в строку на всех уровнях, IPv4 и IPv6.
+- X13d: песочница `run --ext` на Windows, как `win_sandbox` у winws2:
+  когда пошли пакеты, процесс теряет все привилегии, кроме
+  `SeChangeNotifyPrivilege`, переходит на уровень Low и входит в job object
+  без дочерних процессов. Файлы, которые run пишет позже (автосписки,
+  `--ext-state`, `--pidfile`), и устройство WinDivert (для `set_filter`)
+  получают метку Low. `--ext-sandbox 0` — без песочницы. Раздел Windows
+  smoke проверяет токен процесса.
 - X13c: фильтр профиля `--filter-ssid NAME,...` и `--filter-ssid-neg`
   (Linux: SSID интерфейса пакета по nl80211, без libmnl); ключи winws2
   `--ssid-filter`, `--nlm-filter`, их `-neg` и `--nlm-list[=all]`

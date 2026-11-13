@@ -11,6 +11,7 @@
 
 #include "l7.h"
 #include "log.h"
+#include "sec_win.h"
 #include "plat.h"
 #include "util.h"
 
@@ -27,6 +28,7 @@ int xah_debug_log(const char *path)
         return -1;
     fclose(f);
     g_debug = xstrdup(path);
+    xsbx_file(path);
     return 0;
 }
 

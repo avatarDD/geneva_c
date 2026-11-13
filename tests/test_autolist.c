@@ -11,6 +11,9 @@
 #include "plat.h"
 #include "strategy.h"
 #include "test.h"
+#if GENEVA_EXT
+#  include "ext/sec_win.h"
+#endif
 #include "util.h"
 
 #if GENEVA_EXT
@@ -219,8 +222,12 @@ TEST(ah_list)
     memset(&none, 0, sizeof(none));
     remove(path);
     /* created when missing; never empty */
+    xsbx_reset();
     l = xlist_auto(path, &e);
     CHECK(l != NULL);
+    CHECK_INT((int)xsbx_nfiles(), 1); /* the Windows sandbox labels it */
+    CHECK_STR(xsbx_file_at(0), path);
+    xsbx_reset();
     if (!l)
         goto out;
     xlistref_add(&r, l);

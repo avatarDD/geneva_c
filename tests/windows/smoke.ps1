@@ -336,6 +336,95 @@ Write-Host "    --ssid-filter: exit $LASTEXITCODE`: $($ws -join ' | ')"
 Check (($LASTEXITCODE -eq 0 -and ($ws -match 'not present')) -or ($LASTEXITCODE -ne 0 -and ($ws -match 'wlanapi'))) "--ssid-filter: absent network or a clear wlanapi error"
 $script:Events = $null
 
+# ---- X13d: the sandbox of run --ext (winws2's win_sandbox) ----
+# Once packets flow the engine runs at Low integrity with no privilege but
+# SeChangeNotifyPrivilege; the files it writes later carry the Low label.
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class GenevaTok {
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr p, uint a, out IntPtr t);
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetTokenInformation(IntPtr t, int c, IntPtr i, int l, out int r);
+    [DllImport("advapi32.dll")] static extern IntPtr GetSidSubAuthority(IntPtr sid, uint n);
+    [DllImport("advapi32.dll")] static extern IntPtr GetSidSubAuthorityCount(IntPtr sid);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    static IntPtr Info(IntPtr proc, int cls, out IntPtr tok) {
+        int n;
+        tok = IntPtr.Zero;
+        if (!OpenProcessToken(proc, 8, out tok)) return IntPtr.Zero;
+        GetTokenInformation(tok, cls, IntPtr.Zero, 0, out n);
+        IntPtr b = Marshal.AllocHGlobal(n);
+        if (GetTokenInformation(tok, cls, b, n, out n)) return b;
+        Marshal.FreeHGlobal(b);
+        return IntPtr.Zero;
+    }
+    // TokenIntegrityLevel: the RID of the label (0x1000 Low, 0x2000 Medium, 0x3000 High)
+    public static int Integrity(IntPtr proc) {
+        IntPtr t, b = Info(proc, 25, out t);
+        if (b == IntPtr.Zero) return -1;
+        IntPtr sid = Marshal.ReadIntPtr(b);
+        int c = Marshal.ReadByte(GetSidSubAuthorityCount(sid));
+        int rid = Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)(c - 1)));
+        Marshal.FreeHGlobal(b);
+        CloseHandle(t);
+        return rid;
+    }
+    // TokenPrivileges: how many are left
+    public static int Privileges(IntPtr proc) {
+        IntPtr t, b = Info(proc, 3, out t);
+        if (b == IntPtr.Zero) return -1;
+        int n = Marshal.ReadInt32(b);
+        Marshal.FreeHGlobal(b);
+        CloseHandle(t);
+        return n;
+    }
+}
+"@
+$EvS = Join-Path $Work "sandbox.jsonl"; $LogS = Join-Path $Work "sandbox.log"
+$State = Join-Path $Work "tune.state"; $Pid1 = Join-Path $Work "geneva.pid"
+$p = Start-Engine @("--ext", "--ext-arm", "`"$strategy`"", "--ext-arm", "`"$strategy`"", "--ext-tune", "ts:inseq=64",
+    "--ext-state", "`"$State`"", "--pidfile", "`"$Pid1`"", "-p", "80", "-c", $Ctl) $EvS $LogS
+try {
+    Check (Wait-Event "ready" 20) "sandbox: engine is ready"
+    Start-Sleep -Milliseconds 300
+    Check (Select-String -Quiet -Path $LogS -Pattern 'sandbox: on: Low integrity') "sandbox: the log says it is on"
+    $il = [GenevaTok]::Integrity($p.Handle)
+    Check ($il -eq 0x1000) "sandbox: Low integrity (RID 0x$('{0:X}' -f $il))"
+    $np = [GenevaTok]::Privileges($p.Handle)
+    Check ($np -eq 1) "sandbox: one privilege left ($np)"
+    $lab = (& icacls.exe $State) -join ' '
+    Check ($lab -match 'Low Mandatory Level') "sandbox: --ext-state has the Low label"
+    Check ((& icacls.exe $Pid1) -join ' ' -match 'Low Mandatory Level') "sandbox: --pidfile has the Low label"
+    Check ((Fetch) -match '^[23]') "sandbox: HTTP works"
+    Check ((Fetch) -match '^[23]') "sandbox: HTTP works again"
+    $s = Ctl @("stats")
+    Check ($s.triggered -ge 1) "sandbox: the strategy runs ($($s.triggered))"
+    # set_filter opens a new WinDivert handle at Low integrity
+    $r = Ctl @("set_filter", "filter=tcp")
+    Check $r.ok "sandbox: set_filter opens WinDivert again ($($r.error))"
+    Check ((Fetch) -match '^[23]') "sandbox: HTTP works after set_filter"
+    $r = Ctl @("stop")
+    Check ($p.WaitForExit(15000) -and $p.ExitCode -eq 0) "sandbox: engine exits with 0 (got $($p.ExitCode))"
+    Check (!(Test-Path $Pid1)) "sandbox: the pidfile is removed"
+    Check ((Test-Path $State) -and (Select-String -Quiet -Path $State -Pattern '"key"')) "sandbox: --ext-state written in place"
+    Check ((Fetch) -match '^[23]') "sandbox: HTTP works after the engine is gone"
+} finally {
+    if (!$p.HasExited) { $p.Kill(); $p.WaitForExit() }
+    if ($script:Failed -and (Test-Path $LogS)) { Write-Host "---- sandbox log"; Get-Content $LogS | Select-Object -Last 40 }
+}
+$p = Start-Engine @("--ext", "--ext-sandbox=0", "-s", "`"$strategy`"", "-p", "80", "-c", $Ctl) $EvS $LogS
+try {
+    Check (Wait-Event "ready" 20) "--ext-sandbox 0: engine is ready"
+    Start-Sleep -Milliseconds 300
+    $il = [GenevaTok]::Integrity($p.Handle)
+    Check ($il -ge 0x3000) "--ext-sandbox 0: integrity stays (RID 0x$('{0:X}' -f $il))"
+    $r = Ctl @("stop")
+    Check ($p.WaitForExit(15000) -and $p.ExitCode -eq 0) "--ext-sandbox 0: engine exits with 0"
+} finally {
+    if (!$p.HasExited) { $p.Kill(); $p.WaitForExit() }
+}
+$script:Events = $null
+
 # The evaluator: probes from its own port block, strategies through the
 # embedded engine (geneva eval prints "fitness<TAB>strategy").
 Check ((Eval @("--no-engine")) -eq 0) "eval: http baseline succeeds"

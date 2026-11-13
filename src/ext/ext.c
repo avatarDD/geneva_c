@@ -22,6 +22,7 @@
 #include "detect.h"
 #include "profile.h"
 #include "rawsend.h"
+#include "sec_win.h"
 #include "seqtrack.h"
 #include "tuner.h"
 #include "treat.h"
@@ -258,6 +259,7 @@ void ext_deactivate(void)
     xprof_free(&g_prof);
     xwlan_free();
     xwinnet_stop();
+    xsbx_reset();
     xipc_reset();
     xah_debug_log(NULL);
     xauto_reset();

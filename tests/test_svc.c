@@ -13,6 +13,7 @@
 
 #if GENEVA_EXT
 #  include "ext/cfgfile.h"
+#  include "ext/sec_win.h"
 #  include "ext/svc.h"
 
 #  ifdef PLAT_LINUX
@@ -324,6 +325,47 @@ TEST(svc_options)
     sb_free(&err);
 }
 
+/* --ext-sandbox (src/ext/sec_win.c): Windows only, on by default there */
+TEST(svc_sandbox)
+{
+    xsvc s;
+    sbuf err;
+    sb_init(&err);
+    CHECK_INT(parse_run(&s, NULL, NULL, NULL, &err), 0);
+#  ifdef _WIN32
+    CHECK_INT(s.sandbox, 1);
+    CHECK_INT(parse_run(&s, "--ext-sandbox=0", NULL, NULL, &err), 0);
+    CHECK_INT(s.sandbox, 0);
+    CHECK_INT(parse_run(&s, "--ext-sandbox", NULL, NULL, &err), 0);
+    CHECK_INT(s.sandbox, 1);
+#  else
+    CHECK_INT(s.sandbox, 0);
+    CHECK_INT(parse_run(&s, "--ext-sandbox=0", NULL, NULL, &err), 0);
+    CHECK_INT(s.sandbox, 0);
+    CHECK_INT(parse_run(&s, "--ext-sandbox", NULL, NULL, &err), -1);
+    CHECK_STR(err.data, "--ext-sandbox is Windows-only (Linux: --ext-seccomp, --user)");
+    sb_reset(&err);
+    CHECK_INT(xsbx_apply(&err), 0);
+#  endif
+    CHECK_INT(parse_run(&s, "--ext-sandbox=2", NULL, NULL, &err), -1);
+    CHECK_STR(err.data, "bad --ext-sandbox 2 (0 or 1)");
+    sb_free(&err);
+
+    /* the files the run writes later: once each */
+    xsbx_reset();
+    xsbx_file("auto.txt");
+    xsbx_file(NULL);
+    xsbx_file("");
+    xsbx_file("state.jsonl");
+    xsbx_file("auto.txt");
+    CHECK_INT((int)xsbx_nfiles(), 2);
+    CHECK_STR(xsbx_file_at(0), "auto.txt");
+    CHECK_STR(xsbx_file_at(1), "state.jsonl");
+    CHECK(xsbx_file_at(2) == NULL);
+    xsbx_reset();
+    CHECK_INT((int)xsbx_nfiles(), 0);
+}
+
 TEST(svc_syslog)
 {
     sbuf s;
@@ -477,6 +519,7 @@ void suite_svc(void)
     RUN(svc_expand);
     RUN(svc_options);
     RUN(svc_workers);
+    RUN(svc_sandbox);
     RUN(svc_syslog);
     RUN(svc_notify);
     RUN(svc_seccomp);

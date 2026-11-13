@@ -32,6 +32,7 @@ typedef struct {
     uint32_t uid, gid[XSVC_MAX_GIDS];
     int ngid;
     int seccomp;   /* --ext-seccomp (1 on Linux) */
+    int sandbox;   /* --ext-sandbox (1 on Windows, sec_win.h) */
     int syslog;    /* --log-target syslog */
     int dry_run;
     /* filled at the start */

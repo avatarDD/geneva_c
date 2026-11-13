@@ -54,6 +54,7 @@ geneva run --ext -s '...'
 | X13a | двусторонняя обфускация `zapret-obfs.lua`: `xwgobfs`, `xippxor`, `xudp2icmp`, `xsynhide` | ниже |
 | X13b | исполнитель на FreeBSD и OpenBSD: divert-сокеты, правила ipfw и якорь pf | ниже |
 | X13c | фильтр профиля `--filter-ssid` (Linux, nl80211), `--ssid-filter`, `--nlm-filter`, `--nlm-list` (Windows), статическая сборка на Android | ниже |
+| X13d | песочница `run --ext` на Windows (как у winws2): Low integrity, без привилегий и дочерних процессов, `--ext-sandbox` | ниже |
 | X12c | `geneva blockcheck`: проверка DNS (системный резолвер против публичных DNS, UDP против TCP), DoH через curl при подмене, тесты блокировки по порту и по IP | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
@@ -2303,6 +2304,81 @@ Windows: `smoke.ps1` — `--nlm-list`, `--nlm-filter` по GUID и имени
 `wlanapi.dll`. Android: `tests/e2e/android_env.sh` запускает статическую
 сборку musl в chroot без `/etc/resolv.conf`, `/tmp` и `/var/run`, с
 `/system/build.prop`.
+
+## Песочница Windows (X13d)
+
+winws2 после открытия WinDivert закрывает себя в песочницу (`win_sandbox`
+в `nfq2/darkmagic.c`), и `geneva run --ext` на Windows делает то же, как
+только пошли пакеты:
+
+```
+geneva.exe run --ext -s '[TCP:flags:S]-duplicate-| \/' -p 80,443 -c tcp:47123
+... info  sandbox: on: Low integrity, no privileges but SeChangeNotifyPrivilege, no child processes
+```
+
+| Опция | Что делает |
+|---|---|
+| `--ext-sandbox[=0\|1]` | Windows: песочница после старта (по умолчанию 1); `0` — без неё. На Linux есть только `0`, там `--ext-seccomp` и `--user` |
+
+Что меняется в процессе — по шагам zapret2 и в том же порядке:
+
+1. Из токена удаляются все привилегии, кроме `SeChangeNotifyPrivilege`
+   (`RemoveTokenPrivs`).
+2. Уровень целостности — Low (`LowMandatoryLevel`): процесс не может
+   писать в файлы, ключи реестра и процессы уровня Medium и выше.
+3. Процесс входит в job object, где разрешён один процесс (дочерние не
+   создаются) и закрыт доступ к рабочему столу, буферу обмена и системным
+   настройкам (`JobSandbox`).
+
+Вернуть права нельзя: песочница действует до выхода.
+
+**Что продолжает работать.** Хэндлы WinDivert (и хэндл наблюдения
+`--ext-auto`), файлы `--log-file` и `--events` открыты до песочницы и
+остаются. Сокет управления (`-c tcp:...`) принимает подключения: клиент с
+уровнем Medium или High может писать процессу Low. Списки читаются и
+перечитываются (Low читает файлы Medium). `--nlm-filter` и
+`--ssid-filter` проверяют сеть и в песочнице, как у winws2.
+
+**Файлы, которые run пишет позже.** До песочницы geneva ставит на них
+метку Low (как `ensure_file_access` у zapret2), создавая пустой файл, если
+его нет: автосписки `--hostlist-auto` и `--hostlist-auto-debug`,
+`--ext-state`, `--pidfile` (он удаляется при выходе). Метка остаётся на
+файле и после выхода. `--ext-state` в песочнице пишется прямо в файл, а не
+через `.tmp` и переименование: создать новый файл в каталоге уровня Medium
+процесс Low не может. Файлы `xpcap` создаются заново на каждом старте
+инстанса: в песочнице их нужно писать в каталог уровня Low
+(`%USERPROFILE%\AppData\LocalLow`) или запускать с `--ext-sandbox 0`.
+
+**Устройство WinDivert.** Команда `set_filter` открывает новый хэндл
+WinDivert, поэтому geneva ставит метку Low и на устройство
+`\\.\WinDivert` (winws2 делает это для `--nlm-filter`, когда снова
+открывает WinDivert при появлении сети). Доступ к устройству по-прежнему
+только у Администраторов и SYSTEM; метка сбрасывается, когда драйвер
+выгружается.
+
+**Отличия от winws2.**
+- В winws2 песочница есть всегда; у geneva её можно выключить
+  (`--ext-sandbox 0`). Без `--ext` geneva работает как раньше, без
+  песочницы.
+- Метку Low на устройство winws2 ставит только с `--nlm-filter` или
+  `--ssid-filter`, geneva — всегда (из-за `set_filter`).
+- `RelaxCygwinNTDir` не нужен: geneva собрана без Cygwin.
+
+Если метку на файл или устройство поставить не удалось (FAT, сетевой
+диск), это предупреждение, как у zapret2: файл может не записаться,
+`set_filter` — не сработать. Ошибка шагов 1–3 — выход с кодом 4
+(`EXIT_PRIV`) и подсказка `--ext-sandbox 0`. Так бывает на Windows 7, если
+процесс уже в job object: вложенные job там не поддерживаются. Правил
+firewall на Windows нет, хэндлы WinDivert закрываются при выходе.
+
+**Проверка.** Юнит-тесты: `--ext-sandbox` (значения, только Windows),
+список файлов для метки (автосписок, `--ext-state`). Windows smoke
+(`tests/windows/smoke.ps1`): уровень целостности процесса Low и одна
+привилегия (читаются из его токена), метка Low на `--ext-state` и
+`--pidfile` (`icacls`), стратегия срабатывает, `set_filter` открывает
+WinDivert заново, pidfile удаляется, `--ext-state` записан; с
+`--ext-sandbox 0` уровень прежний. Разделы `--ext-auto` и `--nlm-filter`
+того же smoke тоже идут в песочнице.
 
 ## Код zapret2
 
