@@ -8,9 +8,12 @@
  *       16 bytes) with random padding: iv(12) tag(16) E(len(2) msg pad)
  *   xippxor{ippxor=N;dataxor=BLOB;rebuild}  the IP protocol number XOR N,
  *       the TCP/UDP/ICMP payload XOR the blob
- *   xudp2icmp{ctype;ccode;stype;scode;dataxor;server}  a UDP datagram as an
- *       ICMP message of the same size (echo request from the client, reply
- *       from the server); the ICMP data word keeps the ports
+ *   xudp2icmp{ctype;ccode;stype;scode;dataxor;server;cgnat;id_lifetime}
+ *       a UDP datagram as an ICMP message of the same size (echo request
+ *       from the client, reply from the server); the ICMP data word keeps
+ *       the ports (cgnat: the client also appends them, 2 bytes, as a NAT
+ *       may change the identifier, and the server answers with the
+ *       identifier it saw)
  *   xsynhide{ghost;ghost6;synack;magic=x2|urp|opt|tsecr;x2;kind;opt;xorseq}
  *       the client's SYN goes as an ACK with a mark (and the server's
  *       SYN,ACK as RST,ACK with synack), turned back on the other end
@@ -469,26 +472,119 @@ static int check_udp2icmp(const xact *a, sbuf *err)
         sb_puts(err, "xudp2icmp: ccode and scode must be both set or not set");
         return -1;
     }
-    if (xa_check_blob(a, "dataxor", err) < 0 || xa_check_num(a, "server", 0, 1, err) < 0)
+    if (xa_check_blob(a, "dataxor", err) < 0 || xa_check_num(a, "server", 0, 1, err) < 0 ||
+        xa_check_flag(a, "cgnat", err) < 0 || xa_check_num(a, "id_lifetime", 1, 86400, err) < 0)
         return -1;
+    return 0;
+}
+
+/* cgnat: the ICMP identifier the server saw, by the client's and the
+ * server's address and port (zapret2's udp2icmp_map), shared by the
+ * inbound and the outbound action and by the workers */
+enum { IDMAP_N = 4096, IDMAP_PROBE = 8 };
+
+typedef struct {
+    uint8_t key[36]; /* client address, server address (16 bytes each), client port, server port */
+    uint16_t id;
+    uint64_t t; /* ms; 0: free */
+} idmap_ent;
+
+static idmap_ent idmap[IDMAP_N];
+static plat_mutex_t idmap_lock;
+static int idmap_ready;
+
+static void idmap_init(void)
+{
+    if (!idmap_ready) { /* at parse time, before the workers */
+        plat_mutex_init(&idmap_lock);
+        idmap_ready = 1;
+    }
+}
+
+static void idmap_key(const gpkt *p, int client_is_src, unsigned cport, unsigned sport, uint8_t key[36])
+{
+    size_t al = p->ipver == 6 ? 16 : 4;
+    memset(key, 0, 36);
+    memcpy(key, client_is_src ? p->src : p->dst, al);
+    memcpy(key + 16, client_is_src ? p->dst : p->src, al);
+    put16(key + 32, cport);
+    put16(key + 34, sport);
+}
+
+static size_t idmap_slot(const uint8_t key[36])
+{
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < 36; i++)
+        h = (h ^ key[i]) * 16777619u;
+    return h % IDMAP_N;
+}
+
+static void idmap_put(const uint8_t key[36], uint16_t id, uint64_t now)
+{
+    size_t b = idmap_slot(key), at = b;
+    plat_mutex_lock(&idmap_lock);
+    for (size_t i = 0; i < IDMAP_PROBE; i++) {
+        idmap_ent *e = &idmap[(b + i) % IDMAP_N];
+        if (e->t && !memcmp(e->key, key, 36)) {
+            at = (b + i) % IDMAP_N;
+            break;
+        }
+        if (e->t < idmap[at].t) /* free, or the oldest */
+            at = (b + i) % IDMAP_N;
+    }
+    memcpy(idmap[at].key, key, 36);
+    idmap[at].id = id;
+    idmap[at].t = now ? now : 1;
+    plat_mutex_unlock(&idmap_lock);
+}
+
+/* 0 and *id, or -1 when not there or older than life ms */
+static int idmap_get(const uint8_t key[36], uint64_t now, uint64_t life, uint16_t *id)
+{
+    size_t b = idmap_slot(key);
+    int rc = -1;
+    plat_mutex_lock(&idmap_lock);
+    for (size_t i = 0; i < IDMAP_PROBE; i++) {
+        idmap_ent *e = &idmap[(b + i) % IDMAP_N];
+        if (e->t && !memcmp(e->key, key, 36)) {
+            if (now >= e->t + life) {
+                e->t = 0;
+            } else {
+                *id = e->id;
+                e->t = now ? now : 1; /* used: lives on */
+                rc = 0;
+            }
+            break;
+        }
+    }
+    plat_mutex_unlock(&idmap_lock);
+    return rc;
+}
+
+static int prepare_udp2icmp(xact *a, sbuf *err)
+{
+    (void)err;
+    if (xa_has(a, "cgnat"))
+        idmap_init();
     return 0;
 }
 
 static void run_udp2icmp(const xact *a, gpkt *p, xrun *r)
 {
-    int64_t v[4], server;
+    int64_t v[4], server, life;
+    int cgnat = xa_has(a, "cgnat") && idmap_ready;
+    uint8_t key[36];
     int v6 = p->ipver == 6;
     size_t dl = 0, n4 = 0;
     const uint8_t *dx = NULL;
     const char *dn;
     unsigned tsend, csend, trecv, crecv;
-    (void)a;
     for (int i = 0; i < 4; i++)
         if (xa_num(r, k_byte[i], -1, 0, 255, &v[i]) < 0) {
             xa_pass(r, p);
             return;
         }
-    if (xa_num(r, "server", 0, 0, 1, &server) < 0) {
+    if (xa_num(r, "server", 0, 0, 1, &server) < 0 || xa_num(r, "id_lifetime", 60, 1, 86400, &life) < 0) {
         xa_pass(r, p);
         return;
     }
@@ -509,25 +605,56 @@ static void run_udp2icmp(const xact *a, gpkt *p, xrun *r)
         return;
     }
     if (p->l4 == LAYER_UDP) {
-        uint8_t *m = xmalloc(8 + p->payload_len);
+        unsigned id = p->sport ^ p->dport;
+        uint8_t *m = xmalloc(8 + p->payload_len + 2);
+        uint16_t mid;
         n4 = 8 + p->payload_len;
         m[0] = (uint8_t)tsend;
         m[1] = (uint8_t)csend;
         put16(m + 2, 0);
-        /* the data word: sport^dport, then the port of the other end */
-        put16(m + 4, (unsigned)(p->sport ^ p->dport));
-        put16(m + 6, server ? p->sport : p->dport);
         if (p->payload_len)
             memcpy(m + 8, p->payload, p->payload_len);
         if (dx)
             xor_pattern(r, dx, dl, m + 8, p->payload_len);
+        if (cgnat && server) {
+            /* the identifier as it came, or the NAT does not deliver */
+            idmap_key(p, 0, p->dport, p->sport, key);
+            if (idmap_get(key, plat_now_ms(), (uint64_t)life * 1000, &mid) == 0) {
+                id = mid;
+                xa_log(r, "found mapped icmp identifier %04X", id);
+            } else {
+                xa_log(r, "mapped icmp identifier NOT found !");
+            }
+        } else if (cgnat) {
+            /* after the XOR, as zapret2 appends it to the XORed payload */
+            put16(m + n4, id);
+            n4 += 2;
+            xa_log(r, "expanding udp size to %zu", n4 - 8);
+        }
+        /* the data word: the identifier (sport^dport), then the port of the
+         * other end */
+        put16(m + 4, id);
+        put16(m + 6, server ? p->sport : p->dport);
         xa_log(r, "udp => icmp sport=%u dport=%u size=%zu", p->sport, p->dport, p->payload_len);
         rebuild(p, v6 ? IPP_ICMP6 : IPP_ICMP, m, n4);
         free(m);
     } else if (is_icmp(p) && p->payload_len >= 8 && p->payload[0] == trecv && p->payload[1] == crecv) {
-        unsigned pl = get16(p->payload + 6), pm = get16(p->payload + 4) ^ pl;
+        unsigned id = get16(p->payload + 4), pl = get16(p->payload + 6), pm = id ^ pl;
         size_t dlen = p->payload_len - 8;
-        uint8_t *m = xmalloc(8 + dlen);
+        uint8_t *m;
+        if (cgnat && server) {
+            if (dlen < 2) {
+                xa_log(r, "udp is less than 2 bytes and cgnat is on ! doing nothing");
+                xa_pass(r, p);
+                return;
+            }
+            pm = get16(p->payload + p->payload_len - 2) ^ pl;
+            dlen -= 2;
+            idmap_key(p, 1, pm, pl, key);
+            idmap_put(key, (uint16_t)id, plat_now_ms());
+            xa_log(r, "shrinking udp size to %zu, stored mapped icmp identifier %04X", dlen, id);
+        }
+        m = xmalloc(8 + dlen);
         put16(m, server ? pm : pl);
         put16(m + 2, server ? pl : pm);
         put16(m + 4, (unsigned)(8 + dlen));
@@ -789,7 +916,7 @@ static void run_synhide(const xact *a, gpkt *p, xrun *r)
 
 static const char *const k_wgobfs[] = {"secret", "padmin", "padmax", NULL};
 static const char *const k_ippxor[] = {"ippxor", "dataxor", "rebuild", NULL};
-static const char *const k_udp2icmp[] = {"ctype", "ccode", "stype", "scode", "dataxor", "server", NULL};
+static const char *const k_udp2icmp[] = {"ctype", "ccode", "stype", "scode", "dataxor", "server", "cgnat", "id_lifetime", NULL};
 static const char *const k_synhide[] = {"ghost", "ghost6", "synack", "magic", "x2", "kind", "opt", "xorseq", NULL};
 
 #if GENEVA_EXT_CRYPTO
@@ -798,5 +925,5 @@ const xa_kind xa_wgobfs = {"xwgobfs", 1, 1, 0, k_wgobfs, check_wgobfs, run_wgobf
 const xa_kind xa_wgobfs = {"xwgobfs", 1, 1, 0, k_wgobfs, check_wgobfs, run_wgobfs, NULL, NULL};
 #endif
 const xa_kind xa_ippxor = {"xippxor", 1, 1, 0, k_ippxor, check_ippxor, run_ippxor, NULL, NULL};
-const xa_kind xa_udp2icmp = {"xudp2icmp", 1, 1, 0, k_udp2icmp, check_udp2icmp, run_udp2icmp, NULL, NULL};
+const xa_kind xa_udp2icmp = {"xudp2icmp", 1, 1, 0, k_udp2icmp, check_udp2icmp, run_udp2icmp, prepare_udp2icmp, NULL};
 const xa_kind xa_synhide = {"xsynhide", 1, 1, 0, k_synhide, check_synhide, run_synhide, NULL, NULL};

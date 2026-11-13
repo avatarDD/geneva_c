@@ -284,6 +284,7 @@ static const char *const ext_strategies[] = {
 #endif
     "[TCP:dport:443]-xippxor{ippxor=192;dataxor=0xABCD}-| \\/ [IP:proto:198]-xippxor{ippxor=192}-|",
     "[UDP:dport:443]-xudp2icmp{dataxor=0x12}-| \\/ [IP:proto:1]-xudp2icmp{server=1}-|",
+    "[UDP:sport:443]-xudp2icmp{cgnat;server=1}-| \\/ [IP:proto:1]-xudp2icmp{cgnat;id_lifetime=5;server=1}-|",
     "[TCP:flags:S]-xsynhide{ghost=3;magic=urp;xorseq=01020304}-| \\/ [TCP:sport:443]-xsynhide{synack}-|",
     NULL,
 };

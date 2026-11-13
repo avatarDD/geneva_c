@@ -2072,7 +2072,7 @@ geneva run --ext --server-side -p 51820 --proto udp \
 |---|---|---|---|
 | `xwgobfs` | `wgobfs` | `secret` (обязателен), `padmin` (0), `padmax` (16) | рукопожатия WireGuard (initiation, response, cookie) шифруются AES-128-GCM с ключом HKDF-SHA256(соль `wgobfs_salt`, `secret`) и случайной добивкой: `iv(12) tag(16) E(длина(2) сообщение добивка)`; входящий UDP подходящего размера расшифровывается, если сходится тег. Данные и keepalive идут как есть. Нужна сборка с криптографией (не `EXT_CRYPTO=0`) |
 | `xippxor` | `ippxor` | `ippxor=N` (0–255, обязателен), `dataxor=БЛОБ`, `rebuild` | номер протокола IP XOR N, payload TCP, UDP или ICMP XOR блоб (с начала); пакет, ставший TCP, UDP или ICMP, разбирается заново как он (всегда, `rebuild` принимается для совместимости) |
-| `xudp2icmp` | `udp2icmp` | `server=0\|1` (0), `ctype`, `stype`, `ccode`, `scode` (парами), `dataxor` | датаграмма UDP уходит сообщением ICMP того же размера: от клиента — `ctype` (echo request), от сервера — `stype` (echo reply); в слове данных ICMP — `sport^dport` и порт другой стороны; принятое ICMP своего типа и кода становится UDP |
+| `xudp2icmp` | `udp2icmp` | `server=0\|1` (0), `ctype`, `stype`, `ccode`, `scode` (парами), `dataxor`, `cgnat`, `id_lifetime` (60 с, 1–86400) | датаграмма UDP уходит сообщением ICMP того же размера: от клиента — `ctype` (echo request), от сервера — `stype` (echo reply); в слове данных ICMP — `sport^dport` (идентификатор) и порт другой стороны; принятое ICMP своего типа и кода становится UDP. С `cgnat` (zapret2 1.0.7) клиент дописывает `sport^dport` в конец (+2 байта, может превысить MTU), так как NAT оператора меняет идентификатор; сервер берёт порты из этих байтов, запоминает увиденный идентификатор на `id_lifetime` секунд и отвечает с ним, иначе NAT ответ не доставит. Ставить `cgnat` надо на обоих концах |
 | `xsynhide` | `synhide` | `magic=x2\|urp\|opt\|tsecr` (`x2`), `x2` (1), `kind` (172), `opt=HEX`, `xorseq=HEX4`, `ghost`, `ghost6`, `synack` | SYN клиента уходит как ACK с меткой (бит `x2`, `urgptr`, опция TCP или младшие байты `tsecr`), сервер возвращает SYN; с `synack` так же SYN,ACK сервера идёт как RST,ACK; `ghost` — сначала копия SYN с этим TTL (пробить NAT) |
 
 Чтобы пакеты другого протокола дошли до движка, профиль берёт их
@@ -2097,12 +2097,18 @@ geneva run --ext --server-side -p 51820 --proto udp \
 - IV для `xwgobfs` — из системного генератора (`/dev/urandom`, на
   Windows `RtlGenRandom`), как `bcryptorandom` у zapret2; если он
   недоступен, сообщение уходит незашифрованным (повтор IV ломает AES-GCM).
+- `xudp2icmp{cgnat}`: таблица идентификаторов — 4096 записей (при
+  переполнении вытесняется самая старая), общая для входящего и
+  исходящего действия и для всех воркеров; zapret2 держит таблицу Lua без
+  предела. В nfqws2 1.0.6, с которым e2e сверяет обфускацию, `cgnat` ещё
+  нет, поэтому `cgnat` проверен только geneva↔geneva и юнит-тестом с
+  подменой идентификатора, как это делает NAT.
 - `xsynhide{magic=opt}`: если опция не помещается в 40 байт опций TCP,
   SYN уходит как есть и в журнал пишется `no room for the option`
   (иначе ушёл бы ACK без метки).
 
 Проверки: юнит-тесты (`tests/test_obfs.c`: каждое действие туда и
-обратно для IPv4 и IPv6, неверный ключ, свои типы ICMP, все режимы метки
+обратно для IPv4 и IPv6, неверный ключ, свои типы ICMP, `cgnat` за NAT, все режимы метки
 `xsynhide`, `synack`, `ghost`); `tests/e2e/obfs.sh` (в CI с официальным
 nfqws2): эхо UDP через `xwgobfs`, `xippxor`, `xudp2icmp` и HTTP через
 `xsynhide` между двумя geneva и между geneva и nfqws2 с функциями Lua

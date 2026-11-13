@@ -35,6 +35,19 @@ enum { F = 1, S = 2, R = 4, P = 8, A = 16, U = 32 };
 
 static void put16(uint8_t *p, unsigned v) { p[0] = (uint8_t)(v >> 8), p[1] = (uint8_t)v; }
 static void put32(uint8_t *p, uint32_t v) { put16(p, v >> 16), put16(p + 2, v & 0xffff); }
+
+/* what a NAT does to an ICMP echo: a new identifier, the checksum updated
+ * (RFC 1624) */
+static void nat_id(uint8_t *b, size_t l3, unsigned id)
+{
+    uint8_t *ic = b + l3;
+    uint32_t c = (uint32_t)(~((unsigned)ic[2] << 8 | ic[3]) & 0xffff);
+    c += (~((unsigned)ic[4] << 8 | ic[5]) & 0xffff) + id;
+    while (c >> 16)
+        c = (c & 0xffff) + (c >> 16);
+    put16(ic + 2, ~c & 0xffff);
+    put16(ic + 4, id);
+}
 static unsigned get16(const uint8_t *p) { return (unsigned)p[0] << 8 | p[1]; }
 
 /* 10.0.0.1:40000 -> 10.0.0.2:443 ([fd00::1] -> [fd00::2] with v6): proto 6
@@ -180,6 +193,9 @@ TEST(obfs_parse)
     CHECK_STR(parse_err("[UDP:dport:443]-xudp2icmp{ctype=13;stype=14}-| \\/"), "OK");
     CHECK_STR(parse_err("[UDP:dport:443]-xudp2icmp{ctype=13}-| \\/"), "xudp2icmp: ctype and stype must be both set or not set");
     CHECK_STR(parse_err("[UDP:dport:443]-xudp2icmp{scode=1}-| \\/"), "xudp2icmp: ccode and scode must be both set or not set");
+    CHECK_STR(parse_err("[UDP:dport:443]-xudp2icmp{cgnat;id_lifetime=600}-| \\/"), "OK");
+    CHECK(strstr(parse_err("[UDP:dport:443]-xudp2icmp{id_lifetime=0}-| \\/"), "id_lifetime"));
+    CHECK(strstr(parse_err("[UDP:dport:443]-xudp2icmp{cgnat=1}-| \\/"), "cgnat"));
     CHECK_STR(parse_err("[TCP:dport:443]-xsynhide{magic=foo}-| \\/"), "xsynhide: invalid magic mode 'foo'");
     CHECK_STR(parse_err("[TCP:dport:443]-xsynhide{xorseq=0102}-| \\/"), "xsynhide: invalid xorseq value");
     CHECK(strstr(parse_err("[TCP:dport:443]-xsynhide{x2=16}-| \\/"), "x2"));
@@ -313,6 +329,44 @@ TEST(obfs_udp2icmp)
         CHECK_INT(get16(y + l3 + 2), 40000);
         CHECK(csum_ok(y, ny));
         CHECK_MEM(y + l3 + 8, ny - l3 - 8, rep + l3 + 8, nr - l3 - 8);
+
+        /* cgnat: the client appends the identifier, a NAT changes it, the
+         * server answers with the one it saw */
+        {
+            const char *cin = v6 ? "\\/ [IPv6:nh:58]-xudp2icmp{cgnat;dataxor=0x55;server=1}-|"
+                                 : "\\/ [IP:proto:1]-xudp2icmp{cgnat;dataxor=0x55;server=1}-|";
+            uint8_t z[400];
+            size_t nz;
+            n = mkpkt(raw, v6, 17, 0, 0, 0, NULL, 0, (const uint8_t *)data, sizeof(data) - 1);
+            runx("[UDP:dport:443]-xudp2icmp{cgnat;dataxor=0x55}-| \\/", 0, L7P_UNKNOWN, raw, n, x, &nx, NULL);
+            CHECK_INT(nx, n + 2);
+            CHECK_INT(get16(x + nx - 2), 40000 ^ 443);
+            CHECK_INT(x[l3 + 8], (uint8_t)('a' ^ 0x55));
+            CHECK(csum_ok(x, nx));
+            nat_id(x, l3, 0x7777);
+            runx(cin, 1, L7P_UNKNOWN, x, nx, y, &ny, NULL);
+            CHECK_MEM(y, ny, raw, n);
+            /* the answer carries 0x7777, and is not longer */
+            runx("[UDP:sport:443]-xudp2icmp{cgnat;dataxor=0x55;server=1}-| \\/", 0, L7P_UNKNOWN, rep, nr, z, &nz, NULL);
+            CHECK_INT(nz, nr);
+            CHECK_INT(get16(z + l3 + 4), 0x7777);
+            CHECK_INT(get16(z + l3 + 6), 443);
+            CHECK(csum_ok(z, nz));
+            /* the NAT gives the client its identifier back */
+            nat_id(z, l3, 40000 ^ 443);
+            runx(v6 ? "\\/ [IPv6:nh:58]-xudp2icmp{cgnat;dataxor=0x55}-|" : "\\/ [IP:proto:1]-xudp2icmp{cgnat;dataxor=0x55}-|",
+                 1, L7P_UNKNOWN, z, nz, y, &ny, NULL);
+            CHECK_MEM(y, ny, rep, nr);
+            /* another client port: nothing mapped, the plain identifier */
+            put16(rep + l3 + 2, 40001);
+            runx("[UDP:sport:443]-xudp2icmp{cgnat;server=1}-| \\/", 0, L7P_UNKNOWN, rep, nr, z, &nz, NULL);
+            CHECK_INT(get16(z + l3 + 4), 40001 ^ 443);
+            /* less than the 2 bytes: left alone */
+            n = mkpkt(raw, v6, 17, 0, 0, 0, NULL, 0, NULL, 0);
+            runx("[UDP:dport:443]-xudp2icmp-| \\/", 0, L7P_UNKNOWN, raw, n, x, &nx, NULL);
+            runx(cin, 1, L7P_UNKNOWN, x, nx, y, &ny, NULL);
+            CHECK_MEM(y, ny, x, nx);
+        }
     }
     /* own types and codes */
     n = mkpkt(raw, 0, 17, 0, 0, 0, NULL, 0, (const uint8_t *)data, 4);
