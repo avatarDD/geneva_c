@@ -14,6 +14,7 @@
 
 #include "inflate.h"
 #include "log.h"
+#include "sec_win.h"
 
 #define XLIST_MAX_INFLATE ((size_t)1 << 30) /* 1 GiB of text at most */
 
@@ -193,6 +194,7 @@ xlist *xlist_auto(const char *path, sbuf *err)
         return NULL;
     }
     fclose(f);
+    xsbx_file(path); /* written while running */
     if ((f = fopen(path, "rb"))) {
         size_t got = fread(m, 1, 2, f);
         fclose(f);

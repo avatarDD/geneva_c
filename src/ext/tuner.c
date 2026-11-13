@@ -16,6 +16,7 @@
 #include "log.h"
 #include "plat.h"
 #include "rng.h"
+#include "sec_win.h"
 #include "treat.h"
 
 #ifdef _WIN32
@@ -500,6 +501,7 @@ int xtune_start(const char *state_file, sbuf *err)
             }
             fclose(f);
         }
+        xsbx_file(state_file);
     }
     return 0;
 }

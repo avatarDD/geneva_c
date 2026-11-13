@@ -412,6 +412,16 @@ int plat_write_atomic(const char *path, const void *data, size_t len)
         return -1;
     sprintf(tmp, "%s.tmp", path);
     f = fopen(tmp, "wb");
+#ifdef _WIN32
+    if (!f && (f = fopen(path, "wb")) != NULL) {
+        /* no new file in the directory (Low integrity in the sandbox of
+         * run --ext, sec_win.h): the file itself, in place */
+        ok = fwrite(data, 1, len, f) == len && fflush(f) == 0;
+        ok = fclose(f) == 0 && ok;
+        free(tmp);
+        return ok ? 0 : -1;
+    }
+#endif
     if (!f) {
         free(tmp);
         return -1;

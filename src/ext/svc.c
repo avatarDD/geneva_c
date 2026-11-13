@@ -1,4 +1,5 @@
 #include "svc.h"
+#include "sec_win.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -82,6 +83,8 @@ int xsvc_parse(const args_t *a, xsvc *s, sbuf *err)
         }
         s->seccomp = strcmp(v, "0") != 0;
     }
+    if (xsbx_parse(a, &s->sandbox, err) < 0)
+        return -1;
 #ifndef PLAT_LINUX
     if (s->seccomp || arg_has(a, "user") || arg_has(a, "uid") || s->daemon) {
         sb_puts(err, "--daemon, --user, --uid and --ext-seccomp are Linux-only");
@@ -634,6 +637,7 @@ int xsvc_start(xsvc *s, sbuf *err)
 #endif
     if (s->pidfile && write_pidfile(s->pidfile, err) < 0)
         return EXIT_IO;
+    xsbx_file(s->pidfile); /* removed on exit */
 #ifdef PLAT_POSIX
     if (s->syslog) {
         if (slog_connect() < 0)
@@ -689,6 +693,17 @@ int xsvc_ready(xsvc *s, const fw_config *fw)
     }
 #else
     (void)fw;
+    if (s->sandbox) {
+        sbuf err;
+        sb_init(&err);
+        if (xsbx_apply(&err) < 0) {
+            LOGE("svc", "%s (--ext-sandbox 0 runs without it)", err.data);
+            sb_free(&err);
+            s->fail = EXIT_PRIV;
+            return s->fail;
+        }
+        sb_free(&err);
+    }
 #endif
     if (xsvc_notify("READY=1") < 0)
         LOGW("svc", "sd_notify: %s", strerror(errno));

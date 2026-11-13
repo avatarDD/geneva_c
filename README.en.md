@@ -165,6 +165,9 @@ everything by default). On OpenBSD `/etc/pf.conf` must contain the line
 On Android the static Linux builds work (root, a kernel with NFQUEUE);
 give `eval`/`evolve` addresses with `--ip`, since Android has no
 `/etc/resolv.conf` (`docs/EXT.md`, section X13c).
+On Windows `run --ext` runs in a sandbox once started, as winws2 does:
+Low integrity, no privileges, no child processes (`--ext-sandbox 0`
+turns it off; `docs/EXT.md`, section X13d).
 
 Service scripts are in `packaging/`:
 

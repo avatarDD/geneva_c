@@ -176,6 +176,9 @@ net.inet.ip.fw.default_to_accept=1; kldload ipfw ipdivert`, иначе ipfw
 На Android работают статические Linux-сборки (root, ядро с NFQUEUE);
 адреса для `eval`/`evolve` задают через `--ip`, потому что
 `/etc/resolv.conf` на Android нет (`docs/EXT.md`, раздел X13c).
+На Windows `run --ext` после старта работает в песочнице, как winws2:
+уровень Low, без привилегий и дочерних процессов (`--ext-sandbox 0` —
+без неё; `docs/EXT.md`, раздел X13d).
 
 Скрипты служб лежат в `packaging/`:
 

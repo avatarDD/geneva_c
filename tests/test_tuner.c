@@ -12,6 +12,9 @@
 #include "plat.h"
 #include "rng.h"
 #include "test.h"
+#if GENEVA_EXT
+#  include "ext/sec_win.h"
+#endif
 #include "util.h"
 
 #if GENEVA_EXT
@@ -492,7 +495,10 @@ TEST(tune_state)
     c.ct = ctrack_new(&cc);
     c.now = 1000000;
     sb_init(&e);
+    xsbx_reset();
     CHECK_INT(xtune_start(path, &e), 0);
+    CHECK_STR(xsbx_file_at(0), path); /* the Windows sandbox labels it */
+    xsbx_reset();
     c.t = mktune("rr:fails=1", 3);
     CHECK_INT(conn_rst(&c, 40101), 1);
     xtune_tick(c.now); /* written now */

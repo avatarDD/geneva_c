@@ -252,6 +252,7 @@ Extensions (with --ext):
       --user NAME                Linux: once running, become NAME, keeping CAP_NET_ADMIN and CAP_NET_RAW (a root helper removes the rules on exit)
       --uid UID[:GID,..]         the same with numbers
       --ext-seccomp[=0|1]        Linux: once running, forbid exec, kill, ptrace and file system changes (1; the root helper removes the rules on exit)
+      --ext-sandbox[=0|1]        Windows: once running, Low integrity, no privileges and no child processes, as winws2 (1; the files the run writes get the Low label)
       --log-target syslog        also log to syslog (/dev/log)
       --ext-workers N|auto       Linux: N worker threads, each with its own NFQUEUE (--queue .. --queue+N-1, the rules balance the flows by address); auto: the CPUs, at most 4 (default 1)
       --ext-state FILE           keep the tuner's keys and their arms in FILE across restarts
