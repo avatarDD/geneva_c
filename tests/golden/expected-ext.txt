@@ -61,7 +61,8 @@ Extensions (with --ext):
   (outbound forest here, inbound there): xwgobfs{secret=S;padmin;padmax}
   (WireGuard handshakes encrypted, AES-GCM), xippxor{ippxor=N;dataxor=BLOB}
   (the IP protocol number XOR N), xudp2icmp{server=0|1;ctype;stype;ccode;
-  scode;dataxor} (UDP as ICMP echo), xsynhide{magic=x2|urp|opt|tsecr;ghost;
+  scode;dataxor;cgnat;id_lifetime} (UDP as ICMP echo; cgnat survives a NAT
+  that changes the identifier), xsynhide{magic=x2|urp|opt|tsecr;ghost;
   synack;xorseq} (the SYN sent as a marked ACK), e.g.
   [UDP:dport:51820]-xwgobfs{secret=S}-| \/ [UDP:sport:51820]-xwgobfs{secret=S}-|
   See docs/EXT.md.

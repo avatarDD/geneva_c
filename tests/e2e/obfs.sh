@@ -209,6 +209,16 @@ if on udp2icmp; then
         nstop
     fi
     gstop CPID
+    # cgnat (zapret2 1.0.7): 2 bytes more, the identifier at the end;
+    # an echo request of the initiation is IP length 176, 178 with them
+    wire_on "-p icmp --icmp-type 8 -m length --length 178" "-p udp --dport 51820"
+    gstart CPID "$NC" "$WORK/c.log" -p 51820 --proto udp --filter-udp 51820 --filter-icmp 0 \
+        -s "[UDP:dport:51820]-xudp2icmp{cgnat}-| \\/ [IP:proto:1]-xudp2icmp{cgnat}-|"
+    gstart SPID "$NS" "$WORK/s.log" --server-side -p 51820 --proto udp --filter-udp 51820 --filter-icmp 8 \
+        -s "[UDP:sport:51820]-xudp2icmp{cgnat;server=1}-| \\/ [IP:proto:1]-xudp2icmp{cgnat;server=1}-|"
+    udp_check "geneva <-> geneva cgnat" "ICMP echo requests 2 bytes longer"
+    gstop SPID
+    gstop CPID
 fi
 
 if on synhide; then

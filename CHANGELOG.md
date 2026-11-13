@@ -261,6 +261,8 @@
   и payload XOR), `xudp2icmp` (UDP как ICMP echo), `xsynhide` (SYN как ACK
   с меткой). Совместимы сами с собой и с nfqws2 (e2e `tests/e2e/obfs.sh`
   в CI). Перевод строк nfqws2 (`blockcheck`) знает эти функции.
+  `xudp2icmp{cgnat;id_lifetime}` (из zapret2 1.0.7) переживает NAT
+  оператора, меняющий идентификатор ICMP.
 - X12c: проверки `blockcheck2.sh` вокруг стратегий в `geneva blockcheck`:
   DNS (системный резолвер против публичных DNS, уникальность адресов;
   сверх zapret2 — сравнение ответов UDP и TCP), DoH через curl при
