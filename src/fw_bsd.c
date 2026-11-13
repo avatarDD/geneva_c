@@ -61,20 +61,6 @@ static void bsd_ports(const portset *ps, int pf, sbuf *out)
         sb_puts(out, " }");
 }
 
-/* The interfaces to match: --iface, or its list under --ext; 0: any. */
-static int ifaces(const fw_config *c, const char **v)
-{
-    if (c->nifs) {
-        memcpy(v, c->ifs, (size_t)c->nifs * sizeof(*v));
-        return c->nifs;
-    }
-    if (c->iface) {
-        v[0] = c->iface;
-        return 1;
-    }
-    return 0;
-}
-
 /* ---- ipfw ---------------------------------------------------------------- */
 
 /* one rule: "PROTO from any [port] to any [port] DIR [IFACE]" */
@@ -106,7 +92,7 @@ static void ipfw_rule(const fw_config *c, sbuf *out, const char *rule, const cha
 void fw_ipfw_rules(const fw_config *c, const char *rule, sbuf *out)
 {
     const char *ifv[FW_MAX_IFS];
-    int nif = ifaces(c, ifv);
+    int nif = fw_ifaces(c, ifv);
     /* both families: no ip4/ip6 option */
     int fam = c->ipv4 && c->ipv6 ? 0 : c->ipv4 ? 4 : 6;
     char p[8];
@@ -162,7 +148,7 @@ static void pf_rule(const fw_config *c, sbuf *out, const char *proto, const char
 void fw_pf_rules(const fw_config *c, sbuf *out)
 {
     const char *ifv[FW_MAX_IFS];
-    int nif = ifaces(c, ifv);
+    int nif = fw_ifaces(c, ifv);
     const char *fam = c->ipv4 && c->ipv6 ? "" : c->ipv4 ? "inet" : "inet6";
     char p[8];
     for (int d = 0; d < 2; d++) {
@@ -389,6 +375,16 @@ static int pf_up(fw_config *c, sbuf *err)
         return -1;
     }
     snprintf(anchor, sizeof(anchor), "geneva/%u", c->queue);
+    {
+        char *info[] = {bin, "-s", "info", NULL};
+        sb_init(&out);
+        if (fw_run_argv(info, NULL, &out) == 0 && strstr(out.data ? out.data : "", "Status: Disabled")) {
+            sb_puts(err, "pf is disabled (pfctl -e enables it)");
+            sb_free(&out);
+            return -1;
+        }
+        sb_free(&out);
+    }
     /* the anchor's rules run only where the main ruleset calls them */
     sb_init(&out);
     rc = fw_run_argv(show, NULL, &out);

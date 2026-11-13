@@ -17,6 +17,9 @@ int fw_run_argv(char *const argv[], const char *input, sbuf *output);
 void fw_trim(sbuf *s);
 #endif
 
+/* the interfaces to match: --iface, or its list under --ext; 0: any */
+int fw_ifaces(const fw_config *c, const char **v);
+
 /* ipfw and pf (any platform: printing and tests) */
 int fw_bsd_check(const fw_config *c, fw_backend b, sbuf *err);
 void fw_ipfw_rules(const fw_config *c, const char *rule, sbuf *out);

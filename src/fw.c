@@ -67,7 +67,7 @@ int fw_first_any(const fw_config *c)
 }
 
 /* The interfaces to match: --iface, or its list under --ext. 0: any. */
-static int fw_ifaces(const fw_config *c, const char **v)
+int fw_ifaces(const fw_config *c, const char **v)
 {
     if (c->nifs) {
         memcpy(v, c->ifs, (size_t)c->nifs * sizeof(*v));
