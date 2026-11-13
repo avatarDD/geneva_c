@@ -15,7 +15,7 @@ Commands:
   evolve     search for strategies with the genetic algorithm
   fw         print, apply or remove the firewall rules of run
   library    list the built-in strategies of Geneva's library
-  run        apply a strategy to live traffic (NFQUEUE or WinDivert)
+  run        apply a strategy to live traffic (NFQUEUE, WinDivert or divert)
   version    print version and build features
 
 Run "geneva <command> --help" for command options.
@@ -37,7 +37,7 @@ Commands:
   evolve     search for strategies with the genetic algorithm
   fw         print, apply or remove the firewall rules of run
   library    list the built-in strategies of Geneva's library
-  run        apply a strategy to live traffic (NFQUEUE or WinDivert)
+  run        apply a strategy to live traffic (NFQUEUE, WinDivert or divert)
   version    print version and build features
 
 Run "geneva <command> --help" for command options.
@@ -61,7 +61,7 @@ Commands:
   evolve     search for strategies with the genetic algorithm
   fw         print, apply or remove the firewall rules of run
   library    list the built-in strategies of Geneva's library
-  run        apply a strategy to live traffic (NFQUEUE or WinDivert)
+  run        apply a strategy to live traffic (NFQUEUE, WinDivert or divert)
   version    print version and build features
 
 Run "geneva <command> --help" for command options.
@@ -343,9 +343,9 @@ Options:
   -p, --server-port PORTS        ports of the service: 443 or 80,443 or 8000-8100 (required)
       --server-side              run on the server: outbound packets come from PORTS
       --proto LIST               tcp, udp or tcp,udp (default tcp)
-  -q, --queue N                  NFQUEUE number (default 310)
+  -q, --queue N                  NFQUEUE number; the divert port on FreeBSD and OpenBSD (default 310)
       --mark MASK                fwmark bit of packets the engine sends itself (default 0x20000000)
-      --firewall TYPE            auto, nft, iptables, or none (rules set up by hand)
+      --firewall TYPE            auto, nft, iptables, ipfw, pf, or none (rules set up by hand)
   -i, --iface IF                 only traffic through this interface (the WAN on a router)
       --dir both|out|in          directions to intercept (default both)
   -4, --ipv4-only                handle IPv4 only
@@ -388,7 +388,9 @@ Options:
 $ $G run --help
 Usage: geneva run -s STRATEGY -p PORTS [options]
 Applies a strategy to live traffic: NFQUEUE on Linux (root), WinDivert on
-Windows (Administrator, WinDivert.dll and WinDivert64.sys next to geneva.exe).
+Windows (Administrator, WinDivert.dll and WinDivert64.sys next to geneva.exe),
+divert sockets on FreeBSD (root, ipfw and ipdivert loaded) and OpenBSD (root,
+pf.conf calls anchor "geneva/*"); -q is then the divert port.
 Signals: SIGHUP re-reads --strategy-file, SIGUSR1 emits stats,
 SIGINT/SIGTERM stop and remove the firewall rules.
 
@@ -398,9 +400,9 @@ Options:
   -p, --server-port PORTS        ports of the service: 443 or 80,443 or 8000-8100 (required)
       --server-side              run on the server: outbound packets come from PORTS
       --proto LIST               tcp, udp or tcp,udp (default tcp)
-  -q, --queue N                  NFQUEUE number (default 310)
+  -q, --queue N                  NFQUEUE number; the divert port on FreeBSD and OpenBSD (default 310)
       --mark MASK                fwmark bit of packets the engine sends itself (default 0x20000000)
-      --firewall TYPE            auto, nft, iptables, or none (rules set up by hand)
+      --firewall TYPE            auto, nft, iptables, ipfw, pf, or none (rules set up by hand)
   -i, --iface IF                 only traffic through this interface (the WAN on a router)
       --dir both|out|in          directions to intercept (default both)
   -4, --ipv4-only                handle IPv4 only
@@ -3019,6 +3021,44 @@ ip6tables -t mangle -X GENEVA_311_FWD 2>/dev/null
 $ $G fw print -p 443 --dir sideways
 geneva fw: --dir must be both, out or in
 [exit 2]
+### fw-print-ipfw
+$ $G fw print -p 443,8000-8100 --proto tcp,udp --firewall ipfw -i em0 -6 --first 6
+# ipfw: apply
+# R: the lowest rule number from 50 that has no rules (geneva picks it)
+ipfw -q add $R divert 310 tcp from any to any 443,8000-8100 out xmit em0 ip6 not diverted // geneva 310
+ipfw -q add $R divert 310 udp from any to any 443,8000-8100 out xmit em0 ip6 not diverted // geneva 310
+ipfw -q add $R divert 310 tcp from any 443,8000-8100 to any in recv em0 ip6 not diverted // geneva 310
+ipfw -q add $R divert 310 udp from any 443,8000-8100 to any in recv em0 ip6 not diverted // geneva 310
+# ipfw: remove
+# every rule number whose rules all have the comment "geneva 310"
+ipfw -q delete $R
+[exit 0]
+### fw-print-ipfw-server
+$ $G fw print -p 443 --server-side --firewall ipfw --dir in
+# ipfw: apply
+# R: the lowest rule number from 50 that has no rules (geneva picks it)
+ipfw -q add $R divert 310 tcp from any to any 443 in not diverted // geneva 310
+# ipfw: remove
+# every rule number whose rules all have the comment "geneva 310"
+ipfw -q delete $R
+[exit 0]
+### fw-print-pf
+$ $G fw print -p 80,443,1000-2000 --firewall pf -4 --queue 320
+# pf: apply
+pfctl -a geneva/320 -f - <<'EOF'
+pass out quick inet proto tcp from any to any port { 80 443 1000:2000 } divert-packet port 320
+pass in quick inet proto tcp from any port { 80 443 1000:2000 } to any divert-packet port 320
+EOF
+# pf: remove
+pfctl -a geneva/320 -F rules
+[exit 0]
+### fw-print-pf-forward
+$ $G fw print -p 80 --forward-to 10.0.0.2 --firewall pf
+# pf: apply
+# router mode (geneva censor, the forwarder) needs Linux; pf rules cannot express it
+# pf: remove
+# router mode (geneva censor, the forwarder) needs Linux; pf rules cannot express it
+[exit 0]
 ### fw-no-action
 $ $G fw -p 443
 geneva fw: need one action: print, up or down

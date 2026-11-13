@@ -17,7 +17,9 @@
 #include "ports.h"
 #include "util.h"
 
-typedef enum { FW_AUTO = 0, FW_IPTABLES, FW_NFT } fw_backend;
+/* ipfw (FreeBSD) and pf (OpenBSD) divert to the BSD divert socket: queue
+ * is then the divert port (docs/EXT.md, X13b) */
+typedef enum { FW_AUTO = 0, FW_IPTABLES, FW_NFT, FW_IPFW, FW_PF } fw_backend;
 
 #define FW_MAX_IFS 8 /* interfaces of --iface LIST and --ext-lan */
 

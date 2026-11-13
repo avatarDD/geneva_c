@@ -51,6 +51,10 @@ fw-print-server|ext|$G fw print -p 8000-8100 --server-side --no-notrack --no-byp
 fw-print-forward|ext|$G fw print -p 80 --forward-to 10.0.0.2
 fw-print-eval|ext|$G fw print --local-ports 30000 --workers 2 --probe dns
 fw-print-bad|ext|$G fw print -p 443 --dir sideways
+fw-print-ipfw|ext|$G fw print -p 443,8000-8100 --proto tcp,udp --firewall ipfw -i em0 -6 --first 6
+fw-print-ipfw-server|ext|$G fw print -p 443 --server-side --firewall ipfw --dir in
+fw-print-pf|ext|$G fw print -p 80,443,1000-2000 --firewall pf -4 --queue 320
+fw-print-pf-forward|ext|$G fw print -p 80 --forward-to 10.0.0.2 --firewall pf
 fw-no-action|ext|$G fw -p 443
 run-no-strategy|ext|$G run -p 443
 run-bad-option|ext|$G run --nosuch
@@ -111,6 +115,8 @@ apply-ext-profile-file|extonly|$G apply --ext --ext-profile $D/profiles.ini -i $
 apply-ext-profile-bad|extonly|$G apply --ext -s '\/' --new --filter-udp 70000 -i $D/l7.pcap; $G apply --ext --new --import web -i $D/l7.pcap; $G apply --ext --new=a -s '\/' -s '\/' -i $D/l7.pcap
 fw-ext-profiles|extonly|$G fw print --ext --firewall nft --filter-tcp 80,443 --new --filter-udp 443 --new --filter-icmp 3 --filter-ipp 47
 fw-ext-profiles-every-port|extonly|$G fw print --ext --filter-tcp 80 --new=rest
+fw-ext-profiles-ipfw|extonly|$G fw print --ext --firewall ipfw --filter-tcp 80,443 --new --filter-udp 443 --new --filter-icmp 3 --filter-ipp 47
+fw-ext-profiles-pf|extonly|$G fw print --ext --firewall pf --filter-tcp 80,443 --new --filter-icmp 3 --filter-ipp 47
 apply-ext-lists|extonly|$G apply --ext --hostlist-domains example.org --filter-tcp 80 -s '[TCP:flags:PA]-tamper{TCP:urgptr:replace:9}-| \/' --new=ips --ipset-ip 93.184.215.0/24,2a00::/16 --ipset-exclude-ip 93.184.215.99 -s '[TCP:flags:PA]-tamper{TCP:window:replace:7}-| \/' --new=gz --hostlist ../data/lists/hosts.txt.gz -s '\/' -i $D/l7.pcap -p 80,443 -v -o $T/out.pcap 2>/dev/null && cksum < $T/out.pcap
 apply-ext-lists-bad|extonly|$G apply --ext --hostlist no-such-list -s '\/' -i $D/l7.pcap; $G apply --ext --ipset-ip 1.2.3.4/33 -s '\/' -i $D/l7.pcap; $G apply --ext --ipset ok.txt --ipset ./ok.txt -s '\/' -i $D/l7.pcap 2>&1 | grep -v ' lists: '
 apply-ext-autolist|extonly|$G apply --ext --filter-tcp 80,443 --hostlist-auto $T/auto.txt --hostlist-auto-debug $T/debug.log -s '[TCP:flags:PA]-tamper{TCP:urgptr:replace:9}-| \/' --new -s '\/' -i $D/l7.pcap -p 80,443 -v -o $T/out.pcap 2>/dev/null && cksum < $T/out.pcap && cat $T/auto.txt && echo debug: $(wc -c < $T/debug.log) && echo example.org > $T/a2.txt && $G apply --ext --filter-tcp 80,443 --hostlist-auto $T/a2.txt -s '[TCP:flags:PA]-tamper{TCP:urgptr:replace:9}-| \/' --new -s '\/' -i $D/l7.pcap -p 80,443 -o $T/out2.pcap 2>/dev/null && cksum < $T/out2.pcap

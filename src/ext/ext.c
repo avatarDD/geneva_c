@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef __linux__
+#ifndef _WIN32
 #  include <net/if.h>
 #endif
 
@@ -690,7 +690,7 @@ static const char *ifname(xworker *x, uint32_t idx)
     for (unsigned i = 0; i < 8; i++)
         if (x->ifn[i].idx == idx)
             return x->ifn[i].name;
-#ifdef __linux__
+#ifndef _WIN32
     {
         ifname_slot *s = &x->ifn[x->ifn_next++ % 8];
         char b[IF_NAMESIZE + 1];

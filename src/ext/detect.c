@@ -12,6 +12,7 @@
 #include "ipcache.h"
 #include "l7.h"
 #include "log.h"
+#include "plat.h" /* AF_INET, AF_INET6 */
 #include "util.h"
 
 #ifdef _WIN32

@@ -36,6 +36,9 @@ void engine_opts_default(engine_opts *o)
 #elif defined(_WIN32)
 #  define BACKEND (&windivert_backend)
 #  define HAVE_BACKEND 1
+#elif defined(__FreeBSD__) || defined(__OpenBSD__)
+#  define BACKEND (&divert_backend)
+#  define HAVE_BACKEND 1
 #else
 #  define BACKEND NULL
 #endif

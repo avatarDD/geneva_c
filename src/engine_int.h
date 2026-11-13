@@ -1,7 +1,8 @@
 /*
  * Engine internals shared by the portable core (engine.c) and the packet
- * backends: NFQUEUE on Linux (eng_nfq.c) and WinDivert on Windows
- * (eng_windivert.c).
+ * backends: NFQUEUE on Linux (eng_nfq.c), WinDivert on Windows
+ * (eng_windivert.c) and divert sockets on FreeBSD and OpenBSD
+ * (eng_divert.c).
  *
  * A backend captures packets and hands each one to engine_packet() together
  * with an opaque per-packet context (the NFQUEUE packet id, the WinDivert
@@ -263,5 +264,6 @@ void engine_packet(eng_worker *w, const uint8_t *data, size_t len, int dir, cons
 /* Packet backends. */
 extern const backend nfq_backend;       /* Linux */
 extern const backend windivert_backend; /* Windows */
+extern const backend divert_backend;    /* FreeBSD, OpenBSD (divert sockets) */
 
 #endif

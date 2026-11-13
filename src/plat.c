@@ -317,6 +317,8 @@ const char *plat_os_name(void)
     return "linux";
 #elif defined(__FreeBSD__)
     return "freebsd";
+#elif defined(__OpenBSD__)
+    return "openbsd";
 #elif defined(__APPLE__)
     return "darwin";
 #else
