@@ -285,12 +285,17 @@ static void on_run_ready(void *ctx, int rc)
  * second (decision 11.5: warn only) */
 static void warn_mark(uint32_t mark)
 {
+#  if defined(__FreeBSD__) || defined(__OpenBSD__)
+    /* divert sockets: no marks to share */
+    (void)mark;
+#  else
     if (mark & 0x20000000u)
         LOGW("run", "--mark 0x%x shares bit 0x20000000 with zapret2's DESYNC_MARK_POSTNAT: running nfqws2 on "
                     "this host too, give one of them another mark", (unsigned)mark);
     if (mark & 0x40000000u)
         LOGW("run", "--mark 0x%x shares bit 0x40000000 with zapret2's DESYNC_MARK: running nfqws2 on this host "
                     "too, give one of them another mark", (unsigned)mark);
+#  endif
 }
 #endif
 

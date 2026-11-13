@@ -17,6 +17,7 @@
 #  include "ext/treat.h"
 #  include "ext/tuner.h"
 #  include "ext/xact.h"
+#  include "plat.h"
 
 static sbuf g_ev;
 #  define EV (g_ev.data ? g_ev.data : "")
@@ -296,7 +297,7 @@ TEST(treat_provisional)
     sb_free(&e);
 }
 
-#  ifndef _WIN32
+#  ifdef PLAT_LINUX /* --ext-ga is Linux-only */
 #    include <sys/stat.h>
 #    include <unistd.h>
 
@@ -541,7 +542,7 @@ void suite_treat(void)
     RUN(treat_propose);
     RUN(treat_allow);
     RUN(treat_provisional);
-#  ifndef _WIN32
+#  ifdef PLAT_LINUX
     RUN(treat_ga);
 #  endif
     RUN(treat_full);

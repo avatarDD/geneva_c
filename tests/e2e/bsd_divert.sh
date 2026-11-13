@@ -59,7 +59,9 @@ ipfw_ours() { ipfw list 2>/dev/null | grep -c "// geneva 310$"; }
 start_case() {
     CASE=$1 STRAT=$2 EXTRA=${3:-}
     rm -f "$WORK/cap.pcap" "$WORK/ev.jsonl" "$WORK/eng.log" "$WORK/tcpdump.err"
-    jexec "$JAIL" tcpdump -i "$EPB" -U -s 0 -w "$WORK/cap.pcap" \
+    # immediate mode: without it the packets wait in BPF's buffer for up to a
+    # second and the ones still there when tcpdump is stopped are lost
+    jexec "$JAIL" tcpdump -i "$EPB" --immediate-mode -U -s 0 -w "$WORK/cap.pcap" \
         "tcp port $PORT or (ip[6:2] & 0x1fff != 0) or (ip6 and ip6[6] = 44)" >/dev/null 2>"$WORK/tcpdump.err" &
     TCPD=$!
     i=0
@@ -170,9 +172,9 @@ if "$GENEVA" version --json | grep -q '"ext_xact"'; then
     start_case "--ext: META:ifin of the inbound packets" '\/ [META:ifin:'"$EPA"']-tamper{TCP:window:replace:9}-| [META:ifin:nosuch]-drop-|' --ext
     exchange && ok "exchange works (no inbound packet dropped)" || bad "exchange failed"
     stop_case
-    check "the interface's tree fired" 'grep "\"ev\":\"stats\"" "$WORK/ev.jsonl" | tail -1 | grep -q "\"tree\":\"\[META:ifin:'"$EPA"'\][^}]*\"fired\":[1-9]"'
+    check "the interface's tree fired" 'grep "\"ev\":\"stats\"" "$WORK/ev.jsonl" | tail -1 | grep -q "\"tree\":\"\[META:ifin:'"$EPA"'\][^\"]*\",\"fired\":[1-9]"'
 
-    start_case "--ext: xsplit + xfake" '[TCP:flags:PA]-xfake{blob=0x41;badsum}(xsplit{pos=5},)-| \/' --ext
+    start_case "--ext: xsplit + xfake" '[TCP:flags:PA]-xfake{blob=0x41;badsum;payload=all}(xsplit{pos=5;payload=all},)-| \/' --ext
     exchange && ok "exchange works" || bad "exchange failed"
     stop_case
     check "a 1-byte fake with a bad checksum" '[ $(grep -A1 "incorrect" "$WORK/cap.txt" | grep -Ec "length 1(:|$)") -ge 1 ] || [ $(grep "incorrect" "$WORK/cap.txt" | grep -Ec "length 1(:|$)") -ge 1 ]'

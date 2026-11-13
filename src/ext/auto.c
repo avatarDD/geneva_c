@@ -60,10 +60,11 @@ static int ga_parse(const args_t *a, const fw_config *c, sbuf *err)
         sb_puts(err, "--ext-ga is for --ext-auto propose or apply");
         return -1;
     }
-    if (FW_WINDOWS) {
-        sb_puts(err, "--ext-ga is Linux-only");
-        return -1;
-    }
+#ifndef PLAT_LINUX
+    (void)sc, (void)v, (void)end, (void)pop, (void)gen, (void)gc, (void)c;
+    sb_puts(err, "--ext-ga is Linux-only");
+    return -1;
+#else
     sc = arg_str(a, "ext-seccomp", NULL);
     if (!sc || strcmp(sc, "0")) {
         sb_puts(err, "--ext-ga starts geneva evolve: it needs --ext-seccomp 0");
@@ -97,6 +98,7 @@ static int ga_parse(const args_t *a, const fw_config *c, sbuf *err)
     if ((v = arg_str(a, "log-file", NULL)) != NULL)
         snprintf(gc.log, sizeof(gc.log), "%s.ga", v);
     return xga_set(&gc, err);
+#endif
 }
 
 int xauto_parse(const args_t *a, fw_config *c, sbuf *err)

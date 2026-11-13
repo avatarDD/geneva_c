@@ -1239,7 +1239,8 @@ TEST(detect_options)
     CHECK_STR(e.data, "--ext-ga is for --ext-auto propose or apply");
     CHECK_INT(auto_parse(&c, &e, "--ext-ga", NULL, NULL, NULL), -1);
     CHECK_STR(e.data, "--ext-ga is for --ext-auto");
-    if (!FW_WINDOWS) {
+#  ifdef PLAT_LINUX
+    {
         CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-ga", NULL), -1);
         CHECK_STR(e.data, "--ext-ga starts geneva evolve: it needs --ext-seccomp 0");
         CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga", "--ext-seccomp=0", NULL, NULL), 0);
@@ -1250,10 +1251,11 @@ TEST(detect_options)
         CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga=1", "--ext-seccomp=0", NULL, NULL), -1);
         CHECK_INT(auto_parse6(&c, &e, "--ext-auto", "apply", "--ext-ga", "--ext-seccomp=0", "--user", "nobody"), -1);
         CHECK_STR(e.data, "--ext-ga: the search needs root, not with --user or --uid");
-    } else {
-        CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-ga", NULL), -1);
-        CHECK_STR(e.data, "--ext-ga is Linux-only");
     }
+#  else
+    CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-ga", NULL), -1);
+    CHECK_STR(e.data, "--ext-ga is Linux-only");
+#  endif
     CHECK_INT(auto_parse(&c, &e, "--ext-auto", "observe", "--ext-treat-arms", "1"), -1);
     CHECK_STR(e.data, "--ext-treat-arms is for --ext-auto propose or apply");
     CHECK_INT(auto_parse(&c, &e, "--ext-auto", "apply", "--ext-treat-arms", "1,9"), -1);
