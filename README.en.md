@@ -162,6 +162,9 @@ to `geneva.exe`. FreeBSD needs the `ipfw` and `ipdivert` modules (`kenv
 net.inet.ip.fw.default_to_accept=1; kldload ipfw ipdivert`, or ipfw blocks
 everything by default). On OpenBSD `/etc/pf.conf` must contain the line
 `anchor "geneva/*"`. Details: `docs/EXT.md`, section X13b.
+On Android the static Linux builds work (root, a kernel with NFQUEUE);
+give `eval`/`evolve` addresses with `--ip`, since Android has no
+`/etc/resolv.conf` (`docs/EXT.md`, section X13c).
 
 Service scripts are in `packaging/`:
 

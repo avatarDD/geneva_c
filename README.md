@@ -173,6 +173,9 @@ make CC="zig cc -target x86_64-freebsd"    # FreeBSD (zig 0.15+), или make н
 net.inet.ip.fw.default_to_accept=1; kldload ipfw ipdivert`, иначе ipfw
 по умолчанию закроет всё). На OpenBSD в `/etc/pf.conf` должна быть строка
 `anchor "geneva/*"`. Подробности — `docs/EXT.md`, раздел X13b.
+На Android работают статические Linux-сборки (root, ядро с NFQUEUE);
+адреса для `eval`/`evolve` задают через `--ip`, потому что
+`/etc/resolv.conf` на Android нет (`docs/EXT.md`, раздел X13c).
 
 Скрипты служб лежат в `packaging/`:
 

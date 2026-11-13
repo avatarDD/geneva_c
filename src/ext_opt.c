@@ -13,10 +13,11 @@ static int g_ext;
 /* the options of EXT_PROFILE_OPTS without the "ext-" prefix */
 static const char *const ext_only[] = {"new",        "name",       "skip",        "template",   "import",
                                        "filter-l3",  "filter-tcp", "filter-udp",  "filter-icmp", "filter-ipp",
-                                       "filter-l7",  "filter-mark", "hostlist",   "hostlist-domains",
+                                       "filter-l7",  "filter-mark", "filter-ssid", "filter-ssid-neg", "hostlist",   "hostlist-domains",
                                        "hostlist-exclude", "hostlist-exclude-domains", "ipset", "ipset-ip",
                                        "ipset-exclude", "ipset-exclude-ip", "comment", "dry-run", "daemon",
-                                       "pidfile", "user", "uid", "log-target"};
+                                       "pidfile", "user", "uid", "log-target", "ssid-filter", "ssid-filter-neg",
+                                       "nlm-filter", "nlm-filter-neg", "nlm-list"};
 
 /* and the autolist's: every "hostlist-auto*"; winws2's "wf-*"; "fw-hook-*" */
 

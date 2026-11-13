@@ -256,6 +256,15 @@
   перенаправление на чужой домен — неудача. Фича `ext_blockcheck`.
   `tests/e2e/blockcheck_grid.sh` сверяет сетку со скриптами релиза
   zapret2 строка в строку на всех уровнях, IPv4 и IPv6.
+- X13c: фильтр профиля `--filter-ssid NAME,...` и `--filter-ssid-neg`
+  (Linux: SSID интерфейса пакета по nl80211, без libmnl); ключи winws2
+  `--ssid-filter`, `--nlm-filter`, их `-neg` и `--nlm-list[=all]`
+  (Windows: WLAN API и Network List Manager через `LoadLibrary`, без сети
+  пакеты проходят нетронутыми). Статические Linux-сборки на Android:
+  `"os":"android"` в `version --json`, временные файлы в `$TMPDIR` или
+  `/data/local/tmp`, подсказка про `--ip` без `/etc/resolv.conf`. e2e
+  `tests/e2e/wlan.sh` (mac80211_hwsim, hostapd), `tests/e2e/android_env.sh`,
+  раздел Windows smoke.
 - X13b: исполнитель на FreeBSD и OpenBSD — divert-сокеты (`eng_divert.c`),
   правила ipfw (FreeBSD) и якорь pf `geneva/ПОРТ` (OpenBSD) ставятся сами и
   снимаются при выходе, `--firewall ipfw|pf`, `geneva fw print` на любой ОС;

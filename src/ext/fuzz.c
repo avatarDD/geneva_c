@@ -975,10 +975,10 @@ static void t_profile(const uint8_t *d, size_t n)
         xcapture c;
         uint8_t ip4[4] = {93, 184, 216, 34}, ip6[16] = {0x20, 0x01, 0x0d, 0xb8};
         xmatch m[] = {
-            {4, 6, 443, 0, 0, L7_TLS, 0, ip4, "www.example.com", 0},
-            {6, 17, 443, 0, 0, L7_QUIC, 0x20000000, ip6, NULL, 0},
-            {4, 1, 0, 11, 0, L7_UNKNOWN, 0, ip4, NULL, 0},
-            {4, 47, 0, 0, 0, L7_UNKNOWN, 0, ip4, "93.184.216.34", 1},
+            {4, 6, 443, 0, 0, L7_TLS, 0, ip4, "www.example.com", 0, "home-wifi"},
+            {6, 17, 443, 0, 0, L7_QUIC, 0x20000000, ip6, NULL, 0, NULL},
+            {4, 1, 0, 11, 0, L7_UNKNOWN, 0, ip4, NULL, 0, NULL},
+            {4, 47, 0, 0, 0, L7_UNKNOWN, 0, ip4, "93.184.216.34", 1, NULL},
         };
         sb_reset(&err);
         (void)xprof_capture(&ps, 1, &c, &err);
@@ -1005,7 +1005,8 @@ static void s_profile(xfuzz_add_fn add, void *ud)
     add_str(add, ud, "[profile]\nfilter-udp = 443,50000-50100\nfilter-l7 = quic\nfilter-l3 = ipv4,ipv6\n"
                      "ipset-ip = 10.0.0.0/8, 2001:db8::/32\nstrategy = [UDP:dport:443]-xfake{blob=fake_default_quic}-| \\/\n"
                      "[profile icmp]\nfilter-icmp = 3:4,11\nfilter-ipp = 47,50\nfilter-mark = 0x10/0xf0 # a comment\n"
-                     "skip = 0\n[profile s]\nskip\nhostlist-exclude-domains = bad.example\n");
+                     "skip = 0\n[profile s]\nskip\nhostlist-exclude-domains = bad.example\n"
+                     "[profile w]\nfilter-ssid = home-wifi,cafe\nfilter-ssid-neg = 1\nfilter-tcp = 443\n");
 }
 
 /* ---- spec: option values (markers, ranges, ports, filters, @FILE words) ------- */

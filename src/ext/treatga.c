@@ -35,7 +35,7 @@ static struct {
     int fd;
     plat_thread_t th;
 #endif
-    char lib[64];     /* the seed file */
+    char lib[256];    /* the seed file */
     char out[OUT_MAX];
     size_t outlen;
     int status;
@@ -103,7 +103,11 @@ static int write_seed(sbuf *err)
     memset(&f, 0, sizeof(f));
     f.side = 1;
     f.with_lab = 1;
-    snprintf(g.lib, sizeof(g.lib), "/tmp/geneva-ga-XXXXXX");
+    if ((size_t)snprintf(g.lib, sizeof(g.lib), "%s/geneva-ga-XXXXXX", plat_tmpdir()) >= sizeof(g.lib)) {
+        sb_puts(err, "the seed file: $TMPDIR is too long");
+        g.lib[0] = 0;
+        return -1;
+    }
     if ((fd = mkstemp(g.lib)) < 0 || !(fp = fdopen(fd, "w"))) {
         sb_printf(err, "the seed file: %s", strerror(errno));
         if (fd >= 0)

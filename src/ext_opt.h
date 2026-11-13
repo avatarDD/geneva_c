@@ -96,6 +96,15 @@
               "off by default)")},                                                                             \
     {"fw-hook-pre", 0, 1, "FILE", EXT_HELP("Linux: run FILE up|down BACKEND QUEUE before the rules go up or down")}, \
     {"fw-hook-post", 0, 1, "FILE", EXT_HELP("Linux: the same after them")},                                    \
+    {"ssid-filter", 0, 1, "SSID,..",                                                                         \
+     EXT_HELP("Windows: the strategies run only while a Wi-Fi interface is connected to one of these networks " \
+              "(otherwise every packet passes untouched)")},                                                    \
+    {"ssid-filter-neg", 0, 2, "0|1", EXT_HELP("... while none is (inverts --ssid-filter)")},                       \
+    {"nlm-filter", 0, 1, "NAME|GUID,..",                                                                     \
+     EXT_HELP("Windows: ... while one of these Network List Manager networks is connected (--nlm-list)")},     \
+    {"nlm-filter-neg", 0, 2, "0|1", EXT_HELP("... while none is (inverts --nlm-filter)")},                         \
+    {"nlm-list", 0, 2, "all", EXT_HELP("Windows: print the connected Network List Manager networks (all: every " \
+                                       "known one) and exit")},                                                 \
     {"wf-tcp-out", 0, 1, "[~]P[-P],..", EXT_HELP("WinDivert filter of winws2 (replaces the one from -p): TCP to " \
                                                  "these ports")},                                             \
     {"wf-tcp-in", 0, 1, "[~]P[-P],..", EXT_HELP("... TCP from these ports (incoming connections)")},          \
@@ -150,6 +159,9 @@
     {"filter-ipp", 0, 1, "PROTO,..|*", EXT_HELP("the profile takes these other IP protocols")},             \
     {"filter-l7", 0, 1, "LIST", EXT_HELP("the profile takes flows of these L7 protocols (tls,quic,http,...)")}, \
     {"filter-mark", 0, 1, "MARK[/MASK]", EXT_HELP("the profile takes packets with this fwmark")},           \
+    {"filter-ssid", 0, 1, "NAME,..",                                                                         \
+     EXT_HELP("Linux: the profile takes packets of an interface connected to one of these Wi-Fi networks")}, \
+    {"filter-ssid-neg", 0, 2, "0|1", EXT_HELP("... of an interface that is not (inverts --filter-ssid)")},     \
     {"hostlist", 0, 1, "FILE", EXT_HELP("the profile takes hosts of FILE and their subdomains (^NAME: no subdomains, "    \
                                         "!NAME: never; gzip ok; re-read on change); repeatable")},      \
     {"hostlist-domains", 0, 1, "NAME,..", EXT_HELP("the same with the names given here")},                 \

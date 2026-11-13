@@ -180,6 +180,46 @@ TEST(pr_match)
         xprof_free(&ps);
     }
     {
+        /* --filter-ssid (zapret2's !strlist_search ^ neg), added up; --import copies it */
+        const char *v[] = {"--filter-ssid", "home,cafe", "--filter-ssid", "work", "-s", "\\/",
+                           "--new", "--filter-ssid", "home", "--filter-ssid-neg",
+                           "--new=t", "--template", "--filter-ssid", "lab", "--filter-ssid-neg=0",
+                           "--new", "--import", "t", "--new", "--filter-ssid-neg", NULL};
+        CHECK_STR(build(v, &ps), "OK");
+        CHECK_INT((int)ps.n, 4);
+        CHECK_INT((int)ps.v[0]->nssid, 3);
+        CHECK_STR(ps.v[0]->ssid[2], "work");
+        CHECK_INT(xprof_wants_ssid(&ps), 1);
+        m = mt(4, 6, 443, L7_UNKNOWN, 0);
+        m.ssid = "cafe";
+        CHECK_INT(xprof_find(&ps, &m, 0), 0);
+        m.ssid = "home";
+        CHECK_INT(xprof_find(&ps, &m, 0), 0);
+        m.ssid = "elsewhere";
+        CHECK_INT(xprof_find(&ps, &m, 0), 1); /* not home */
+        m.ssid = NULL;                          /* not Wi-Fi: not home either */
+        CHECK_INT(xprof_find(&ps, &m, 0), 1);
+        m.ssid = "lab";
+        CHECK_INT(xprof_find(&ps, &m, 0), 1);
+        ps.v[1]->ssid_neg = 0;
+        CHECK_INT(xprof_find(&ps, &m, 0), 2); /* the template's list and its neg=0 */
+        CHECK_INT((int)ps.v[2]->nssid, 1);
+        CHECK(ps.v[2]->ssid_neg_set && !ps.v[2]->ssid_neg);
+        m.ssid = "x";
+        CHECK_INT(xprof_find(&ps, &m, 0), 3); /* neg without a list: no filter */
+        xprof_free(&ps);
+    }
+    {
+        const char *v[] = {"--filter-ssid", "a,,b", NULL};
+        CHECK_STR(build(v, &ps), "profile 1: bad --filter-ssid a,,b (names of 1 to 32 bytes, separated by commas)");
+        xprof_free(&ps);
+    }
+    {
+        const char *v[] = {"--filter-ssid-neg=2", NULL};
+        CHECK_STR(build(v, &ps), "profile 1: bad --filter-ssid-neg 2 (0 or 1)");
+        xprof_free(&ps);
+    }
+    {
         /* "known" and "unknown" of --filter-l7; "all" is every protocol */
         const char *v[] = {"--filter-l7", "known", "-s", "\\/", "--new", "--filter-l7", "unknown",
                            "--new", "--filter-l7", "tls", "--filter-l7", "all", NULL};

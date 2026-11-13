@@ -14,6 +14,7 @@
 #  include "ext/ext.h"
 #  include "ext/fwx.h"
 #  include "ext/svc.h"
+#  include "ext/winnet.h"
 #endif
 #include "engine.h"
 #include "evaluator.h"
@@ -361,6 +362,27 @@ int cmd_run(int argc, char **argv)
         goto done;
 #if GENEVA_EXT
     o.ext = ext_engine_hooks();
+    if (arg_has(&a, "nlm-list")) {
+        /* winws2's --nlm-list[=all]: the networks for --nlm-filter */
+        const char *nl = arg_str(&a, "nlm-list", "");
+        sbuf out, e2;
+        if (*nl && strcmp(nl, "all")) {
+            fprintf(stderr, "geneva run: bad --nlm-list %s (all or nothing)\n", nl);
+            goto done;
+        }
+        sb_init(&out);
+        sb_init(&e2);
+        if (xwinnet_nlm_list(*nl != 0, &out, &e2) < 0) {
+            fprintf(stderr, "geneva run: %s\n", e2.data);
+            rc = EXIT_FAIL;
+        } else {
+            fputs(out.data ? out.data : "", stdout);
+            rc = EXIT_OK;
+        }
+        sb_free(&out);
+        sb_free(&e2);
+        goto done;
+    }
 #endif
     if (a.npos) {
         fprintf(stderr, "geneva run: unexpected argument \"%s\"\n", a.pos[0]);

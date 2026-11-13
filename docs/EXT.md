@@ -53,6 +53,7 @@ geneva run --ext -s '...'
 | X12b | `geneva blockcheck`: `blockcheck2.sh` zapret2 со всей сеткой `blockcheck2.d/standard`, строки nfqws2 переведены в стратегии geneva; уровни, повторы, отчёт SUMMARY/COMMON/COVERAGE | ниже |
 | X13a | двусторонняя обфускация `zapret-obfs.lua`: `xwgobfs`, `xippxor`, `xudp2icmp`, `xsynhide` | ниже |
 | X13b | исполнитель на FreeBSD и OpenBSD: divert-сокеты, правила ipfw и якорь pf | ниже |
+| X13c | фильтр профиля `--filter-ssid` (Linux, nl80211), `--ssid-filter`, `--nlm-filter`, `--nlm-list` (Windows), статическая сборка на Android | ниже |
 | X12c | `geneva blockcheck`: проверка DNS (системный резолвер против публичных DNS, UDP против TCP), DoH через curl при подмене, тесты блокировки по порту и по IP | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
@@ -910,7 +911,8 @@ SIGHUP помощник не слушает (Ctrl-C в терминале ухо
   каталог не меняется, относительные пути остаются верными.
 - seccomp убивает весь процесс (`KILL_PROCESS`), а не поток; отключается
   `--ext-seccomp=0`.
-- Нет Android logcat (решение 11.4) и `--debug=@file` (есть `--log-file`).
+- Нет Android logcat (решение 11.4) и `--debug=@file` (есть `--log-file`);
+  на Android лог идёт в stderr и `--log-file` (раздел X13c).
 
 Фича `ext_service` в `geneva version --json`.
 
@@ -2202,6 +2204,105 @@ jail то же, что `tests/e2e/run.sh` на Linux: дублирование �
 `xsplit`), снятие правил при выходе и после SIGKILL, `geneva fw up/down`.
 OpenBSD проверяется только сборкой и тестами правил: официального образа
 для запуска в CI у OpenBSD нет.
+
+## Сети Wi-Fi и Network List Manager, Android (X13c)
+
+### `--filter-ssid`: профиль по сети Wi-Fi (Linux)
+
+Фильтр профиля, как у nfqws2: профиль берёт пакет, если интерфейс пакета
+подключён к одной из названных сетей Wi-Fi.
+
+```sh
+# дома одна стратегия, в остальных сетях другая
+geneva run --ext -p 443 --filter-ssid home,home-5G -s '[TCP:flags:PA]-fragment{tcp:8:True}-| \/' \
+    --new -s '[TCP:flags:S]-duplicate-| \/'
+# всё, кроме гостевой сети
+geneva run --ext -p 443 --filter-ssid guest --filter-ssid-neg -s '...'
+```
+
+- `--filter-ssid NAME,...` — имена через запятую, повторы ключа
+  добавляются к списку (как `parse_strlist` у zapret2); имя — от 1 до
+  32 байт, сравнение точное.
+- `--filter-ssid-neg[=0|1]` — инверсия: профиль берёт пакеты интерфейсов,
+  которые не подключены ни к одной из сетей списка (в том числе не Wi-Fi).
+  Без списка инверсия ничего не меняет, как у zapret2.
+- `--import` копирует список и инверсию шаблона; в файле профилей ключи
+  те же (`filter-ssid = home`).
+- Интерфейс пакета — как у nfqws2: исходящий для пакета к серверу,
+  входящий для ответа; для пакета без потока, если на этом интерфейсе
+  сети нет, смотрится и второй.
+
+SSID geneva читает сама по nl80211 (generic netlink, без libmnl):
+`NL80211_CMD_GET_INTERFACE` перечисляет интерфейсы, а SSID каждого берётся
+из BSS в состоянии associated, authenticated или IBSS joined
+(`NL80211_CMD_GET_SCAN`), потому что с Linux 5.19 `GET_INTERFACE` его не
+отдаёт. Таблица перечитывается не чаще раза в секунду, на очередном
+пакете; смена сети пишется в лог (`wlan: wlan0: SSID "home"`). Если в ядре
+нет nl80211, `run` с `--filter-ssid` завершается с ошибкой 2 (как nfqws2),
+`--dry-run` таблицу не читает. На других ОС ключ — ошибка 2.
+
+Отличие от zapret2: профиль выбирается на первом пакете потока и ещё раз,
+когда стали известны L7 и имя хоста; поток, начатый в одной сети, после
+смены сети остаётся со своим профилем до конца.
+
+### `--ssid-filter`, `--nlm-filter`, `--nlm-list` (Windows)
+
+Ключи winws2: стратегии работают, только пока компьютер подключён к одной
+из сетей Wi-Fi (`--ssid-filter`) или к одной из сетей Network List Manager
+(`--nlm-filter`: имя или GUID из `--nlm-list`). `-neg` инвертирует фильтр,
+при двух фильтрах должны выполняться оба.
+
+```bat
+geneva run --ext --nlm-list            :: подключённые сети: Name, NetID, Adapter
+geneva run --ext --nlm-list=all        :: все известные
+geneva run --ext -p 443 --nlm-filter "Home network" -s "..."
+geneva run --ext -p 443 --ssid-filter home,office --ssid-filter-neg -s "..."
+```
+
+- Сети проверяет отдельный поток раз в секунду; при смене пишется
+  `winnet: the network is present` / `is not present`.
+- `wlanapi.dll`, `ole32.dll`, `oleaut32.dll` загружаются из System32
+  (`LoadLibrary`), только когда фильтр их требует. На Windows Server без
+  службы беспроводной сети нет `wlanapi.dll`: `--ssid-filter` тогда —
+  ошибка 2 с объяснением.
+- Отличие от winws2: тот закрывает WinDivert, пока сети нет, geneva
+  оставляет его открытым и пропускает каждый пакет нетронутым (как
+  `ctl pause`), поэтому захват и счётчики `pkts_*` продолжаются, а
+  `triggered` — нет.
+- На Linux и BSD эти ключи — ошибка 2 (на Linux есть `--filter-ssid`).
+
+### Android
+
+Отдельной сборки под Android нет: статические Linux-сборки релиза
+(`linux-aarch64`, `linux-armv7`, `linux-x86_64`, `linux-x86`) работают на
+Android как есть, нужны root и ядро с NFQUEUE. geneva узнаёт Android по
+`/system/build.prop` или `$ANDROID_ROOT`:
+
+- `version --json` пишет `"os":"android"`;
+- временные файлы (`--ext-ga`) идут в `$TMPDIR`, иначе в
+  `/data/local/tmp` (на Android нет `/tmp`);
+- статическая сборка читает DNS из `/etc/resolv.conf`, которого на Android
+  нет: `eval` и `evolve` по имени подсказывают дать адрес через `--ip`;
+- лог — stderr и `--log-file` (logcat отложен, решение 11.4); `--user`
+  по имени не работает (нет `/etc/passwd`), `--uid` работает;
+  `--log-target syslog` на Android не к чему подключиться (`/dev/log`
+  нет). Сокет управления задают явно (`-c unix:/data/local/tmp/geneva.sock`
+  или `-c tcp:127.0.0.1:PORT`): у `geneva ctl` по умолчанию
+  `/var/run/geneva.sock`, такого каталога на Android нет.
+
+**Проверка.** Юнит-тесты: сообщения nl80211 (сборка запроса, семейство,
+интерфейсы, BSS со SSID, обрезанные элементы, ошибки), сравнение
+`--filter-ssid` и инверсии в профилях и шаблонах, GUID и списки сетей
+Windows, `TMPDIR` и имя ОС. e2e `tests/e2e/wlan.sh` в CI: два радио
+`mac80211_hwsim`, точка доступа hostapd в одном netns и станция `iw` в
+другом, geneva на станции; SYN профиля этой сети приходит на точку с окном
+7, профиля чужой сети — без изменений, инверсия и шаблон тоже.
+Windows: `smoke.ps1` — `--nlm-list`, `--nlm-filter` по GUID и имени
+сети раннера (стратегия срабатывает), чужой сети (пакеты проходят
+нетронутыми), инверсия; `--ssid-filter` — нет сети или понятная ошибка
+`wlanapi.dll`. Android: `tests/e2e/android_env.sh` запускает статическую
+сборку musl в chroot без `/etc/resolv.conf`, `/tmp` и `/var/run`, с
+`/system/build.prop`.
 
 ## Код zapret2
 

@@ -25,6 +25,8 @@
 #include "seqtrack.h"
 #include "tuner.h"
 #include "treat.h"
+#include "winnet.h"
+#include "wlan.h"
 #include "xact.h"
 #include "xl7.h"
 #include "xtrig.h"
@@ -169,6 +171,28 @@ int ext_activate(const args_t *a, const char *cmd)
         sb_free(&err);
     }
     {
+        sbuf err;
+        sb_init(&err);
+        if (xwinnet_start(a, &err) < 0) {
+            fprintf(stderr, "geneva %s: %s\n", cmd, err.data);
+            sb_free(&err);
+            ext_deactivate();
+            return -1;
+        }
+        sb_free(&err);
+    }
+    if (xprof_wants_ssid(&g_prof) && !arg_has(a, "dry-run")) { /* the Wi-Fi table */
+        sbuf err;
+        sb_init(&err);
+        if (xwlan_init(&err) < 0) {
+            fprintf(stderr, "geneva %s: %s\n", cmd, err.data);
+            sb_free(&err);
+            ext_deactivate();
+            return -1;
+        }
+        sb_free(&err);
+    }
+    {
         int tune = 0;
         const char *st = arg_str(a, "ext-state", NULL);
         sbuf err;
@@ -232,6 +256,8 @@ void ext_deactivate(void)
 #endif
     blob_free_all();
     xprof_free(&g_prof);
+    xwlan_free();
+    xwinnet_stop();
     xipc_reset();
     xah_debug_log(NULL);
     xauto_reset();
@@ -244,11 +270,12 @@ void ext_deactivate(void)
 /* p may be NULL for a packet of flow f (a replay). host: the host name as
  * the L7 found it (NULL: not known); hbuf holds it without its port. */
 static void match_of(xmatch *m, const gpkt *p, const ct_flow *f, strat_dir dir, int l7, const char *host,
-                     uint32_t mark, char *hbuf, size_t hcap)
+                     uint32_t mark, const char *ssid, char *hbuf, size_t hcap)
 {
     int out_server = (dir == DIR_OUT) != g_server_side; /* the packet goes to the server */
     memset(m, 0, sizeof(*m));
     m->mark = mark;
+    m->ssid = ssid;
     m->l7 = l7 ? l7 : L7_UNKNOWN;
     if (host && *host) {
         m->host_ip = xhost_norm(host, hbuf, hcap);
@@ -339,7 +366,7 @@ static void flow_check(ct_flow *f)
  * comes from the server. The strategy is not run (-1) for a host that
  * fails the lists of its flow's profile (f->xprof stays). */
 static int pick(const gpkt *p, ct_flow *f, strat_dir dir, int reverse, int l7, const char *host, uint32_t mark,
-                uint64_t now)
+                const char *ssid, uint64_t now)
 {
     xmatch m;
     char hb[XL7_HOST_MAX];
@@ -362,7 +389,7 @@ static int pick(const gpkt *p, ct_flow *f, strat_dir dir, int reverse, int l7, c
             (xipc_get_host(p->ipver, p->dst, cb, sizeof(cb), &ip) ||
              xipc_get_host(p->ipver, p->src, cb, sizeof(cb), &ip)))
             host = cb;
-        match_of(&m, p, NULL, dir, l7, host, mark, hb, sizeof(hb));
+        match_of(&m, p, NULL, dir, l7, host, mark, ssid, hb, sizeof(hb));
         i = xprof_find(&g_prof, &m, 0);
         /* a name the L7 found is checked (dp_rediscovery), a cached one not */
         if (i >= 0 && host && host != cb && !xprof_hostlists_empty(g_prof.v[i]) &&
@@ -374,7 +401,7 @@ static int pick(const gpkt *p, ct_flow *f, strat_dir dir, int reverse, int l7, c
     new_l7 = f->xprof_l7 == L7_UNKNOWN && l7 != L7_UNKNOWN;
     new_host = f->chost_disc && !f->xprof_host;
     if (!f->xprof_done || new_l7 || new_host) {
-        match_of(&m, p, f, dir, l7, f->chost, mark, hb, sizeof(hb));
+        match_of(&m, p, f, dir, l7, f->chost, mark, ssid, hb, sizeof(hb));
         i = xprof_find(&g_prof, &m, 0);
         if (!f->xprof_done)
             log_prof("new", i, f);
@@ -716,6 +743,20 @@ static void meta(xworker *x, eng_worker *w, const void *pctx, xpkt_ctx *c)
     c->ifout = ifname(x, out);
 }
 
+/* zapret2's desync: the SSID of the interface the packet goes out of (from
+ * the server: comes in on), without a flow of the other interface too */
+static void set_ssid(xpkt_ctx *c, strat_dir dir, uint64_t now)
+{
+    int reverse = c->f ? c->reverse : dir == DIR_IN;
+    const char *a = reverse ? c->ifin : c->ifout, *b = reverse ? c->ifout : c->ifin;
+    c->ssid = NULL;
+    if (!xwlan_on())
+        return;
+    xwlan_refresh(now);
+    if (xwlan_ssid(a, c->ssid_buf) || (!c->f && xwlan_ssid(b, c->ssid_buf)))
+        c->ssid = c->ssid_buf;
+}
+
 typedef struct {
     eng_worker *w;
     strategy *st; /* the command's (engine's) strategy */
@@ -737,20 +778,22 @@ static void xw_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, c
     c.ifin = c.ifout = NULL;
     c.mark = 0;
     meta(u->w->x, u->w, pctx, &c);
+    set_ssid(&c, dir, plat_now_ms());
     c.l7 = v;
     if (g_prof.n)
-        st = wprof_st(u->w->x, pick(NULL, c.f, dir, c.reverse, v->l7, v->host, c.mark, plat_now_ms()), u->st, c.f);
+        st = wprof_st(u->w->x, pick(NULL, c.f, dir, c.reverse, v->l7, v->host, c.mark, c.ssid, plat_now_ms()), u->st,
+                      c.f);
     c.st = st;
     engine_replay(u->w, st, raw, len, dir, pctx, &c);
 }
 
 /* Could a profile with a strategy take p once its flow's L7 protocol and
  * host name are known? (a reassembly is then worth holding for) */
-static int maybe_st(const gpkt *p, const ct_flow *f, strat_dir dir, uint32_t mark, strategy *cmd)
+static int maybe_st(const gpkt *p, const ct_flow *f, strat_dir dir, uint32_t mark, const char *ssid, strategy *cmd)
 {
     xmatch m;
     char hb[XL7_HOST_MAX];
-    match_of(&m, p, f, dir, L7_UNKNOWN, NULL, mark, hb, sizeof(hb));
+    match_of(&m, p, f, dir, L7_UNKNOWN, NULL, mark, ssid, hb, sizeof(hb));
     for (size_t i = 0; i < g_prof.n; i++)
         if (xprof_match(g_prof.v[i], &m, 1) && prof_st((int)i, cmd, NULL))
             return 1;
@@ -897,7 +940,8 @@ static int xw_packet_in(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, c
     if (g_prof.n) {
         if (!g_threaded) /* else the main loop does (xw_ready) */
             xlists_reload(now, 0);
-        i = pick(p, c->f, dir, c->reverse, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, c->mark, now);
+        set_ssid(c, dir, now);
+        i = pick(p, c->f, dir, c->reverse, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, c->mark, c->ssid, now);
         st = wprof_st(x, i, cmd, c->f);
     }
     c->st = st;
@@ -907,7 +951,7 @@ static int xw_packet_in(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, c
     bypass = st && c->f && !w->e->paused && xtrig_all_cut(st, dir, c->f);
     hold = !w->e->paused && !bypass &&
            (st || (g_prof.n && !(c->f && c->f->l7proto && c->f->chost_disc) &&
-                   maybe_st(p, c->f, dir, c->mark, cmd)));
+                   maybe_st(p, c->f, dir, c->mark, c->ssid, cmd)));
     u.w = w;
     u.st = cmd;
     u.base = c;
@@ -930,7 +974,7 @@ static int xw_packet_in(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, c
     if (has && x->view.l7p == L7P_DNS_RESPONSE && p->l4 == LAYER_UDP)
         xipc_dns_response(p->payload, p->payload_len, now);
     if (g_prof.n) {
-        int i2 = pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, c->mark, now);
+        int i2 = pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, c->mark, c->ssid, now);
         strategy *st2;
         if (has) {
             ru.w = w;
@@ -972,6 +1016,10 @@ static int xw_packet(eng_worker *w, strategy **stp, gpkt *p, strat_dir dir, cons
                      const void *pctx)
 {
     int r;
+    if (!xwinnet_ok()) {
+        *stp = NULL; /* --ssid-filter, --nlm-filter: the network is not there */
+        return 0;
+    }
     /* the lock guards the profiles' lists: without profiles none */
     if (!g_threaded || !g_prof.n)
         return xw_packet_in(w, stp, p, dir, data, len, pctx);
@@ -1224,7 +1272,7 @@ static void xo_replay(void *ud, const uint8_t *raw, size_t len, strat_dir dir, c
     (void)pctx;
     c.l7 = v;
     if (g_prof.n)
-        c.st = prof_st(pick(NULL, c.f, dir, c.reverse, v->l7, v->host, 0, u->now), u->cmd, c.f);
+        c.st = prof_st(pick(NULL, c.f, dir, c.reverse, v->l7, v->host, 0, NULL, u->now), u->cmd, c.f);
     u->fn(u->ud, raw, len, dir, v->piece, v->pieces, &c);
 }
 
@@ -1295,14 +1343,15 @@ static void *xoff_packet2(xoffline *x, strategy **stp, gpkt *p, strat_dir dir, u
     strategy *cmd = *stp, *st = cmd;
     int bypass, hold, i = -1, has;
     if (g_prof.n) {
-        i = pick(p, c->f, dir, c->reverse, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, 0, now);
+        i = pick(p, c->f, dir, c->reverse, c->f ? c->f->l7proto : 0, c->f ? c->f->host : NULL, 0, NULL, now);
         st = prof_st(i, cmd, c->f);
     }
     c->st = st;
     if ((has = found(c->f, i, st)))
         flow_ttl(c->f, c->reverse, NULL, NULL, now);
     bypass = st && c->f && xtrig_all_cut(st, dir, c->f);
-    hold = !bypass && (st || (g_prof.n && !(c->f && c->f->l7proto && c->f->chost_disc) && maybe_st(p, c->f, dir, 0, cmd)));
+    hold = !bypass &&
+           (st || (g_prof.n && !(c->f && c->f->l7proto && c->f->chost_disc) && maybe_st(p, c->f, dir, 0, NULL, cmd)));
     u.fn = fn;
     u.ud = ud;
     u.cmd = cmd;
@@ -1320,7 +1369,7 @@ static void *xoff_packet2(xoffline *x, strategy **stp, gpkt *p, strat_dir dir, u
     if (has && x->view.l7p == L7P_DNS_RESPONSE && p->l4 == LAYER_UDP)
         xipc_dns_response(p->payload, p->payload_len, now);
     if (g_prof.n) {
-        int i2 = pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, 0, now);
+        int i2 = pick(p, c->f, dir, c->reverse, x->view.l7, x->view.host, 0, NULL, now);
         strategy *st2;
         if (has)
             flow_tune(i2, p, c->f, c->reverse, x->view.l7p, now, NULL, NULL); /* no RST offline */
