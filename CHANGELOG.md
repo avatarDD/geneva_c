@@ -256,6 +256,13 @@
   перенаправление на чужой домен — неудача. Фича `ext_blockcheck`.
   `tests/e2e/blockcheck_grid.sh` сверяет сетку со скриптами релиза
   zapret2 строка в строку на всех уровнях, IPv4 и IPv6.
+- X14a: скрипты служб OpenRC (`packaging/openrc`), SysV init
+  (`packaging/sysv`), runit и s6 (`packaging/runit/geneva`,
+  `packaging/s6/geneva`) рядом с systemd, procd и Entware. Остановка снимает
+  правила, `reload`/SIGHUP перечитывает стратегию. e2e
+  `tests/e2e/initscripts.sh` гоняет SysV в netns, runit и s6 под настоящими
+  `runsv` и `s6-supervise`, OpenRC — на заглушках `openrc-run` с запуском
+  его команды.
 - X13d: песочница `run --ext` на Windows, как `win_sandbox` у winws2:
   когда пошли пакеты, процесс теряет все привилегии, кроме
   `SeChangeNotifyPrivilege`, переходит на уровень Low и входит в job object

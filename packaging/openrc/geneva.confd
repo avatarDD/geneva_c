@@ -1,0 +1,23 @@
+# /etc/conf.d/geneva: settings of /etc/init.d/geneva (OpenRC).
+# The strategy is read from STRATEGY_FILE (one line); "rc-service geneva
+# reload" re-reads it without dropping connections.
+
+#GENEVA=/usr/bin/geneva
+STRATEGY_FILE=/etc/geneva/strategy.txt
+# ports of the service on the remote side: 80,443 or 8000-8100
+PORTS=80,443
+# tcp, udp or tcp,udp
+PROTO=tcp
+# WAN interface (empty: all), like ppp0 or eth0
+IFACE=
+QUEUE=310
+# auto, nft or iptables
+FIREWALL=auto
+CONTROL=unix:/run/geneva.sock
+CONTROL_TOKEN=
+LOG_LEVEL=info
+LOG_FILE=/var/log/geneva.log
+# JSON Lines events for zapret-gui and others: a file, or empty
+EVENTS=
+# more options of "geneva run", as is (no spaces inside one option)
+EXTRA=

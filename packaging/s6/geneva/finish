@@ -1,0 +1,5 @@
+#!/bin/sh
+# s6: after "geneva run" exits. It removed its rules itself; this only makes
+# a crash loop slow ($1: exit code, 256 when killed by a signal).
+[ "$1" != 0 ] && [ "$1" != 256 ] && sleep 2
+exit 0

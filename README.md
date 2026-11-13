@@ -187,11 +187,18 @@ net.inet.ip.fw.default_to_accept=1; kldload ipfw ipdivert`, иначе ipfw
 | OpenWrt (procd) | `openwrt/geneva.init`, `openwrt/geneva.config` | `/etc/init.d/geneva`, `/etc/config/geneva`; бинарник в `/usr/bin/geneva` |
 | Entware (Keenetic и др.) | `entware/S51geneva`, `entware/geneva.conf`, `entware/010-geneva.sh` | `/opt/etc/init.d/`, `/opt/etc/geneva/`, `/opt/etc/ndm/netfilter.d/` (Keenetic); бинарник в `/opt/bin/geneva` |
 | Linux (systemd) | `systemd/geneva.service`, `systemd/geneva-agent.service`, `systemd/geneva.conf` | `/etc/systemd/system/`, `/etc/geneva/`; бинарник в `/usr/local/bin/geneva` |
+| OpenRC (Alpine, Gentoo) | `openrc/geneva`, `openrc/geneva.confd` | `/etc/init.d/geneva`, `/etc/conf.d/geneva`; бинарник в `/usr/bin/geneva` |
+| SysV init (Debian, Devuan) | `sysv/geneva`, `sysv/geneva.default` | `/etc/init.d/geneva`, `/etc/default/geneva`; бинарник в `/usr/bin/geneva` |
+| runit (Void) | каталог `runit/geneva` (`run`, `finish`, `conf`, `log/run`) | `/etc/sv/geneva`, затем `ln -s /etc/sv/geneva /var/service/` |
+| s6 | каталог `s6/geneva` (`run`, `finish`, `conf`, `type`) | каталог служб s6 или исходников s6-rc |
 
 Стратегия хранится в файле (одна строка, по умолчанию
 `/etc/geneva/strategy.txt` или `/opt/etc/geneva/strategy.txt`). Служба
-включается в конфиге (`enabled`/`ENABLED`). `reload` перечитывает
-стратегию без разрыва соединений, `stop` снимает правила firewall.
+включается в конфиге (`enabled`/`ENABLED`; у OpenRC, runit и s6 — самой
+системой служб). `reload` (`sv hup geneva`, `s6-svc -h`) перечитывает
+стратегию без разрыва соединений, `stop` (`sv down`, `s6-svc -d`) снимает
+правила firewall. Под runit и s6 geneva без стратегии в файле не
+запускается и ждёт её, проверяя файл раз в несколько секунд.
 
 ## Документация
 

@@ -1,0 +1,4 @@
+#!/bin/sh
+# the log of the geneva service: /var/log/geneva/current
+mkdir -p /var/log/geneva
+exec svlogd -tt /var/log/geneva

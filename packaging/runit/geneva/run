@@ -1,0 +1,35 @@
+#!/bin/sh
+# Geneva under runit (Void) or s6: "geneva run" in the foreground, with the
+# settings of ./conf in the service directory. The supervisor's SIGTERM
+# (sv down, s6-svc -d) removes the firewall rules; SIGHUP (sv hup, s6-svc -h)
+# re-reads the strategy file without dropping connections.
+exec 2>&1
+GENEVA=/usr/bin/geneva
+STRATEGY_FILE=/etc/geneva/strategy.txt
+PORTS=80,443
+PROTO=tcp
+IFACE=
+QUEUE=310
+FIREWALL=auto
+CONTROL=unix:/run/geneva.sock
+CONTROL_TOKEN=
+LOG_LEVEL=info
+EVENTS=
+EXTRA=
+# shellcheck disable=SC1091
+[ -r ./conf ] && . ./conf
+
+if ! grep -q '[^[:space:]]' "$STRATEGY_FILE" 2>/dev/null; then
+	echo "geneva: no strategy in $STRATEGY_FILE: waiting for one"
+	sleep 5
+	exit 1
+fi
+set -- run -f "$STRATEGY_FILE" -p "$PORTS" --proto "$PROTO" -q "$QUEUE" --firewall "$FIREWALL" -l "$LOG_LEVEL"
+[ -n "$IFACE" ] && set -- "$@" -i "$IFACE"
+[ -n "$CONTROL" ] && set -- "$@" -c "$CONTROL"
+[ -n "$EVENTS" ] && set -- "$@" -e "$EVENTS"
+# shellcheck disable=SC2086 # EXTRA holds several options
+[ -n "$EXTRA" ] && set -- "$@" $EXTRA
+GENEVA_CONTROL_TOKEN=$CONTROL_TOKEN
+export GENEVA_CONTROL_TOKEN
+exec "$GENEVA" "$@"

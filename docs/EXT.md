@@ -55,6 +55,7 @@ geneva run --ext -s '...'
 | X13b | исполнитель на FreeBSD и OpenBSD: divert-сокеты, правила ipfw и якорь pf | ниже |
 | X13c | фильтр профиля `--filter-ssid` (Linux, nl80211), `--ssid-filter`, `--nlm-filter`, `--nlm-list` (Windows), статическая сборка на Android | ниже |
 | X13d | песочница `run --ext` на Windows (как у winws2): Low integrity, без привилегий и дочерних процессов, `--ext-sandbox` | ниже |
+| X14a | скрипты служб OpenRC, SysV init, runit, s6 (`packaging/`) | README, «Скрипты служб» |
 | X12c | `geneva blockcheck`: проверка DNS (системный резолвер против публичных DNS, UDP против TCP), DoH через curl при подмене, тесты блокировки по порту и по IP | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
