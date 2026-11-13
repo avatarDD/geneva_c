@@ -14,7 +14,12 @@
 #if GENEVA_EXT
 #  include "ext/blockcheck.h"
 #  include "ext/z2xlate.h"
+#  include "plat.h"
+#  include "probe.h"
 #  include "strategy.h"
+#  ifndef _WIN32
+#    include <sys/stat.h>
+#  endif
 
 static int ext_on(void)
 {
@@ -323,6 +328,239 @@ TEST(bc_reports)
     ext_reset();
 }
 
+/* ---- X12c ---------------------------------------------------------------- */
+
+TEST(bc_base64)
+{
+    char o[32];
+    bc_base64url((const uint8_t *)"", 0, o);
+    CHECK_STR(o, "");
+    bc_base64url((const uint8_t *)"f", 1, o);
+    CHECK_STR(o, "Zg");
+    bc_base64url((const uint8_t *)"fo", 2, o);
+    CHECK_STR(o, "Zm8");
+    bc_base64url((const uint8_t *)"foo", 3, o);
+    CHECK_STR(o, "Zm9v");
+    bc_base64url((const uint8_t *)"foob", 4, o);
+    CHECK_STR(o, "Zm9vYg");
+    bc_base64url((const uint8_t *)"\xfb\xff", 2, o);
+    CHECK_STR(o, "-_8");
+    CHECK(bc_doh_url_ok("https://dns.google/dns-query"));
+    CHECK(bc_doh_url_ok("https://[2606:4700::1111]/dns-query?x=1"));
+    CHECK(!bc_doh_url_ok("dns.google/dns-query"));
+    CHECK(!bc_doh_url_ok("https://a/\"; rm -rf /"));
+    CHECK(!bc_doh_url_ok("https://a/$(id)"));
+    CHECK(!bc_doh_url_ok("https://a/%x"));
+}
+
+/* a resolver of fixed answers: "SERVER/PROTO/NAME" -> "IP,IP" ("sys" is the
+ * system resolver) */
+typedef struct {
+    const char *const *tab;
+} dnsoracle;
+
+static int olookup(void *ctx, const char *server, int tcp, const char *name, bc_ip *out, int max)
+{
+    const dnsoracle *o = ctx;
+    char key[200];
+    snprintf(key, sizeof(key), "%s/%s/%s", server ? server : "sys", tcp ? "tcp" : "udp", name);
+    for (int i = 0; o->tab[i]; i += 2)
+        if (!strcmp(o->tab[i], key)) {
+            const char *p = o->tab[i + 1];
+            int n = 0;
+            while (*p && n < max) {
+                size_t l = strcspn(p, ",");
+                snprintf(out[n++], sizeof(bc_ip), "%.*s", (int)l, p);
+                p += l + (p[l] == ',');
+            }
+            return n ? n : -1;
+        }
+    return -1;
+}
+
+static int dnscheck(const char *const *tab, bc_dns_result *r, sbuf *log)
+{
+    static char *servers[] = {"8.8.8.8", "1.1.1.1"};
+    static char *domains[] = {"a.example", "b.example"};
+    dnsoracle o = {tab};
+    bc_dnscheck c = {servers, 2, domains, 2, olookup, &o, NULL};
+    char buf[4096] = "";
+    int rc;
+    FILE *f = tmpfile();
+    c.log = f;
+    memset(r, 0, sizeof(*r));
+    rc = bc_check_dns(&c, r);
+    if (f) {
+        size_t n;
+        rewind(f);
+        n = fread(buf, 1, sizeof(buf) - 1, f);
+        buf[n] = 0;
+        fclose(f);
+    }
+    sb_reset(log);
+    sb_puts(log, buf);
+    return rc;
+}
+
+TEST(bc_dns)
+{
+    static const char *const good[] = {
+        "sys/udp/iana.org", "192.0.43.8", "1.1.1.1/udp/iana.org", "192.0.43.8",
+        "sys/udp/a.example", "10.0.0.1", "1.1.1.1/udp/a.example", "10.0.0.1,10.0.0.9", "1.1.1.1/tcp/a.example", "10.0.0.9",
+        "sys/udp/b.example", "10.0.0.2", "1.1.1.1/udp/b.example", "10.0.0.2", NULL};
+    static const char *const nosys[] = {"8.8.8.8/udp/iana.org", "192.0.43.8", NULL};
+    static const char *const mismatch[] = {
+        "sys/udp/iana.org", "192.0.43.8", "8.8.8.8/udp/iana.org", "192.0.43.8",
+        "sys/udp/a.example", "10.0.0.1", "8.8.8.8/udp/a.example", "10.0.0.1",
+        "sys/udp/b.example", "195.0.0.1", "8.8.8.8/udp/b.example", "10.0.0.2", NULL};
+    static const char *const inject[] = {
+        "sys/udp/iana.org", "192.0.43.8", "8.8.8.8/udp/iana.org", "192.0.43.8",
+        "sys/udp/a.example", "195.0.0.1", "8.8.8.8/udp/a.example", "195.0.0.1", "8.8.8.8/tcp/a.example", "10.0.0.1", NULL};
+    static const char *const same[] = {
+        "sys/udp/iana.org", "192.0.43.8",
+        "sys/udp/a.example", "195.0.0.1", "sys/udp/b.example", "195.0.0.1,10.0.0.2", NULL};
+    static const char *const nodoms[] = {"sys/udp/iana.org", "192.0.43.8", NULL};
+    bc_dns_result r;
+    sbuf log;
+    sb_init(&log);
+
+    CHECK_INT(dnscheck(good, &r, &log), 0);
+    CHECK(r.checked && r.system_ok && !r.spoofed);
+    CHECK_STR(r.pubdns, "1.1.1.1"); /* 8.8.8.8 does not answer */
+    CHECK(strstr(log.data, "comparing system resolver to public DNS : 1.1.1.1\na.example : OK\nb.example : OK\n"));
+    CHECK(strstr(log.data, "all resolved IPs are unique\n-- DNS looks good\n"));
+
+    CHECK_INT(dnscheck(nosys, &r, &log), 1);
+    CHECK(!r.system_ok && !r.spoofed);
+    CHECK(strstr(log.data, "-- DNS is not working."));
+
+    CHECK_INT(dnscheck(mismatch, &r, &log), 1);
+    CHECK(r.spoofed);
+    CHECK(strstr(log.data, "a.example : OK\nb.example : MISMATCH\n-- system resolver :\n195.0.0.1\n-- 8.8.8.8 :\n10.0.0.2\n"
+                           "-- POSSIBLE DNS HIJACK DETECTED."));
+
+    /* both forged over UDP, the truth over TCP */
+    CHECK_INT(dnscheck(inject, &r, &log), 1);
+    CHECK(r.spoofed);
+    CHECK(strstr(log.data, "a.example : UDP AND TCP DIFFER\n-- 8.8.8.8 over UDP :\n195.0.0.1\n-- 8.8.8.8 over TCP :\n10.0.0.1\n"));
+
+    /* no public DNS: the system's answers must differ */
+    CHECK_INT(dnscheck(same, &r, &log), 1);
+    CHECK(r.spoofed && !r.pubdns[0]);
+    CHECK(strstr(log.data, "no working public DNS was found."));
+    CHECK(strstr(log.data, "(3 total, 2 unique)\nnon-unique IPs :\n195.0.0.1\n-- POSSIBLE DNS HIJACK DETECTED."));
+
+    CHECK_INT(dnscheck(nodoms, &r, &log), 1);
+    CHECK(!r.spoofed);
+    CHECK(strstr(log.data, "censor's DNS can return equal result for multiple blocked domains.\n-- DNS is not working."));
+    sb_free(&log);
+}
+
+#  ifndef _WIN32
+#    include <unistd.h>
+
+TEST(bc_doh)
+{
+    /* a curl that answers every query with 10.0.0.7 */
+    char dir[] = "/tmp/geneva-doh-XXXXXX", ans[300], script[300], cmd[400];
+    uint8_t q[300];
+    size_t n = probe_dns_query("x.example", 0, 0, q, sizeof(q));
+    bc_ip ip[BC_MAXIP];
+    bc_resolver r;
+    sbuf err;
+    FILE *f;
+    if (!mkdtemp(dir)) {
+        CHECK(!"mkdtemp");
+        return;
+    }
+    q[2] = 0x81;
+    q[3] = 0x80;
+    q[7] = 1; /* one answer */
+    memcpy(q + n, "\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04\x0a\x00\x00\x07", 16);
+    snprintf(ans, sizeof(ans), "%s/answer", dir);
+    write_file(ans, q, n + 16);
+    snprintf(script, sizeof(script), "%s/curl", dir);
+    f = fopen(script, "w");
+    fprintf(f, "#!/bin/sh\necho \"$*\" > %s/args\ncat %s\n", dir, ans);
+    fclose(f);
+    chmod(script, 0755);
+    sb_init(&err);
+    CHECK_INT(bc_doh_query(script, "https://doh.example/dns-query", 2, "x.example", 4, ip, BC_MAXIP, &err), 1);
+    CHECK_STR(ip[0], "10.0.0.7");
+    snprintf(cmd, sizeof(cmd), "%s/args", dir);
+    {
+        char *a = read_file(cmd, NULL);
+        CHECK(a && strstr(a, "-s --max-time 2 -H accept: application/dns-message https://doh.example/dns-query?dns="));
+        free(a);
+    }
+    CHECK_INT(bc_doh_query("false", "https://doh.example/dns-query", 2, "x.example", 4, ip, BC_MAXIP, &err), -1);
+    CHECK(strstr(err.data, "false failed"));
+    sb_reset(&err);
+    CHECK_INT(bc_doh_query(script, "https://a/$(id)", 2, "x.example", 4, ip, BC_MAXIP, &err), -1);
+    /* the resolver keeps the answers */
+    memset(&r, 0, sizeof(r));
+    r.curl = script;
+    r.doh = "https://doh.example/dns-query";
+    r.timeout = 2;
+    CHECK_INT(bc_resolve_all(&r, "x.example", 4, ip, BC_MAXIP), 1);
+    unlink(ans);
+    CHECK_INT(bc_resolve_all(&r, "x.example", 4, ip, BC_MAXIP), 1);
+    CHECK_STR(ip[0], "10.0.0.7");
+    CHECK_INT(bc_resolve_all(&r, "y.example", 4, ip, BC_MAXIP), -1);
+    bc_resolver_free(&r);
+    sb_free(&err);
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+    CHECK_INT(system(cmd), 0);
+}
+#  endif
+
+TEST(bc_port)
+{
+    struct sockaddr_in a;
+    socklen_t al = sizeof(a);
+    char d[200];
+    sock_t s;
+    uint16_t port;
+    plat_net_init();
+    s = socket(AF_INET, SOCK_STREAM, 0);
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(s, (struct sockaddr *)&a, sizeof(a)) < 0 || listen(s, 4) < 0) {
+        CHECK(!"listen");
+        return;
+    }
+    getsockname(s, (struct sockaddr *)&a, &al);
+    port = ntohs(a.sin_port);
+    CHECK_INT(bc_port_open("127.0.0.1", port, 2, d, sizeof(d)), 1);
+    CHECK_STR(d, "connected");
+    plat_sock_close(s);
+    CHECK_INT(bc_port_open("127.0.0.1", port, 2, d, sizeof(d)), 0);
+    CHECK(strstr(d, "connect"));
+    CHECK_INT(bc_port_open("not an address", port, 2, d, sizeof(d)), 0);
+}
+
+TEST(bc_checks_json)
+{
+    bc_run b;
+    bc_check c = {"ip", "curl_test_https_tls12", 4, "lab.example", "10.0.0.3", "blocked.example", 0, 0, "RESET: x"};
+    sbuf j;
+    bc_init(&b);
+    b.dns.checked = 1;
+    b.dns.system_ok = 1;
+    b.dns.spoofed = 1;
+    b.dns.secure = 1;
+    snprintf(b.dns.doh, sizeof(b.dns.doh), "https://doh.example/q");
+    bc_add_check(&b, &c);
+    sb_init(&j);
+    bc_print_json(&b, 1, &j);
+    CHECK(strstr(j.data, "\"dns\":{\"system\":true,\"public\":null,\"spoofed\":true},\"doh\":\"https://doh.example/q\""));
+    CHECK(strstr(j.data, "\"checks\":[{\"kind\":\"ip\",\"test\":\"curl_test_https_tls12\",\"ipv\":4,\"domain\":\"lab.example\","
+                         "\"ip\":\"10.0.0.3\",\"on\":\"blocked.example\",\"port\":0,\"ok\":false,\"detail\":\"RESET: x\"}]"));
+    sb_free(&j);
+    bc_free(&b);
+}
+
 void suite_blockcheck(void);
 void suite_blockcheck(void)
 {
@@ -331,6 +569,13 @@ void suite_blockcheck(void)
     RUN(bc_shortcuts);
     RUN(bc_levels);
     RUN(bc_reports);
+    RUN(bc_base64);
+    RUN(bc_dns);
+#  ifndef _WIN32
+    RUN(bc_doh);
+#  endif
+    RUN(bc_port);
+    RUN(bc_checks_json);
 }
 
 #else

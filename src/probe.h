@@ -59,11 +59,15 @@ typedef struct {
     int dns_aaaa;            /* dns: ask for AAAA */
     const char *dns_expect;  /* dns: comma list; an answer must be one of these */
     const char *dns_bad;     /* dns: comma list of injected addresses */
+    char (*dns_out)[46];     /* dns: the answer's addresses go here (NULL: not kept) */
+    int dns_out_max;
+    int *dns_out_n;          /* ... and their number (0 without an answer) */
 
     uint8_t *payload;        /* tcp: bytes to send */
     size_t payload_len;
 
     const char *cmd;         /* exec: command line ({lports}, {lport}, {host}, {ip}, {port}) */
+    int connect_only;        /* tcp: the connection is the success (netcat -z) */
 } probe_cfg;
 
 typedef struct {
@@ -89,6 +93,11 @@ void probe_addr_text(const probe_cfg *c, char *buf, size_t cap);
 
 /* Runs one attempt (not for PROBE_EXTERNAL). */
 void probe_run(const probe_cfg *c, probe_ports *lp, probe_res *r);
+
+/* Runs cmd with sh -c (cmd.exe /c), its stdout and stderr into out (up to
+ * 256 KB). Returns the exit code, -1 if it could not start, -2 when it ran
+ * over timeout seconds (it is killed). */
+int probe_spawn(const char *cmd, double timeout, sbuf *out);
 
 /* Escapes \r \n \t \\ \xHH, or "hex:..." for raw bytes. Returns 0 or -1. */
 int probe_parse_payload(const char *s, uint8_t **out, size_t *len);

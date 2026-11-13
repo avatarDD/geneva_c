@@ -11,6 +11,7 @@
 #ifndef GENEVA_EXT_BLOCKCHECK_H
 #define GENEVA_EXT_BLOCKCHECK_H
 
+#include <stdint.h>
 #include <stdio.h>
 
 #include "util.h"
@@ -32,6 +33,31 @@ typedef struct {
     char *value;   /* "nfqws2 --payload=...", "nfqws2 not working", ... */
     char *gen;     /* the geneva strategy of a working line */
 } bc_entry;
+
+/* X12c: the DNS check, the IP and port block tests (bcnet.c) */
+#define BC_MAXIP 16
+typedef char bc_ip[46];
+
+typedef struct {
+    int checked;
+    int system_ok;      /* the system resolver answers */
+    char pubdns[64];    /* the public DNS that answered ("": none) */
+    int spoofed;        /* DNS_IS_SPOOFED */
+    int secure;         /* the tests resolve through DoH (SECURE_DNS) */
+    char doh[256];      /* ... this server */
+} bc_dns_result;
+
+typedef struct {
+    char *kind;         /* "port" (check_domain_port_block) or "ip" (check_dpi_ip_block) */
+    char *test;         /* ip: "curl_test_https_tls12", ... */
+    int ipv;
+    char *domain;       /* the name probed */
+    char *ip;
+    char *owner;        /* ip: the domain whose address ip is */
+    int port;
+    int ok;
+    char *detail;
+} bc_check;
 
 typedef struct {
     /* blockcheck2's variables */
@@ -58,6 +84,9 @@ typedef struct {
 
     bc_entry *rep;      /* report_append's entries */
     size_t nrep;
+    bc_dns_result dns;
+    bc_check *chk;      /* port and IP block tests */
+    size_t nchk;
 } bc_run;
 
 void bc_init(bc_run *b);
@@ -81,6 +110,58 @@ void bc_report(bc_run *b, const char *domain, const char *value, const char *gen
 void bc_print(const bc_run *b, int ndomains, FILE *out);
 /* the same as one JSON object */
 void bc_print_json(const bc_run *b, int ndomains, sbuf *out);
+
+/* ---- bcnet.c ---- */
+
+/* One lookup of the A records of name: server NULL is the system resolver,
+ * else that DNS server over UDP or TCP. Returns the number of addresses,
+ * -1 without an answer. */
+typedef int (*bc_lookup_fn)(void *ctx, const char *server, int tcp, const char *name, bc_ip *out, int max);
+
+typedef struct {
+    char **servers;     /* DNSCHECK_DNS */
+    int nservers;
+    char **domains;     /* DNSCHECK_DOM */
+    int ndomains;
+    bc_lookup_fn lookup;
+    void *ctx;
+    FILE *log;
+} bc_dnscheck;
+
+/* blockcheck2's check_dns_: the system resolver must answer, agree with a
+ * public DNS on the domains, and give them different addresses; geneva
+ * also asks the public DNS over TCP (an injection on the way answers UDP
+ * only). Fills r (checked, system_ok, pubdns, spoofed); 0: DNS looks good */
+int bc_check_dns(const bc_dnscheck *c, bc_dns_result *r);
+
+/* the real lookups; ctx: a double, the timeout in seconds */
+int bc_lookup(void *ctx, const char *server, int tcp, const char *name, bc_ip *out, int max);
+
+/* DoH (RFC 8484, GET) through curl: the addresses of name for ipv, -1 with
+ * err when there is no answer */
+int bc_doh_query(const char *curl, const char *url, double timeout, const char *name, int ipv, bc_ip *out, int max,
+                 sbuf *err);
+/* a URL that can go into curl's command line */
+int bc_doh_url_ok(const char *url);
+/* base64url without padding; out has 4 * (n + 2) / 3 + 1 bytes */
+void bc_base64url(const uint8_t *p, size_t n, char *out);
+
+/* mdig_resolve_all with mdig_cache: the system resolver, or DoH */
+typedef struct bc_rcache bc_rcache;
+typedef struct {
+    const char *curl, *doh; /* doh NULL: the system resolver */
+    double timeout;
+    bc_rcache *cache;
+    size_t ncache;
+} bc_resolver;
+int bc_resolve_all(bc_resolver *r, const char *dom, int ipv, bc_ip *out, int max);
+void bc_resolver_free(bc_resolver *r);
+
+/* netcat -z: 1 when a TCP connection to ip:port opens in timeout */
+int bc_port_open(const char *ip, uint16_t port, double timeout, char *detail, size_t cap);
+
+/* adds a port or IP block test to the report */
+void bc_add_check(bc_run *b, const bc_check *c);
 
 int xcmd_blockcheck(int argc, char **argv);
 

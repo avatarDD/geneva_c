@@ -53,6 +53,17 @@ void bc_free(bc_run *b)
     }
     free(b->rep);
     free(b->strategy);
+    for (size_t i = 0; i < b->nchk; i++) {
+        free(b->chk[i].kind);
+        free(b->chk[i].test);
+        free(b->chk[i].domain);
+        free(b->chk[i].ip);
+        free(b->chk[i].owner);
+        free(b->chk[i].detail);
+    }
+    free(b->chk);
+    b->chk = NULL;
+    b->nchk = 0;
     b->rep = NULL;
     b->nrep = 0;
     b->strategy = NULL;
@@ -1288,6 +1299,42 @@ void bc_print_json(const bc_run *b, int ndomains, sbuf *out)
         j_entry(&w, t.data, sep + 3, h[i].gen);
         jw_obj_end(&w);
         sb_free(&t);
+    }
+    jw_arr_end(&w);
+    if (b->dns.checked) {
+        jw_key(&w, "dns");
+        jw_obj(&w);
+        jw_kbool(&w, "system", b->dns.system_ok);
+        jw_key(&w, "public");
+        if (b->dns.pubdns[0])
+            jw_str(&w, b->dns.pubdns);
+        else
+            jw_null(&w);
+        jw_kbool(&w, "spoofed", b->dns.spoofed);
+        jw_obj_end(&w);
+    }
+    jw_key(&w, "doh");
+    if (b->dns.secure)
+        jw_str(&w, b->dns.doh);
+    else
+        jw_null(&w);
+    jw_key(&w, "checks");
+    jw_arr(&w);
+    for (size_t i = 0; i < b->nchk; i++) {
+        const bc_check *c = &b->chk[i];
+        jw_obj(&w);
+        jw_kstr(&w, "kind", c->kind);
+        if (c->test)
+            jw_kstr(&w, "test", c->test);
+        jw_kint(&w, "ipv", c->ipv);
+        jw_kstr(&w, "domain", c->domain);
+        jw_kstr(&w, "ip", c->ip);
+        if (c->owner)
+            jw_kstr(&w, "on", c->owner);
+        jw_kint(&w, "port", c->port);
+        jw_kbool(&w, "ok", c->ok);
+        jw_kstr(&w, "detail", c->detail);
+        jw_obj_end(&w);
     }
     jw_arr_end(&w);
     jw_obj_end(&w);

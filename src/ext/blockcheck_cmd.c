@@ -95,22 +95,209 @@ static int read_oracle(const char *path, grid_oracle *g)
     return 0;
 }
 
-/* the domain's first address of the IP version (mdig_resolve) */
-static int resolve(const char *dom, int ipv, char *out, size_t cap)
+/* a comma list into a new array */
+static int split_list(const char *s, char ***out)
 {
-    struct addrinfo hints, *res = NULL;
-    int ok = 0;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = ipv == 6 ? AF_INET6 : AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    if (getaddrinfo(dom, NULL, &hints, &res) || !res)
-        return -1;
-    if (res->ai_family == AF_INET)
-        ok = inet_ntop(AF_INET, &((struct sockaddr_in *)res->ai_addr)->sin_addr, out, (socklen_t)cap) != NULL;
-    else if (res->ai_family == AF_INET6)
-        ok = inet_ntop(AF_INET6, &((struct sockaddr_in6 *)res->ai_addr)->sin6_addr, out, (socklen_t)cap) != NULL;
-    freeaddrinfo(res);
-    return ok ? 0 : -1;
+    char *copy = xstrdup(s), *p = copy;
+    int n = 0;
+    *out = NULL;
+    while (p && *p) {
+        char *e = strchr(p, ',');
+        if (e)
+            *e++ = 0;
+        if (*p) {
+            *out = xrealloc(*out, (size_t)(n + 1) * sizeof(**out));
+            (*out)[n++] = xstrdup(p);
+        }
+        p = e;
+    }
+    free(copy);
+    return n;
+}
+
+static void free_list(char **l, int n)
+{
+    for (int i = 0; i < n; i++)
+        free(l[i]);
+    free(l);
+}
+
+static int name_ok(const char *d)
+{
+    /* names go into curl's command line (http3, DoH) and the Host header */
+    return *d && strspn(d, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_") == strlen(d);
+}
+
+/* the probe of test t for dom at ip, as curl_test_* */
+static void setup_probe(probe_cfg *p, int t, const char *dom, const char *ip, int ipv, double timeout, const char *curl,
+                        char *cmdline, size_t cap)
+{
+    memset(p, 0, sizeof(*p));
+    p->host = dom;
+    p->ip = ip;
+    p->timeout = timeout;
+    p->path = "/";
+    p->max_bytes = 4u << 20;
+    switch (t) {
+    case BC_HTTP:
+        p->kind = PROBE_HTTP;
+        p->port = 80;
+        p->strict_http = 1;
+        break;
+    case BC_TLS12:
+    case BC_TLS13:
+        p->kind = PROBE_TLS;
+        p->port = 443;
+        p->tls_version = t == BC_TLS12 ? 12 : 13;
+        break;
+    default:
+        p->kind = PROBE_EXEC;
+        p->port = 443;
+        snprintf(cmdline, cap,
+                 "%s --http3-only -Ss --max-time %g --local-port {lports} --connect-to %s::%s%s%s:443 -o %s https://%s",
+                 curl, timeout, dom, ipv == 6 ? "[" : "", ip, ipv == 6 ? "]" : "",
+#ifdef _WIN32
+                 "NUL",
+#else
+                 "/dev/null",
+#endif
+                 dom);
+        p->cmd = cmdline;
+        p->timeout = timeout + 5;
+        break;
+    }
+}
+
+/* curl_test without the engine (check_dpi_ip_block): 1 when every attempt
+ * gets through; detail: the HTTP answer is not judged (curl_test_http's
+ * "detail" prints it instead) */
+static int direct_test(const bc_cmd *c, int t, const char *dom, const char *ip, int ipv, double timeout, int detail,
+                       char *what, size_t cap)
+{
+    probe_cfg p;
+    probe_ports lp = {0, 0, 0};
+    probe_res r;
+    sbuf err;
+    char cmdline[8];
+    int ok = 1;
+    setup_probe(&p, t, dom, ip, ipv, timeout, "curl", cmdline, sizeof(cmdline));
+    p.strict_http = !detail;
+    sb_init(&err);
+    if (probe_resolve(&p, &err) < 0) {
+        snprintf(what, cap, "%s", err.data ? err.data : "bad address");
+        sb_free(&err);
+        return 0;
+    }
+    sb_free(&err);
+    for (int n = 0; n < c->repeats; n++) {
+        probe_run(&p, &lp, &r);
+        snprintf(what, cap, "%s: %s", probe_outcome_name(r.outcome), r.detail);
+        if (c->log)
+            fprintf(c->log, "%s%s\n", c->repeats > 1 ? "[attempt] " : "", what);
+        if (r.outcome != PO_OK) {
+            ok = 0;
+            if (c->level == BC_QUICK || c->level == BC_VERYQUICK)
+                break;
+        }
+    }
+    return ok;
+}
+
+static void add_check(bc_run *b, const char *kind, const char *test, const char *dom, const char *ip,
+                      const char *owner, int port, int ok, const char *detail)
+{
+    bc_check c;
+    memset(&c, 0, sizeof(c));
+    c.kind = (char *)kind;
+    c.test = (char *)test;
+    c.ipv = b->ipv;
+    c.domain = (char *)dom;
+    c.ip = (char *)ip;
+    c.owner = (char *)owner;
+    c.port = port;
+    c.ok = ok;
+    c.detail = (char *)detail;
+    bc_add_check(b, &c);
+}
+
+/* check_domain_port_block */
+static void port_block(bc_run *b, bc_resolver *res, const char *dom, const char *fixed_ip, int port)
+{
+    bc_ip ips[BC_MAXIP];
+    int n;
+    if (b->log)
+        fprintf(b->log, "\n* port block tests ipv%d %s:%d\n", b->ipv, dom, port);
+    if (fixed_ip) {
+        snprintf(ips[0], sizeof(ips[0]), "%s", fixed_ip);
+        n = 1;
+    } else {
+        n = bc_resolve_all(res, dom, b->ipv, ips, BC_MAXIP);
+    }
+    if (n <= 0) {
+        if (b->log)
+            fprintf(b->log, "ipv%d %s does not resolve\n", b->ipv, dom);
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        char detail[200];
+        int ok = bc_port_open(ips[i], (uint16_t)port, 2, detail, sizeof(detail));
+        if (b->log) {
+            if (ok)
+                fprintf(b->log, "%s connects\n", ips[i]);
+            else
+                fprintf(b->log, "%s does not connect: %s\n", ips[i], detail);
+        }
+        add_check(b, "port", NULL, dom, ips[i], NULL, port, ok, detail);
+    }
+}
+
+/* check_dpi_ip_block, with geneva's reading of the results */
+static void ip_block(bc_run *b, const bc_cmd *c, bc_resolver *res, int t, const char *dom, const char *fixed_ip,
+                     const char *unblocked, double timeout)
+{
+    bc_ip uip[BC_MAXIP], bips[BC_MAXIP];
+    char what[300];
+    int n, ok;
+    FILE *log = b->log;
+
+    if (log)
+        fprintf(log, "\n- IP block tests (requires manual interpretation)\n> testing %s on it's original ip\n",
+                unblocked);
+    n = bc_resolve_all(res, unblocked, b->ipv, uip, BC_MAXIP);
+    if (n <= 0) {
+        if (log)
+            fprintf(log, "%s does not resolve. tests not possible.\n", unblocked);
+        return;
+    }
+    if (!direct_test(c, t, unblocked, uip[0], b->ipv, timeout, 0, what, sizeof(what))) {
+        if (log)
+            fprintf(log, "%s is not available. skipping this test.\n", unblocked);
+        return;
+    }
+    if (log)
+        fprintf(log, "> testing %s on %s (%s)\n", dom, uip[0], unblocked);
+    ok = direct_test(c, t, dom, uip[0], b->ipv, timeout, 1, what, sizeof(what));
+    add_check(b, "ip", b->testf, dom, uip[0], unblocked, 0, ok, what);
+    if (log)
+        fprintf(log, ok ? "  geneva: %s gets through on another address: the block is by its IP\n"
+                        : "  geneva: %s is blocked on another address too: the block is by its name (DPI)\n",
+                dom);
+    if (fixed_ip) {
+        snprintf(bips[0], sizeof(bips[0]), "%s", fixed_ip);
+        n = 1;
+    } else {
+        n = bc_resolve_all(res, dom, b->ipv, bips, BC_MAXIP);
+    }
+    for (int i = 0; i < n; i++) {
+        if (log)
+            fprintf(log, "> testing %s on %s (%s)\n", unblocked, bips[i], dom);
+        ok = direct_test(c, t, unblocked, bips[i], b->ipv, timeout, 1, what, sizeof(what));
+        add_check(b, "ip", b->testf, unblocked, bips[i], dom, 0, ok, what);
+        if (log)
+            fprintf(log, ok ? "  geneva: %s lets another name through: no block by address\n"
+                            : "  geneva: %s blocks another name too: the address is blocked\n",
+                    bips[i]);
+    }
 }
 
 static int parse_list(const char *s, const char *const *names, int n, int *on, const char *what)
@@ -152,7 +339,16 @@ int xcmd_blockcheck(int argc, char **argv)
         {"fake-repeats", 0, 1, "N", "repeats of each fake (1)"},
         {"multidisorder-legacy", 0, 0, NULL, "multidisorder_legacy instead of multidisorder"},
         {"timeout", 0, 1, "SEC", "the probe's timeout (default 2, as CURL_MAX_TIME)"},
-        {"curl", 0, 1, "PATH", "http3: the curl with HTTP/3 (default curl)"},
+        {"curl", 0, 1, "PATH", "the curl for http3 (with HTTP/3) and DoH (default curl)"},
+        {"skip-dnscheck", 0, 0, NULL, "no DNS check (SKIP_DNSCHECK)"},
+        {"dns-servers", 0, 1, "IP,..", "public DNS for the check (default 8.8.8.8,1.1.1.1,77.88.8.1)"},
+        {"dns-domains", 0, 1, "NAME,..", "domains of the check (default pornhub.com,ej.ru,rutracker.org,"
+                                         "www.torproject.org,bbc.com)"},
+        {"secure-dns", 0, 1, "0|1", "resolve through DoH: 1 always, 0 never (default: when DNS is spoofed)"},
+        {"doh", 0, 1, "URL", "this DoH server, without a search (DOH_SERVER)"},
+        {"doh-servers", 0, 1, "URL,..", "DoH servers to search (default cloudflare, google, quad9, adguard, yandex)"},
+        {"skip-ipblock", 0, 0, NULL, "no IP and port block tests (SKIP_IPBLOCK)"},
+        {"unblocked-domain", 0, 1, "NAME", "the IP block tests' unblocked domain (default iana.org)"},
         {"json", 0, 0, NULL, "the report as JSON on stdout"},
         {"print-grid", 0, 0, NULL, "no probes: print the grid's lines (nfqws2<TAB>geneva) as if all failed"},
         {"grid-ok", 0, 1, "FILE", "--print-grid: the nfqws2 lines of FILE work (the grid's shortcuts follow)"},
@@ -170,14 +366,18 @@ int xcmd_blockcheck(int argc, char **argv)
     static const char *const test_opt[BC_NTESTS] = {"http", "tls12", "tls13", "http3"};
     static const char *const level_opt[] = {"veryquick", "quick", "standard", "force"};
     static volatile sig_atomic_t stop;
+    static const char doh_default[] = "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query,"
+                                      "https://dns.quad9.net/dns-query,https://dns.adguard.com/dns-query,"
+                                      "https://common.dot.dns.yandex.net/dns-query";
     args_t a;
     char aerr[128];
     int tests[BC_NTESTS] = {0}, rc = EXIT_USAGE, idx = 0, found = 0, print, ipvs[2], nipv = 0;
     int64_t v;
     double timeout;
-    const char *s, *curl, *fixed_ip;
-    char **doms = NULL;
-    int ndom = 0;
+    const char *s, *curl, *fixed_ip, *unblocked;
+    char **doms = NULL, **dns_servers = NULL, **dns_domains = NULL, **dohs = NULL;
+    int ndom = 0, ndns_servers = 0, ndns_domains = 0, ndohs = 0, secure = -1, skip_ipblock;
+    bc_resolver res;
     bc_run b;
     bc_cmd cmd;
     eval_opts o;
@@ -185,6 +385,7 @@ int xcmd_blockcheck(int argc, char **argv)
 
     bc_init(&b);
     memset(&cmd, 0, sizeof(cmd));
+    memset(&res, 0, sizeof(res));
     if (args_parse(&a, argc, argv, defs, aerr, sizeof(aerr)) < 0) {
         fprintf(stderr, "geneva blockcheck: %s\n", aerr);
         return EXIT_USAGE;
@@ -198,7 +399,11 @@ int xcmd_blockcheck(int argc, char **argv)
                   "nfqws2 line translated into a geneva strategy, in the scripts' order and with\n"
                   "their shortcuts. The report: SUMMARY (the working lines of each test, with\n"
                   "their geneva strategies), and for several domains COMMON (working for all)\n"
-                  "and COVERAGE. Exit code 0 when something works, 1 otherwise.\n"
+                  "and COVERAGE. Before the tests, as blockcheck2: the DNS check (the system\n"
+                  "resolver against public DNS; spoofed DNS switches the tests to DoH through\n"
+                  "curl), and for each domain the port block test and, when the domain is\n"
+                  "blocked, the IP block tests (the domain on an unblocked domain's address and\n"
+                  "back). Exit code 0 when something works, 1 otherwise.\n"
                   "Needs root (Administrator), except with --print-grid.",
                   defs);
         args_free(&a);
@@ -291,11 +496,41 @@ int xcmd_blockcheck(int argc, char **argv)
         doms[ndom++] = xstrdup("rutracker.org");
     }
     for (int i = 0; i < ndom; i++)
-        if (strspn(doms[i], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_") != strlen(doms[i])) {
-            /* the name goes into curl's command line (http3) and the Host header */
+        if (!name_ok(doms[i])) {
             fprintf(stderr, "geneva blockcheck: bad domain %s\n", doms[i]);
             goto done;
         }
+    ndns_servers = split_list(arg_str(&a, "dns-servers", "8.8.8.8,1.1.1.1,77.88.8.1"), &dns_servers);
+    ndns_domains = split_list(arg_str(&a, "dns-domains", "pornhub.com,ej.ru,rutracker.org,www.torproject.org,bbc.com"),
+                              &dns_domains);
+    for (int i = 0; i < ndns_domains; i++)
+        if (!name_ok(dns_domains[i])) {
+            fprintf(stderr, "geneva blockcheck: bad domain %s\n", dns_domains[i]);
+            goto done;
+        }
+    ndohs = split_list(arg_str(&a, "doh-servers", doh_default), &dohs);
+    for (int i = 0; i < ndohs; i++)
+        if (!bc_doh_url_ok(dohs[i])) {
+            fprintf(stderr, "geneva blockcheck: bad DoH URL %s\n", dohs[i]);
+            goto done;
+        }
+    if ((s = arg_str(&a, "doh", NULL)) != NULL && !bc_doh_url_ok(s)) {
+        fprintf(stderr, "geneva blockcheck: bad DoH URL %s\n", s);
+        goto done;
+    }
+    if ((s = arg_str(&a, "secure-dns", NULL)) != NULL) {
+        if (strcmp(s, "0") && strcmp(s, "1")) {
+            fprintf(stderr, "geneva blockcheck: --secure-dns is 0 or 1\n");
+            goto done;
+        }
+        secure = *s - '0';
+    }
+    unblocked = arg_str(&a, "unblocked-domain", "iana.org");
+    if (!name_ok(unblocked)) {
+        fprintf(stderr, "geneva blockcheck: bad domain %s\n", unblocked);
+        goto done;
+    }
+    skip_ipblock = arg_has(&a, "skip-ipblock");
     cmd.level = b.level;
     cmd.log = b.log = arg_has(&a, "quiet") || print ? NULL : stderr;
 
@@ -336,6 +571,49 @@ int xcmd_blockcheck(int argc, char **argv)
         goto done;
     }
     stop_on_signals(&stop);
+    res.curl = curl;
+    res.timeout = timeout;
+    if (!arg_has(&a, "skip-dnscheck")) {
+        bc_dnscheck dc;
+        double dto = timeout;
+        dc.servers = dns_servers;
+        dc.nservers = ndns_servers;
+        dc.domains = dns_domains;
+        dc.ndomains = ndns_domains;
+        dc.lookup = bc_lookup;
+        dc.ctx = &dto;
+        dc.log = b.log;
+        bc_check_dns(&dc, &b.dns);
+    }
+    if (b.dns.spoofed && secure < 0)
+        secure = 1;
+    if (secure == 1) {
+        /* doh_find_working */
+        if ((s = arg_str(&a, "doh", NULL)) != NULL) {
+            snprintf(b.dns.doh, sizeof(b.dns.doh), "%s", s);
+        } else {
+            if (b.log)
+                fprintf(b.log, "* searching working DoH server\n");
+            for (int i = 0; i < ndohs && !b.dns.doh[0]; i++) {
+                bc_ip ip[BC_MAXIP];
+                sbuf err;
+                sb_init(&err);
+                if (bc_doh_query(curl, dohs[i], timeout, "iana.org", 4, ip, BC_MAXIP, &err) > 0)
+                    snprintf(b.dns.doh, sizeof(b.dns.doh), "%s", dohs[i]);
+                if (b.log)
+                    fprintf(b.log, "%s : %s%s%s\n", dohs[i], b.dns.doh[0] ? "OK" : "FAIL", b.dns.doh[0] ? "" : ": ",
+                            b.dns.doh[0] ? "" : err.data);
+                sb_free(&err);
+            }
+            if (!b.dns.doh[0]) {
+                fprintf(stderr, "geneva blockcheck: all DoH servers failed. could not find working DoH server. exiting.\n");
+                rc = EXIT_FAIL;
+                goto done;
+            }
+        }
+        b.dns.secure = 1;
+        res.doh = b.dns.doh;
+    }
     b.test = test_fn;
     b.ctx = &cmd;
     rc = EXIT_OK;
@@ -343,17 +621,23 @@ int xcmd_blockcheck(int argc, char **argv)
         for (int k = 0; k < nipv && !stop; k++)
             for (int t = 0; t < BC_NTESTS && !stop; t++) {
                 char ip[64], cmdline[1024];
+                bc_ip ips[BC_MAXIP];
                 sbuf err;
                 int base;
                 if (!tests[t])
                     continue;
                 b.testf = bc_test_name(t);
                 b.ipv = ipvs[k];
+                /* the main loop: port 80 before http, 443 before the first TLS test */
+                if (!skip_ipblock && (t == BC_HTTP || t == BC_TLS12 || (t == BC_TLS13 && !tests[BC_TLS12])))
+                    port_block(&b, &res, doms[d], fixed_ip, t == BC_HTTP ? 80 : 443);
                 if (b.log)
                     fprintf(b.log, "\n* %s ipv%d %s\n", b.testf, b.ipv, doms[d]);
                 if (fixed_ip)
                     snprintf(ip, sizeof(ip), "%s", fixed_ip);
-                else if (resolve(doms[d], b.ipv, ip, sizeof(ip)) < 0) {
+                else if (bc_resolve_all(&res, doms[d], b.ipv, ips, BC_MAXIP) > 0)
+                    snprintf(ip, sizeof(ip), "%s", ips[0]);
+                else {
                     /* check_domain_prolog: curl's code 6 */
                     if (b.log)
                         fprintf(b.log, "%s does not resolve for ipv%d\n", doms[d], b.ipv);
@@ -361,41 +645,7 @@ int xcmd_blockcheck(int argc, char **argv)
                               NULL);
                     continue;
                 }
-                memset(&o.probe, 0, sizeof(o.probe));
-                o.probe.host = doms[d];
-                o.probe.ip = ip;
-                o.probe.timeout = timeout;
-                o.probe.path = "/";
-                o.probe.max_bytes = 4u << 20;
-                switch (t) {
-                case BC_HTTP:
-                    o.probe.kind = PROBE_HTTP;
-                    o.probe.port = 80;
-                    o.probe.strict_http = 1;
-                    break;
-                case BC_TLS12:
-                case BC_TLS13:
-                    o.probe.kind = PROBE_TLS;
-                    o.probe.port = 443;
-                    o.probe.tls_version = t == BC_TLS12 ? 12 : 13;
-                    break;
-                default:
-                    o.probe.kind = PROBE_EXEC;
-                    o.probe.port = 443;
-                    snprintf(cmdline, sizeof(cmdline),
-                             "%s --http3-only -Ss --max-time %g --local-port {lports} --connect-to %s::%s%s%s:443 "
-                             "-o %s https://%s",
-                             curl, timeout, doms[d], b.ipv == 6 ? "[" : "", ip, b.ipv == 6 ? "]" : "",
-#ifdef _WIN32
-                             "NUL",
-#else
-                             "/dev/null",
-#endif
-                             doms[d]);
-                    o.probe.cmd = cmdline;
-                    o.probe.timeout = timeout + 5;
-                    break;
-                }
+                setup_probe(&o.probe, t, doms[d], ip, b.ipv, timeout, curl, cmdline, sizeof(cmdline));
                 sb_init(&err);
                 if (probe_resolve(&o.probe, &err) < 0) {
                     fprintf(stderr, "geneva blockcheck: %s\n", err.data);
@@ -420,7 +670,10 @@ int xcmd_blockcheck(int argc, char **argv)
                     found = 1;
                 }
                 if (base >= 0 && (base == 0 || b.level == BC_FORCE)) {
-                    int r = bc_scripts(&b, t, doms[d], b.ipv);
+                    int r;
+                    if (!skip_ipblock && t != BC_HTTP3)
+                        ip_block(&b, &cmd, &res, t, doms[d], fixed_ip, unblocked, timeout);
+                    r = bc_scripts(&b, t, doms[d], b.ipv);
                     if (r > 0)
                         found = 1;
                 }
@@ -452,6 +705,10 @@ done:
     for (int i = 0; i < ndom; i++)
         free(doms[i]);
     free(doms);
+    free_list(dns_servers, ndns_servers);
+    free_list(dns_domains, ndns_domains);
+    free_list(dohs, ndohs);
+    bc_resolver_free(&res);
     bc_free(&b);
     args_free(&a);
     return rc;
