@@ -176,11 +176,18 @@ Service scripts are in `packaging/`:
 | OpenWrt (procd) | `openwrt/geneva.init`, `openwrt/geneva.config` | `/etc/init.d/geneva`, `/etc/config/geneva`; the binary in `/usr/bin/geneva` |
 | Entware (Keenetic etc.) | `entware/S51geneva`, `entware/geneva.conf`, `entware/010-geneva.sh` | `/opt/etc/init.d/`, `/opt/etc/geneva/`, `/opt/etc/ndm/netfilter.d/` (Keenetic); the binary in `/opt/bin/geneva` |
 | Linux (systemd) | `systemd/geneva.service`, `systemd/geneva-agent.service`, `systemd/geneva.conf` | `/etc/systemd/system/`, `/etc/geneva/`; the binary in `/usr/local/bin/geneva` |
+| OpenRC (Alpine, Gentoo) | `openrc/geneva`, `openrc/geneva.confd` | `/etc/init.d/geneva`, `/etc/conf.d/geneva`; the binary in `/usr/bin/geneva` |
+| SysV init (Debian, Devuan) | `sysv/geneva`, `sysv/geneva.default` | `/etc/init.d/geneva`, `/etc/default/geneva`; the binary in `/usr/bin/geneva` |
+| runit (Void) | the directory `runit/geneva` (`run`, `finish`, `conf`, `log/run`) | `/etc/sv/geneva`, then `ln -s /etc/sv/geneva /var/service/` |
+| s6 | the directory `s6/geneva` (`run`, `finish`, `conf`, `type`) | an s6 scan directory or s6-rc source |
 
 The strategy lives in a file (one line, by default
 `/etc/geneva/strategy.txt` or `/opt/etc/geneva/strategy.txt`). Enable the
-service in its config (`enabled`/`ENABLED`). `reload` re-reads the strategy
-without dropping connections; `stop` removes the firewall rules.
+service in its config (`enabled`/`ENABLED`; with OpenRC, runit and s6 in
+the service manager itself). `reload` (`sv hup geneva`, `s6-svc -h`)
+re-reads the strategy without dropping connections; `stop` (`sv down`,
+`s6-svc -d`) removes the firewall rules. Under runit and s6 geneva waits
+for a strategy in the file, checking it every few seconds.
 
 ## Documentation
 

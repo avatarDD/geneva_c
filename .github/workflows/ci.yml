@@ -55,8 +55,12 @@ jobs:
         run: sudo tests/e2e/evolve.sh build/geneva
       - name: censors e2e (Geneva's lab censors on a router namespace, server side)
         run: sudo env CENSOR_LOG=debug tests/e2e/censors.sh build/geneva
-      - name: service scripts e2e (Entware, OpenWrt procd)
-        run: sudo tests/e2e/initscripts.sh build/geneva
+      - name: service scripts e2e (Entware, SysV, runit, s6, OpenRC, OpenWrt procd)
+        run: |
+          # s6 from Ubuntu; runit's binaries only (its package would start runsvdir)
+          sudo apt-get install -y s6
+          (cd /tmp && apt-get download runit && sudo dpkg -x runit_*.deb /opt/runit)
+          sudo env RUNIT_BIN=/opt/runit/usr/bin NEED_SUPERVISORS=1 tests/e2e/initscripts.sh build/geneva
       - name: seqtrack e2e (xoob, xtlsrec, xdrip; 100 MB with SHA-256, lost first messages)
         run: sudo tests/e2e/seqtrack.sh build/geneva
       # X9c: no class on traffic without a censor (30 min locally, 5 here)

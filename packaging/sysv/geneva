@@ -1,0 +1,111 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          geneva
+# Required-Start:    $network $remote_fs $syslog
+# Required-Stop:     $network $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Geneva censorship evasion (geneva run)
+# Description:       Runs "geneva run" with the strategy and settings of
+#                    /etc/default/geneva. Stopping removes the firewall rules.
+### END INIT INFO
+# SysV init (Debian, Devuan, Slackware and others):
+#   /etc/init.d/geneva start|stop|restart|reload|status
+# reload re-reads the strategy file without dropping connections.
+
+GENEVA=${GENEVA:-/usr/bin/geneva}
+CONF=${GENEVA_CONF:-/etc/default/geneva}
+RUN_DIR=${GENEVA_RUN_DIR:-/run}
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+ENABLED=no
+STRATEGY_FILE=/etc/geneva/strategy.txt
+PORTS=80,443
+PROTO=tcp
+IFACE=
+QUEUE=310
+FIREWALL=auto
+CONTROL=unix:/run/geneva.sock
+CONTROL_TOKEN=
+LOG_LEVEL=info
+LOG_FILE=/var/log/geneva.log
+EVENTS=
+EXTRA=
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+PIDFILE=$RUN_DIR/geneva.pid
+
+alive() {
+	[ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+do_start() {
+	if [ "$ENABLED" != yes ]; then
+		echo "geneva: disabled (ENABLED=yes in $CONF)"
+		return 0
+	fi
+	alive && return 0
+	if ! grep -q '[^[:space:]]' "$STRATEGY_FILE" 2>/dev/null; then
+		echo "geneva: no strategy in $STRATEGY_FILE" >&2
+		return 1
+	fi
+	mkdir -p "$RUN_DIR" "$(dirname "$LOG_FILE")"
+	set -- run -f "$STRATEGY_FILE" -p "$PORTS" --proto "$PROTO" -q "$QUEUE" --firewall "$FIREWALL" \
+		-l "$LOG_LEVEL" --log-file "$LOG_FILE" --quiet
+	[ -n "$IFACE" ] && set -- "$@" -i "$IFACE"
+	[ -n "$CONTROL" ] && set -- "$@" -c "$CONTROL"
+	[ -n "$EVENTS" ] && set -- "$@" -e "$EVENTS"
+	# shellcheck disable=SC2086 # EXTRA holds several options
+	[ -n "$EXTRA" ] && set -- "$@" $EXTRA
+	GENEVA_CONTROL_TOKEN=$CONTROL_TOKEN "$GENEVA" "$@" </dev/null >/dev/null 2>&1 &
+	echo $! > "$PIDFILE"
+	sleep 1
+	if ! alive; then
+		echo "geneva: failed to start, see $LOG_FILE" >&2
+		rm -f "$PIDFILE"
+		return 1
+	fi
+}
+
+# SIGTERM, then up to 15 s for the rules to go
+do_stop() {
+	alive || { rm -f "$PIDFILE"; return 0; }
+	pid=$(cat "$PIDFILE")
+	kill "$pid" 2>/dev/null
+	i=0
+	while kill -0 "$pid" 2>/dev/null && [ $i -lt 150 ]; do
+		sleep 0.1 2>/dev/null || sleep 1
+		i=$((i + 1))
+	done
+	kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+	rm -f "$PIDFILE"
+}
+
+case "$1" in
+start)
+	do_start
+	;;
+stop)
+	do_stop
+	;;
+restart | force-reload)
+	do_stop
+	do_start
+	;;
+reload)
+	alive && kill -HUP "$(cat "$PIDFILE")"
+	;;
+status)
+	if alive; then
+		echo "geneva: running ($(cat "$PIDFILE"))"
+	else
+		echo "geneva: stopped"
+		exit 3
+	fi
+	;;
+*)
+	echo "Usage: $0 start|stop|restart|reload|status" >&2
+	exit 2
+	;;
+esac

@@ -1,0 +1,50 @@
+#!/sbin/openrc-run
+# Geneva on OpenRC (Alpine, Gentoo, Artix): "geneva run" with the settings
+# of /etc/conf.d/geneva.
+#   rc-service geneva start|stop|restart|reload|status
+# Stopping removes the firewall rules (SIGTERM); reload re-reads the
+# strategy file (SIGHUP) without dropping connections.
+
+description="Geneva censorship evasion (geneva run)"
+extra_started_commands="reload"
+
+: "${GENEVA:=/usr/bin/geneva}"
+: "${STRATEGY_FILE:=/etc/geneva/strategy.txt}"
+: "${PORTS:=80,443}"
+: "${PROTO:=tcp}"
+: "${QUEUE:=310}"
+: "${FIREWALL:=auto}"
+: "${CONTROL:=unix:/run/geneva.sock}"
+: "${LOG_LEVEL:=info}"
+: "${LOG_FILE:=/var/log/geneva.log}"
+
+command="$GENEVA"
+command_background=yes
+pidfile="/run/${RC_SVCNAME}.pid"
+# the rules come down on SIGTERM: give it time before SIGKILL
+retry="TERM/15/KILL/5"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	if ! grep -q '[^[:space:]]' "$STRATEGY_FILE" 2>/dev/null; then
+		eerror "no strategy in $STRATEGY_FILE"
+		return 1
+	fi
+	command_args="run -f $STRATEGY_FILE -p $PORTS --proto $PROTO -q $QUEUE --firewall $FIREWALL -l $LOG_LEVEL --log-file $LOG_FILE --quiet"
+	[ -n "${IFACE:-}" ] && command_args="$command_args -i $IFACE"
+	[ -n "$CONTROL" ] && command_args="$command_args -c $CONTROL"
+	[ -n "${EVENTS:-}" ] && command_args="$command_args -e $EVENTS"
+	[ -n "${EXTRA:-}" ] && command_args="$command_args $EXTRA"
+	export GENEVA_CONTROL_TOKEN="${CONTROL_TOKEN:-}"
+	checkpath -d "$(dirname "$LOG_FILE")"
+}
+
+reload() {
+	ebegin "Re-reading the strategy of $RC_SVCNAME"
+	start-stop-daemon --signal HUP --pidfile "$pidfile"
+	eend $?
+}
