@@ -256,6 +256,12 @@
   перенаправление на чужой домен — неудача. Фича `ext_blockcheck`.
   `tests/e2e/blockcheck_grid.sh` сверяет сетку со скриптами релиза
   zapret2 строка в строку на всех уровнях, IPv4 и IPv6.
+- X13b: исполнитель на FreeBSD и OpenBSD — divert-сокеты (`eng_divert.c`),
+  правила ipfw (FreeBSD) и якорь pf `geneva/ПОРТ` (OpenBSD) ставятся сами и
+  снимаются при выходе, `--firewall ipfw|pf`, `geneva fw print` на любой ОС;
+  порт divert — `-q`. В `version --json` — признак `divert`. CI собирает
+  под FreeBSD и OpenBSD (x86_64, aarch64) и гоняет юнит-тесты и e2e в
+  официальном образе FreeBSD.
 - X13a: двусторонняя обфускация `zapret-obfs.lua` zapret2 — x-действия
   `xwgobfs` (рукопожатия WireGuard под AES-GCM), `xippxor` (номер протокола
   и payload XOR), `xudp2icmp` (UDP как ICMP echo), `xsynhide` (SYN как ACK

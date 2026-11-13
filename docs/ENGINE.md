@@ -214,6 +214,11 @@ SYN, то, что drop действительно рвёт соединение,
 выражении с `pos`, `--first 3` на длинном keep-alive потоке, два
 экземпляра с непересекающимися фильтрами и `eval --filter`.
 
+## FreeBSD и OpenBSD
+
+Перехват через divert-сокеты, правила ipfw или якорь pf; порт divert —
+`-q`. Подробно — `docs/EXT.md`, раздел X13b.
+
 ## Проверка
 
 `tests/e2e/run.sh build/geneva` (root) поднимает два network namespace и

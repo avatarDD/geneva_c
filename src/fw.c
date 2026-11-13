@@ -6,9 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "fw_int.h"
 #include "log.h"
 
-#ifdef __linux__
+#ifndef _WIN32
 #  include <fcntl.h>
 #  include <signal.h>
 #  include <sys/types.h>
@@ -31,7 +32,7 @@ void fw_config_default(fw_config *c)
 
 const char *fw_backend_name(fw_backend b)
 {
-    return b == FW_NFT ? "nft" : b == FW_IPTABLES ? "iptables" : "auto";
+    return b == FW_NFT ? "nft" : b == FW_IPTABLES ? "iptables" : b == FW_IPFW ? "ipfw" : b == FW_PF ? "pf" : "auto";
 }
 
 int fw_backend_parse(const char *s, fw_backend *out)
@@ -42,6 +43,10 @@ int fw_backend_parse(const char *s, fw_backend *out)
         *out = FW_IPTABLES;
     else if (!strcmp(s, "nft") || !strcmp(s, "nftables"))
         *out = FW_NFT;
+    else if (!strcmp(s, "ipfw"))
+        *out = FW_IPFW;
+    else if (!strcmp(s, "pf"))
+        *out = FW_PF;
     else
         return -1;
     return 0;
@@ -668,7 +673,9 @@ static void hook_line(const fw_config *c, const char *path, fw_backend b, int up
 void fw_script(const fw_config *c, fw_backend b, int up, sbuf *out)
 {
     hook_line(c, c->hook_pre, b, up, out);
-    if (b == FW_NFT) {
+    if (b == FW_IPFW || b == FW_PF) {
+        fw_bsd_script(c, b, up, out);
+    } else if (b == FW_NFT) {
         char *s = gen_nft_script(c, up, c->notrack);
         sb_printf(out, "nft -f - <<'EOF'\n%sEOF\n", s);
         free(s);
@@ -932,9 +939,9 @@ static int wd_built(const fw_config *c, sbuf *out, sbuf *err)
 
 /* ---- execution ----------------------------------------------------------- */
 
-#ifdef __linux__
+#ifndef _WIN32
 
-static int find_bin(const char *name, char *out, size_t cap)
+int fw_find_bin(const char *name, char *out, size_t cap)
 {
     static const char *const extra = "/usr/sbin:/sbin:/usr/bin:/bin:/opt/sbin:/opt/bin";
     const char *path = getenv("PATH");
@@ -966,7 +973,7 @@ static int run_argv_(char *const argv[], const char *input, sbuf *output);
  * does): the kernel then reaps our children itself, waitpid() fails with
  * ECHILD and every command looks like it could not run. The default
  * disposition is restored for the duration of the call. */
-static int run_argv(char *const argv[], const char *input, sbuf *output)
+int fw_run_argv(char *const argv[], const char *input, sbuf *output)
 {
     struct sigaction dfl, old;
     int rc, restore;
@@ -1075,6 +1082,16 @@ static int run_argv_(char *const argv[], const char *input, sbuf *output)
     return WEXITSTATUS(st) == 127 ? -1 : WEXITSTATUS(st);
 }
 
+void fw_trim(sbuf *s)
+{
+    while (s->len && (s->data[s->len - 1] == '\n' || s->data[s->len - 1] == ' '))
+        s->data[--s->len] = 0;
+}
+
+#endif /* !_WIN32 */
+
+#ifdef __linux__
+
 /* Runs one iptables command line (space separated, no quoting needed). */
 typedef struct {
     char bin[2][256]; /* resolved iptables / ip6tables */
@@ -1095,28 +1112,23 @@ static int run_line(ipt_env *env, const fwcmd *c, sbuf *output)
         argv[argc++] = tok;
     }
     argv[argc] = NULL;
-    rc = run_argv(argv, NULL, output);
+    rc = fw_run_argv(argv, NULL, output);
     free(copy);
     return rc;
 }
 
-static void trim(sbuf *s)
-{
-    while (s->len && (s->data[s->len - 1] == '\n' || s->data[s->len - 1] == ' '))
-        s->data[--s->len] = 0;
-}
 
 static int ipt_env_init(ipt_env *env, int v6)
 {
     char *argv[4];
-    if (find_bin(v6 ? "ip6tables" : "iptables", env->bin[v6], sizeof(env->bin[v6])) < 0)
+    if (fw_find_bin(v6 ? "ip6tables" : "iptables", env->bin[v6], sizeof(env->bin[v6])) < 0)
         return -1;
     /* -w (wait for the xtables lock) exists since iptables 1.4.20 */
     argv[0] = env->bin[v6];
     argv[1] = "-w";
     argv[2] = "-V";
     argv[3] = NULL;
-    env->wait[v6] = run_argv(argv, NULL, NULL) == 0;
+    env->wait[v6] = fw_run_argv(argv, NULL, NULL) == 0;
     return 0;
 }
 
@@ -1154,7 +1166,7 @@ static int ipt_apply(const fw_config *c, ipt_env *env, int v6, sbuf *err)
         }
         if (r == 0 || cmd->kind == K_IGN)
             continue;
-        trim(&out);
+        fw_trim(&out);
         if (cmd->kind == K_OPT) {
             LOGW("fw", "%s failed (%s); our packets stay tracked by conntrack", cmd->text,
                  out.len ? out.data : "no output");
@@ -1239,11 +1251,11 @@ static int nft_run(const char *script, sbuf *out)
 {
     char bin[256];
     char *argv[] = {bin, "-f", "-", NULL};
-    if (find_bin("nft", bin, sizeof(bin)) < 0) {
+    if (fw_find_bin("nft", bin, sizeof(bin)) < 0) {
         sb_puts(out, "nft not found");
         return -1;
     }
-    return run_argv(argv, script, out);
+    return fw_run_argv(argv, script, out);
 }
 
 static int nft_up(const fw_config *c, sbuf *err)
@@ -1261,7 +1273,7 @@ static int nft_up(const fw_config *c, sbuf *err)
         sb_init(&o2);
         s = gen_nft_script(c, 1, 0);
         if (nft_run(s, &o2) == 0) {
-            trim(&out);
+            fw_trim(&out);
             LOGW("fw", "nft notrack failed (%s); our packets stay tracked by conntrack", out.data);
             r = 0;
         }
@@ -1269,7 +1281,7 @@ static int nft_up(const fw_config *c, sbuf *err)
         sb_free(&o2);
     }
     if (r != 0) {
-        trim(&out);
+        fw_trim(&out);
         sb_printf(err, "nft: %s", out.len ? out.data : "cannot run");
         s = gen_nft_script(c, 0, 0);
         nft_run(s, NULL);
@@ -1289,11 +1301,16 @@ static void nft_down(const fw_config *c)
 static int fw_up_(fw_config *c, sbuf *err)
 {
     char bin[256];
+    if (c->backend == FW_IPFW || c->backend == FW_PF) {
+        sb_printf(err, "the %s backend needs %s", fw_backend_name(c->backend),
+                  c->backend == FW_IPFW ? "FreeBSD" : "OpenBSD");
+        return -1;
+    }
     if (c->backend == FW_NFT)
         return nft_up(c, err);
     if (c->backend == FW_IPTABLES)
         return iptables_up(c, err);
-    if (find_bin("nft", bin, sizeof(bin)) == 0) {
+    if (fw_find_bin("nft", bin, sizeof(bin)) == 0) {
         sbuf e;
         sb_init(&e);
         if (nft_up(c, &e) == 0) {
@@ -1316,6 +1333,10 @@ static int fw_up_(fw_config *c, sbuf *err)
     return 0;
 }
 
+#endif /* __linux__ */
+
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__)
+
 /* --fw-hook-pre/post: PATH up|down BACKEND QUEUE; a failure is a warning */
 static void run_hook(const fw_config *c, const char *path, int up)
 {
@@ -1331,8 +1352,8 @@ static void run_hook(const fw_config *c, const char *path, int up)
     argv[3] = q;
     argv[4] = NULL;
     sb_init(&out);
-    r = run_argv(argv, NULL, &out);
-    trim(&out);
+    r = fw_run_argv(argv, NULL, &out);
+    fw_trim(&out);
     if (r)
         LOGW("fw", "hook %s %s: %s%s%s", path, argv[1], r < 0 ? "cannot run" : "failed",
              out.len ? ": " : "", out.len ? out.data : "");
@@ -1345,7 +1366,11 @@ int fw_up(fw_config *c, sbuf *err)
 {
     int r;
     run_hook(c, c->hook_pre, 1);
+#  ifdef __linux__
     r = fw_up_(c, err);
+#  else
+    r = fw_bsd_up(c, err);
+#  endif
     if (!r)
         run_hook(c, c->hook_post, 1);
     return r;
@@ -1357,24 +1382,32 @@ void fw_set_down_hook(void (*fn)(const fw_config *c)) { g_down_hook = fn; }
 
 void fw_down(const fw_config *c)
 {
-    char bin[256];
     if (g_down_hook) {
         g_down_hook(c); /* --ext: a root helper takes the rules down */
         return;
     }
     run_hook(c, c->hook_pre, 0);
-    if (c->backend != FW_IPTABLES && find_bin("nft", bin, sizeof(bin)) == 0)
-        nft_down(c);
-    if (c->backend != FW_NFT)
-        iptables_down(c);
+#  ifdef __linux__
+    {
+        char bin[256];
+        if (c->backend != FW_IPFW && c->backend != FW_PF) {
+            if (c->backend != FW_IPTABLES && fw_find_bin("nft", bin, sizeof(bin)) == 0)
+                nft_down(c);
+            if (c->backend != FW_NFT)
+                iptables_down(c);
+        }
+    }
+#  else
+    fw_bsd_down(c);
+#  endif
     run_hook(c, c->hook_post, 0);
 }
 
-#else /* !__linux__ */
+#else /* neither Linux nor a BSD with divert */
 
 int fw_up(fw_config *c, sbuf *err)
 {
-    sb_puts(err, "firewall rules are only supported on Linux");
+    sb_puts(err, "firewall rules are supported on Linux, FreeBSD and OpenBSD");
     return -1;
 }
 

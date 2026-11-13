@@ -41,7 +41,7 @@ static int sig(const char *path, int64_t *mtime, int64_t *ns, int64_t *size)
     if (stat(path, &st) < 0)
         return -1;
     *mtime = (int64_t)st.st_mtime;
-#if defined(__linux__)
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__)
     *ns = (int64_t)st.st_mtim.tv_nsec;
 #else
     *ns = 0;

@@ -17,9 +17,10 @@ WinDivert).
   `fragment`, `tamper`, `drop`, `sleep`, trees for outbound and inbound
   packets. Fields and their semantics follow Geneva (scapy); the
   differences are documented.
-- **Engine** (`geneva run`): NFQUEUE on Linux, WinDivert on Windows. The
-  firewall rules (nft or iptables) are set up automatically and removed on
-  exit. A control socket, JSON Lines events and live strategy changes.
+- **Engine** (`geneva run`): NFQUEUE on Linux, WinDivert on Windows,
+  divert sockets on FreeBSD (ipfw) and OpenBSD (pf). The firewall rules
+  (nft, iptables, ipfw or a pf anchor) are set up automatically and removed
+  on exit. A control socket, JSON Lines events and live strategy changes.
   Since 1.1 on Windows: an external WinDivert filter (`--filter`,
   `--filter-file`, changed live with `set_filter`), `--first N`, and
   `--priority` for several instances; on Linux `eval`/`evolve --firewall
@@ -150,13 +151,17 @@ make                                       # for this machine
 make STATIC=1 SMALL=1                      # static and small, for a router
 make CC="zig cc -target mipsel-linux-musleabi" STATIC=1 SMALL=1
 make CC=x86_64-w64-mingw32-gcc            # Windows
+make CC="zig cc -target x86_64-freebsd"    # FreeBSD (zig 0.15+), or gmake on FreeBSD itself
 ```
 
 Linux needs a kernel with NFQUEUE (`nfnetlink_queue`, `xt_NFQUEUE` or
 `nft_queue`) and `nft` or `iptables`. On Windows, `WinDivert.dll` and
 `WinDivert64.sys` from the
 [official release](https://github.com/basil00/WinDivert/releases) go next
-to `geneva.exe`.
+to `geneva.exe`. FreeBSD needs the `ipfw` and `ipdivert` modules (`kenv
+net.inet.ip.fw.default_to_accept=1; kldload ipfw ipdivert`, or ipfw blocks
+everything by default). On OpenBSD `/etc/pf.conf` must contain the line
+`anchor "geneva/*"`. Details: `docs/EXT.md`, section X13b.
 
 Service scripts are in `packaging/`:
 

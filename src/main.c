@@ -40,7 +40,7 @@ static const command commands[] = {
     {"evolve", cmd_evolve, "search for strategies with the genetic algorithm"},
     {"fw", cmd_fw, "print, apply or remove the firewall rules of run"},
     {"library", cmd_library, "list the built-in strategies of Geneva's library"},
-    {"run", cmd_run, "apply a strategy to live traffic (NFQUEUE or WinDivert)"},
+    {"run", cmd_run, "apply a strategy to live traffic (NFQUEUE, WinDivert or divert)"},
     {"version", cmd_version, "print version and build features"},
 };
 
@@ -137,6 +137,9 @@ int cmd_version(int argc, char **argv)
 #endif
 #ifdef _WIN32
         jw_str(&w, "windivert");
+#endif
+#if defined(__FreeBSD__) || defined(__OpenBSD__)
+        jw_str(&w, "divert"); /* 1.3: divert sockets (ipfw, pf) */
 #endif
         jw_str(&w, "ipv6");
         jw_str(&w, "pcap");

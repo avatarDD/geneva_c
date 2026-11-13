@@ -161,7 +161,7 @@ int eval_parse_args(const args_t *a, const char *cmd, eval_opts *o)
 #endif
             o->apply_fw = 0; /* the caller sets up the rules for the slots */
         } else if (fw_backend_parse(s, &o->fw.backend) < 0) {
-            fprintf(stderr, "geneva %s: --firewall must be auto, nft, iptables or none\n", cmd);
+            fprintf(stderr, "geneva %s: --firewall must be auto, nft, iptables, ipfw, pf or none\n", cmd);
             return -1;
         }
     }

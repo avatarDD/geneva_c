@@ -15,7 +15,7 @@ Commands:
   evolve     search for strategies with the genetic algorithm
   fw         print, apply or remove the firewall rules of run
   library    list the built-in strategies of Geneva's library
-  run        apply a strategy to live traffic (NFQUEUE or WinDivert)
+  run        apply a strategy to live traffic (NFQUEUE, WinDivert or divert)
   version    print version and build features
 
 Run "geneva <command> --help" for command options.
@@ -109,7 +109,9 @@ Extensions (with --ext):
 $ $G run --help
 Usage: geneva run -s STRATEGY -p PORTS [options]
 Applies a strategy to live traffic: NFQUEUE on Linux (root), WinDivert on
-Windows (Administrator, WinDivert.dll and WinDivert64.sys next to geneva.exe).
+Windows (Administrator, WinDivert.dll and WinDivert64.sys next to geneva.exe),
+divert sockets on FreeBSD (root, ipfw and ipdivert loaded) and OpenBSD (root,
+pf.conf calls anchor "geneva/*"); -q is then the divert port.
 Signals: SIGHUP re-reads --strategy-file, SIGUSR1 emits stats,
 SIGINT/SIGTERM stop and remove the firewall rules.
 
@@ -119,9 +121,9 @@ Options:
   -p, --server-port PORTS        ports of the service: 443 or 80,443 or 8000-8100 (required)
       --server-side              run on the server: outbound packets come from PORTS
       --proto LIST               tcp, udp or tcp,udp (default tcp)
-  -q, --queue N                  NFQUEUE number (default 310)
+  -q, --queue N                  NFQUEUE number; the divert port on FreeBSD and OpenBSD (default 310)
       --mark MASK                fwmark bit of packets the engine sends itself (default 0x20000000)
-      --firewall TYPE            auto, nft, iptables, or none (rules set up by hand)
+      --firewall TYPE            auto, nft, iptables, ipfw, pf, or none (rules set up by hand)
   -i, --iface IF                 only traffic through this interface (the WAN on a router)
       --dir both|out|in          directions to intercept (default both)
   -4, --ipv4-only                handle IPv4 only
@@ -921,6 +923,40 @@ EOF
 $ $G fw print --ext --filter-tcp 80 --new=rest
 geneva fw: profile 2 (rest) takes every port: give -p (and --proto)
 [exit 2]
+### fw-ext-profiles-ipfw
+$ $G fw print --ext --firewall ipfw --filter-tcp 80,443 --new --filter-udp 443 --new --filter-icmp 3 --filter-ipp 47
+# ipfw: apply
+# R: the lowest rule number from 50 that has no rules (geneva picks it)
+ipfw -q add $R divert 310 tcp from any to any 80,443 out not diverted // geneva 310
+ipfw -q add $R divert 310 udp from any to any 80,443 out not diverted // geneva 310
+ipfw -q add $R divert 310 icmp from any to any out not diverted // geneva 310
+ipfw -q add $R divert 310 ipv6-icmp from any to any out not diverted // geneva 310
+ipfw -q add $R divert 310 47 from any to any out not diverted // geneva 310
+ipfw -q add $R divert 310 tcp from any 80,443 to any in not diverted // geneva 310
+ipfw -q add $R divert 310 udp from any 80,443 to any in not diverted // geneva 310
+ipfw -q add $R divert 310 icmp from any to any in not diverted // geneva 310
+ipfw -q add $R divert 310 ipv6-icmp from any to any in not diverted // geneva 310
+ipfw -q add $R divert 310 47 from any to any in not diverted // geneva 310
+# ipfw: remove
+# every rule number whose rules all have the comment "geneva 310"
+ipfw -q delete $R
+[exit 0]
+### fw-ext-profiles-pf
+$ $G fw print --ext --firewall pf --filter-tcp 80,443 --new --filter-icmp 3 --filter-ipp 47
+# pf: apply
+pfctl -a geneva/310 -f - <<'EOF'
+pass out quick proto tcp from any to any port { 80 443 } divert-packet port 310
+pass out quick inet proto icmp from any to any divert-packet port 310
+pass out quick inet6 proto icmp6 from any to any divert-packet port 310
+pass out quick proto 47 from any to any divert-packet port 310
+pass in quick proto tcp from any port { 80 443 } to any divert-packet port 310
+pass in quick inet proto icmp from any to any divert-packet port 310
+pass in quick inet6 proto icmp6 from any to any divert-packet port 310
+pass in quick proto 47 from any to any divert-packet port 310
+EOF
+# pf: remove
+pfctl -a geneva/310 -F rules
+[exit 0]
 ### apply-ext-lists
 $ $G apply --ext --hostlist-domains example.org --filter-tcp 80 -s '[TCP:flags:PA]-tamper{TCP:urgptr:replace:9}-| \/' --new=ips --ipset-ip 93.184.215.0/24,2a00::/16 --ipset-exclude-ip 93.184.215.99 -s '[TCP:flags:PA]-tamper{TCP:window:replace:7}-| \/' --new=gz --hostlist ../data/lists/hosts.txt.gz -s '\/' -i $D/l7.pcap -p 80,443 -v -o $T/out.pcap 2>/dev/null && cksum < $T/out.pcap
 2992150796 6443

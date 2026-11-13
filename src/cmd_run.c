@@ -28,9 +28,9 @@
     {"server-port", 'p', 1, "PORTS", "ports of the service: 443 or 80,443 or 8000-8100 (required)"}, \
     {"server-side", 0, 0, NULL, "run on the server: outbound packets come from PORTS"},          \
     {"proto", 0, 1, "LIST", "tcp, udp or tcp,udp (default tcp)"},                                \
-    {"queue", 'q', 1, "N", "NFQUEUE number (default 310)"},                                      \
+    {"queue", 'q', 1, "N", "NFQUEUE number; the divert port on FreeBSD and OpenBSD (default 310)"}, \
     {"mark", 0, 1, "MASK", "fwmark bit of packets the engine sends itself (default 0x20000000)"}, \
-    {"firewall", 0, 1, "TYPE", "auto, nft, iptables, or none (rules set up by hand)"},             \
+    {"firewall", 0, 1, "TYPE", "auto, nft, iptables, ipfw, pf, or none (rules set up by hand)"},  \
     {"iface", 'i', 1, "IF", "only traffic through this interface (the WAN on a router)"},         \
     {"dir", 0, 1, "both|out|in", "directions to intercept (default both)"},                       \
     {"ipv4-only", '4', 0, NULL, "handle IPv4 only"},                                               \
@@ -155,7 +155,7 @@ static int parse_fw(const args_t *a, const char *cmd, fw_config *c, int *use_fw,
         if (!strcmp(s, "none"))
             *use_fw = 0;
         else if (fw_backend_parse(s, &c->backend) < 0) {
-            fprintf(stderr, "geneva %s: --firewall must be auto, nft, iptables or none\n", cmd);
+            fprintf(stderr, "geneva %s: --firewall must be auto, nft, iptables, ipfw, pf or none\n", cmd);
             return -1;
         }
     }
@@ -341,7 +341,9 @@ int cmd_run(int argc, char **argv)
     if (arg_has(&a, "help")) {
         args_help("Usage: geneva run -s STRATEGY -p PORTS [options]\n"
                   "Applies a strategy to live traffic: NFQUEUE on Linux (root), WinDivert on\n"
-                  "Windows (Administrator, WinDivert.dll and WinDivert64.sys next to geneva.exe).\n"
+                  "Windows (Administrator, WinDivert.dll and WinDivert64.sys next to geneva.exe),\n"
+                  "divert sockets on FreeBSD (root, ipfw and ipdivert loaded) and OpenBSD (root,\n"
+                  "pf.conf calls anchor \"geneva/*\"); -q is then the divert port.\n"
                   "Signals: SIGHUP re-reads --strategy-file, SIGUSR1 emits stats,\n"
                   "SIGINT/SIGTERM stop and remove the firewall rules.",
                   defs);
@@ -555,13 +557,19 @@ int cmd_fw(int argc, char **argv)
     }
     if (!strcmp(act, "print")) {
         sbuf s;
+#if defined(__FreeBSD__)
+        fw_backend b = c.backend == FW_AUTO ? FW_IPFW : c.backend;
+#elif defined(__OpenBSD__)
+        fw_backend b = c.backend == FW_AUTO ? FW_PF : c.backend;
+#else
         fw_backend b = c.backend == FW_AUTO ? FW_NFT : c.backend;
+#endif
         sb_init(&s);
         sb_printf(&s, "# %s: apply\n", fw_backend_name(b));
         fw_script(&c, b, 1, &s);
         sb_printf(&s, "# %s: remove\n", fw_backend_name(b));
         fw_script(&c, b, 0, &s);
-        if (c.backend == FW_AUTO) {
+        if (c.backend == FW_AUTO && b == FW_NFT) {
             sb_puts(&s, "# iptables: apply\n");
             fw_script(&c, FW_IPTABLES, 1, &s);
             sb_puts(&s, "# iptables: remove\n");

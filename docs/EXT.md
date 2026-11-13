@@ -52,6 +52,7 @@ geneva run --ext -s '...'
 | X12a | `geneva resolve` (mdig zapret2) и `geneva ip2net` (ip2net zapret2) | ниже |
 | X12b | `geneva blockcheck`: `blockcheck2.sh` zapret2 со всей сеткой `blockcheck2.d/standard`, строки nfqws2 переведены в стратегии geneva; уровни, повторы, отчёт SUMMARY/COMMON/COVERAGE | ниже |
 | X13a | двусторонняя обфускация `zapret-obfs.lua`: `xwgobfs`, `xippxor`, `xudp2icmp`, `xsynhide` | ниже |
+| X13b | исполнитель на FreeBSD и OpenBSD: divert-сокеты, правила ipfw и якорь pf | ниже |
 | X12c | `geneva blockcheck`: проверка DNS (системный резолвер против публичных DNS, UDP против TCP), DoH через curl при подмене, тесты блокировки по порту и по IP | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
@@ -2114,6 +2115,83 @@ nfqws2): эхо UDP через `xwgobfs`, `xippxor`, `xudp2icmp` и HTTP чер�
 `xsynhide` между двумя geneva и между geneva и nfqws2 с функциями Lua
 zapret2; счётчики на сервере до очереди показывают на проводе только
 обфусцированные пакеты.
+
+## FreeBSD и OpenBSD: divert-сокеты (X13b)
+
+Как `dvtws2` у zapret2, `geneva run` на BSD берёт пакеты из divert-сокета
+(divert(4)). Это работает и без `--ext`: исполнитель тот же, другой только
+перехват. Порт divert — это `-q/--queue` (по умолчанию 310).
+
+| | FreeBSD | OpenBSD |
+|---|---|---|
+| сокет | `PF_DIVERT` (FreeBSD 14+), иначе `AF_INET/IPPROTO_DIVERT`; один на IPv4 и IPv6 | `IPPROTO_DIVERT`, по сокету на семейство |
+| правила (`--firewall auto`) | `ipfw`: `divert ПОРТ ... not diverted`, у всех правил один свободный номер от 50 и комментарий `geneva ПОРТ` | `pf`: `pass ... quick ... divert-packet port ПОРТ` в якоре `geneva/ПОРТ` |
+| что нужно заранее | `kenv net.inet.ip.fw.default_to_accept=1; kldload ipfw ipdivert` (или `ipfw_load`, `ipdivert_load` в `/boot/loader.conf`) | строка `anchor "geneva/*"` в `/etc/pf.conf` перед правилами, которые пропускают трафик, и `pfctl -f /etc/pf.conf` |
+
+```sh
+# FreeBSD
+geneva run -s '[TCP:flags:PA]-fragment{tcp:8:True}-| \/' -p 443
+geneva fw print -p 443          # правила ipfw, которые поставит run
+# OpenBSD
+geneva run -s '[TCP:flags:S]-duplicate-| \/' -p 443 --firewall pf
+```
+
+Направление пакета берётся из адреса, который отдаёт divert: нулевой —
+исходящий, адрес интерфейса — входящий (FreeBSD кладёт после него ещё и
+имя интерфейса: оно есть в `META:ifin` под `--ext`). Пакет пишется обратно
+с тем же адресом, и ядро продолжает обработку после правила, которое его
+отвело; так же уходят пакеты, которые добавила стратегия. Отведённый пакет —
+копия, ядро его не держит: drop — это просто не записать его обратно.
+
+Правила снимаются при выходе. Если geneva убили (SIGKILL), правила ipfw
+остаются, а следующий запуск с тем же портом снимает их перед своими: свои
+правила он узнаёт по номеру, на котором стоят только правила с его
+комментарием. `geneva fw up|down|print` работает с ipfw и pf так же, как с
+nft и iptables; `geneva fw print --firewall ipfw|pf` показывает правила на
+любой ОС.
+
+Отличия от Linux и от zapret2:
+
+- Пока geneva не слушает порт, пакеты, попавшие под правило divert,
+  теряются (в NFQUEUE есть `--queue-bypass`, в divert такого нет), поэтому
+  правила стоят, только пока работает geneva.
+- `--first N` считает сам исполнитель (как на Windows): правил conntrack
+  нет, все пакеты потока проходят через сокет.
+- Только Linux: `geneva censor` и режим роутера, `--ext-auto` (NFLOG и
+  ctnetlink), `--ext-workers`, хирургический путь (`--ext-healthy-mark`),
+  `--ext-flowoffload`, `--ext-lan`, `--ext-ttl-icmp`, `--ext-bind-fix4/6`.
+  Если для них нужны правила, которых ipfw и pf не выразят, `run` на BSD
+  не ставит правила и завершается с ошибкой 5, а `fw print` пишет причину.
+  Метка `--mark` на BSD не нужна: свои пакеты исполнителя правила
+  пропускают по `not diverted` (ipfw) и по тому, что pf не отводит пакет,
+  записанный в divert-сокет, второй раз.
+- Ключей `--port` и `--sockarg` dvtws2 нет: порт задаёт `-q`, а
+  `--sockarg` (метка сокета для `not sockarg` в ipfw) не нужен, потому что
+  geneva отправляет свои пакеты через тот же divert-сокет.
+- В pf правила с `quick`: в якоре они решают судьбу совпавших пакетов
+  (`pass`), поэтому якорь ставят туда, где этот трафик и так пропускается.
+- x-действия не могут ставить метку и выбирать интерфейс отправки
+  (`inject_x` нет, как на Windows): пакет уходит в направлении
+  захваченного.
+
+Сборка: `make` с gmake на самой BSD или кросс-сборка
+`make CC="zig cc -target x86_64-freebsd"` (`aarch64-freebsd`,
+`x86_64-openbsd`, `aarch64-openbsd`; zig 0.15 и новее). Бинарник для
+FreeBSD собирается под ABI FreeBSD 14 и работает на 14 и 15.
+
+Проверки: юнит-тесты правил ipfw и pf (`tests/test_fw.c`), golden
+`fw print --firewall ipfw|pf`; в CI (задача `bsd`) — сборка под четыре
+цели с `-Werror`, затем официальный образ FreeBSD (BASIC-CLOUDINIT с
+download.freebsd.org, сверка с его `CHECKSUM.SHA256`) в qemu с KVM:
+`tests/e2e/freebsd_vm.sh` кладёт бинарники и тесты на NoCloud-ISO, а
+nuageinit запускает внутри юнит-тесты и `tests/e2e/bsd_divert.sh`. Тот
+поднимает vnet-jail с echo-сервером inetd за epair и проверяет по tcpdump в
+jail то же, что `tests/e2e/run.sh` на Linux: дублирование и подмену SYN,
+сегментацию TCP, 200 КБ эха через стратегию, IP-фрагменты, `sleep`,
+`drop`, входящее дерево, IPv6, `--ext` (`FLOW:`, `META:ifin`, `xfake` и
+`xsplit`), снятие правил при выходе и после SIGKILL, `geneva fw up/down`.
+OpenBSD проверяется только сборкой и тестами правил: официального образа
+для запуска в CI у OpenBSD нет.
 
 ## Код zapret2
 

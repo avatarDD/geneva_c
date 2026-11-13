@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "fw.h"
+#include "fw_int.h"
 #include "ports.h"
 #include "test.h"
 #include "util.h"
@@ -353,8 +354,98 @@ static void test_exec(void)
 }
 #endif
 
+/* X13b: ipfw (FreeBSD) and pf (OpenBSD) rules for the divert backend */
+static void test_bsd(void)
+{
+    fw_config c;
+    sbuf s, e;
+    t_current = "fw ipfw";
+    sb_init(&s);
+    sb_init(&e);
+    fw_config_default(&c);
+    ports_parse("443,8000-8100", &c.ports);
+    fw_ipfw_rules(&c, "77", &s);
+    CHECK_STR(s.data, "ipfw -q add 77 divert 310 tcp from any to any 443,8000-8100 out not diverted // geneva 310\n"
+                      "ipfw -q add 77 divert 310 tcp from any 443,8000-8100 to any in not diverted // geneva 310\n");
+    /* server side, UDP, IPv4, one interface, outbound only */
+    sb_reset(&s);
+    c.server_side = 1, c.tcp = 0, c.udp = 1, c.ipv6 = 0, c.in = 0, c.queue = 5;
+    c.iface = "em0";
+    fw_ipfw_rules(&c, "50", &s);
+    CHECK_STR(s.data, "ipfw -q add 50 divert 5 udp from any 443,8000-8100 to any out xmit em0 ip4 not diverted // geneva 5\n");
+    /* --ext profiles: ICMP of both families, other protocols, no ports */
+    sb_reset(&s);
+    fw_config_default(&c);
+    c.icmp = 1, c.nipp = 1, c.ipp[0] = 47, c.out = 0;
+    fw_ipfw_rules(&c, "60", &s);
+    CHECK_STR(s.data, "ipfw -q add 60 divert 310 icmp from any to any in not diverted // geneva 310\n"
+                      "ipfw -q add 60 divert 310 ipv6-icmp from any to any in not diverted // geneva 310\n"
+                      "ipfw -q add 60 divert 310 47 from any to any in not diverted // geneva 310\n");
+    /* a list of interfaces: the rules once for each */
+    sb_reset(&s);
+    fw_config_default(&c);
+    ports_parse("80", &c.ports);
+    c.nifs = 2, c.ifs[0] = "em0", c.ifs[1] = "em1", c.in = 0;
+    fw_ipfw_rules(&c, "50", &s);
+    CHECK_INT(count(s.data, "out xmit em0 not diverted"), 1);
+    CHECK_INT(count(s.data, "out xmit em1 not diverted"), 1);
+
+    t_current = "fw pf";
+    sb_reset(&s);
+    fw_config_default(&c);
+    ports_parse("80,443,1000-2000", &c.ports);
+    c.udp = 1, c.ipv6 = 0;
+    fw_pf_rules(&c, &s);
+    CHECK_STR(s.data,
+              "pass out quick inet proto tcp from any to any port { 80 443 1000:2000 } divert-packet port 310\n"
+              "pass out quick inet proto udp from any to any port { 80 443 1000:2000 } divert-packet port 310\n"
+              "pass in quick inet proto tcp from any port { 80 443 1000:2000 } to any divert-packet port 310\n"
+              "pass in quick inet proto udp from any port { 80 443 1000:2000 } to any divert-packet port 310\n");
+    sb_reset(&s);
+    fw_config_default(&c);
+    ports_parse("443", &c.ports);
+    c.server_side = 1, c.out = 0, c.ipv4 = 0, c.icmp = 1;
+    c.iface = "vio0";
+    fw_pf_rules(&c, &s);
+    CHECK_STR(s.data, "pass in quick on vio0 inet6 proto tcp from any to any port 443 divert-packet port 310\n"
+                      "pass in quick on vio0 inet6 proto icmp6 from any to any divert-packet port 310\n");
+
+    /* what only Linux rules can do is refused, and the script says why */
+    t_current = "fw bsd limits";
+    fw_config_default(&c);
+    CHECK_INT(fw_bsd_check(&c, FW_IPFW, &e), 0);
+    c.forward_to = "10.0.0.2";
+    CHECK_INT(fw_bsd_check(&c, FW_PF, &e), -1);
+    CHECK(strstr(e.data, "router mode") && strstr(e.data, "pf rules"));
+    sb_reset(&s);
+    fw_script(&c, FW_IPFW, 1, &s);
+    CHECK(strstr(s.data, "# router mode") && !strstr(s.data, "divert 310"));
+    fw_config_default(&c);
+    c.healthy_mark = 0x40;
+    sb_reset(&e);
+    CHECK_INT(fw_bsd_check(&c, FW_IPFW, &e), -1);
+    c.healthy_mark = 0, c.nqueues = 4;
+    CHECK_INT(fw_bsd_check(&c, FW_IPFW, &e), -1);
+    c.nqueues = 0, c.obs = 1;
+    CHECK_INT(fw_bsd_check(&c, FW_IPFW, &e), -1);
+
+    /* the names */
+    {
+        fw_backend b;
+        CHECK_INT(fw_backend_parse("ipfw", &b), 0);
+        CHECK_INT(b, FW_IPFW);
+        CHECK_INT(fw_backend_parse("pf", &b), 0);
+        CHECK_INT(b, FW_PF);
+        CHECK_STR(fw_backend_name(FW_IPFW), "ipfw");
+        CHECK_STR(fw_backend_name(FW_PF), "pf");
+    }
+    sb_free(&s);
+    sb_free(&e);
+}
+
 void suite_fw(void)
 {
+    test_bsd();
     test_ports();
     test_iptables();
     test_nft();

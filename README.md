@@ -26,8 +26,10 @@ Windows через WinDivert).
 - **Язык стратегий Geneva**: триггеры, действия `duplicate`, `fragment`,
   `tamper`, `drop`, `sleep`, деревья для исходящих и входящих пакетов.
   Поля и их семантика повторяют Geneva (scapy), отличия описаны.
-- **Исполнитель** (`geneva run`): NFQUEUE на Linux, WinDivert на Windows.
-  Правила firewall (nft или iptables) ставятся сами и снимаются при выходе.
+- **Исполнитель** (`geneva run`): NFQUEUE на Linux, WinDivert на Windows,
+  divert-сокеты на FreeBSD (ipfw) и OpenBSD (pf).
+  Правила firewall (nft, iptables, ipfw или якорь pf) ставятся сами и
+  снимаются при выходе.
   Есть управляющий сокет, события JSON Lines и замена стратегии на лету.
   С 1.1 на Windows — внешний фильтр WinDivert (`--filter`,
   `--filter-file`, смена на лету `set_filter`), `--first N` и
@@ -160,12 +162,17 @@ make                                       # для этой машины
 make STATIC=1 SMALL=1                      # статический и маленький, для роутера
 make CC="zig cc -target mipsel-linux-musleabi" STATIC=1 SMALL=1
 make CC=x86_64-w64-mingw32-gcc            # Windows
+make CC="zig cc -target x86_64-freebsd"    # FreeBSD (zig 0.15+), или make на самой FreeBSD (gmake)
 ```
 
 На Linux нужны ядро с NFQUEUE (`nfnetlink_queue`, `xt_NFQUEUE` или
 `nft_queue`) и `nft` или `iptables`. На Windows рядом с `geneva.exe`
 должны лежать `WinDivert.dll` и `WinDivert64.sys` из
 [официального релиза](https://github.com/basil00/WinDivert/releases).
+На FreeBSD нужны модули `ipfw` и `ipdivert` (`kenv
+net.inet.ip.fw.default_to_accept=1; kldload ipfw ipdivert`, иначе ipfw
+по умолчанию закроет всё). На OpenBSD в `/etc/pf.conf` должна быть строка
+`anchor "geneva/*"`. Подробности — `docs/EXT.md`, раздел X13b.
 
 Скрипты служб лежат в `packaging/`:
 
