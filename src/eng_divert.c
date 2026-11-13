@@ -143,7 +143,8 @@ static void dv_be_meta(const void *pctx, uint32_t *mark, uint32_t *ifin, uint32_
     const dv_pctx *p = pctx;
     *mark = 0, *ifin = 0, *ifout = 0;
 #ifdef __FreeBSD__
-    /* FreeBSD puts the receiving interface's name after sin_addr */
+    /* FreeBSD puts the receiving interface's name after sin_addr, cut to 7
+     * characters (strlcpy into the 8 bytes of sin_zero) */
     if (p->addr.sa.sa_family == AF_INET && dv_inbound(&p->addr) && p->addr.in.sin_zero[0]) {
         char name[sizeof(p->addr.in.sin_zero) + 1];
         memcpy(name, p->addr.in.sin_zero, sizeof(p->addr.in.sin_zero));
