@@ -262,7 +262,8 @@
   Скрипт службы pfSense (`packaging/pfsense`: модули ipfw и ipdivert, правила
   ipfw через `--firewall ipfw`), e2e в образе FreeBSD. Релиз собирает и
   FreeBSD, OpenBSD (x86_64, aarch64; динамически, как требует libc BSD),
-  архивы содержат `packaging/` и фейки `files/fake`; zig 0.17.1. В `geneva
+  архивы содержат `packaging/` и фейки `files/fake`; BSD собираются zig
+  0.17.1, остальные — прежним 0.14.1 (в libc zig 0.17 нет `__sync` для armv5). В `geneva
   version --json` — признаки расширений `ext_*` (таблица в
   `docs/PROTOCOL.md`).
 - X14a: скрипты служб OpenRC (`packaging/openrc`), SysV init
