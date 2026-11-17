@@ -121,6 +121,24 @@ int fw_parse_filter_args(const args_t *a, int windows, fw_config *c, char **owne
  * are the probes' (server_side: outbound packets come from them). */
 void fw_eval_slots(fw_config *c, uint16_t base, uint32_t span, int udp);
 
+/* --ext-flowoffload hardware (zapret2 1.0.7, resolve_hw_offload in
+ * common/linux_iphelper.sh, after OpenWrt): the devices that go into the
+ * flowtable for the interface ifname. A bridge or a VLAN gives its lower
+ * devices (recursively; none: nothing), any other device itself; with
+ * wlan_prefix (Linux 6.17+) a Wi-Fi device also gives "NAME.sta*" (unless
+ * NAME is 11 bytes or longer) and a "NAME.staN" device gives "NAME.sta*".
+ * sysfs is the directory of /sys/class/net. Appends to out, which holds n
+ * names, skipping duplicates, up to max; returns the new count. Not Linux:
+ * ifname itself. */
+#define FW_DEVNAME 24
+int fw_hw_offload_devs(const char *sysfs, const char *ifname, int wlan_prefix, char (*out)[FW_DEVNAME], int n,
+                       int max);
+/* Linux 6.17 or later: flowtables take "NAME.sta*" (OpenWrt's check) */
+int fw_wlan_prefix(void);
+/* Tests: the sysfs directory (NULL: /sys/class/net) and wlan_prefix (-1:
+ * fw_wlan_prefix()) that the rules use */
+void fw_set_offload_env(const char *sysfs, int wlan_prefix);
+
 /* Applies the rules. With FW_AUTO tries nft, then iptables, and stores the
  * backend that worked in c->backend. Returns 0 or -1 with a message. */
 int fw_up(fw_config *c, sbuf *err);

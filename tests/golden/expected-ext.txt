@@ -1047,7 +1047,7 @@ table inet geneva_310 {
 		icmpv6 type time-exceeded ct mark & 0x20000000 == 0x20000000 counter drop
 	}
 	flowtable ft {
-		hook ingress priority 0; devices = { "eth0", "ppp0", "br-lan" };
+		hook ingress priority 0;
 		flags offload;
 	}
 	chain forward {
@@ -1069,6 +1069,9 @@ table inet geneva_310 {
 	}
 }
 EOF
+nft 'add flowtable inet geneva_310 ft { hook ingress priority 0; flags offload; devices = { "eth0" }; }' 2>/dev/null
+nft 'add flowtable inet geneva_310 ft { hook ingress priority 0; flags offload; devices = { "ppp0" }; }' 2>/dev/null
+nft 'add flowtable inet geneva_310 ft { hook ingress priority 0; flags offload; devices = { "br-lan" }; }' 2>/dev/null
 '/bin/true' up nft 310
 # nft: remove
 nft -f - <<'EOF'

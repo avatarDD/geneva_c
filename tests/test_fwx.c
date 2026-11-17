@@ -156,16 +156,27 @@ TEST(fwx_nft)
     CHECK_INT(count(s.data, "icmpv6 type"), 0);
     CHECK_INT(count(s.data, "\t\ticmp type time-exceeded"), 1);
 
-    /* flow offload: the WAN and LAN devices; queued flows exempt while queued */
+    /* flow offload: the WAN and LAN devices; queued flows exempt while queued.
+     * Hardware: the flowtable without devices, then each device on its own
+     * (none of these exists in the empty sysfs: each one is itself) */
     sb_reset(&s);
     c.ipv6 = 1;
     c.offload = 2;
-    c.nlan = 1;
+    c.nlan = 2;
     c.lan[0] = "br-lan";
+    c.lan[1] = "eth0"; /* also WAN: once */
+    fw_set_offload_env("/nonexistent", 1);
     fw_script(&c, FW_NFT, 1, &s);
-    CHECK_INT(count(s.data, "\tflowtable ft {\n\t\thook ingress priority 0; devices = { \"eth0\", \"ppp0\", \"br-lan\" "
-                            "};\n\t\tflags offload;\n\t}\n"),
+    fw_set_offload_env(NULL, -1);
+    CHECK_INT(count(s.data, "\tflowtable ft {\n\t\thook ingress priority 0;\n\t\tflags offload;\n\t}\n"), 1);
+    CHECK_INT(count(s.data, "devices = {"), 3);
+    CHECK_INT(count(s.data, "EOF\nnft 'add flowtable inet geneva_310 ft { hook ingress priority 0; flags offload; "
+                            "devices = { \"eth0\" }; }' 2>/dev/null\nnft 'add flowtable inet geneva_310 ft { hook "
+                            "ingress priority 0; flags offload; devices = { \"ppp0\" }; }' 2>/dev/null\nnft 'add "
+                            "flowtable inet geneva_310 ft { hook ingress priority 0; flags offload; devices = { "
+                            "\"br-lan\" }; }' 2>/dev/null\n"),
               1);
+    CHECK_INT(count(s.data, "b="), 0);
     CHECK_INT(count(s.data, "type filter hook forward priority -1; policy accept;\n\t\tmeta l4proto { tcp, udp } "
                             "oifname { \"eth0\", \"ppp0\" } jump flow_offload\n"),
               1);
@@ -174,9 +185,18 @@ TEST(fwx_nft)
     CHECK_INT(count(s.data, "\t\tudp dport { 443 } ct original packets 1-5 return\n"), 1);
     CHECK_INT(count(s.data, "\t\tflow add @ft\n"), 1);
 
-    /* software; a direction without a limit: the flow never offloads */
+    /* software: all devices in the flowtable at once */
     sb_reset(&s);
     c.offload = 1;
+    fw_script(&c, FW_NFT, 1, &s);
+    CHECK_INT(count(s.data, "\tflowtable ft {\n\t\thook ingress priority 0; devices = { \"eth0\", \"ppp0\", "
+                            "\"br-lan\" };\n\t}\n"),
+              1);
+    CHECK_INT(count(s.data, "add flowtable"), 0);
+    c.nlan = 1;
+
+    /* software; a direction without a limit: the flow never offloads */
+    sb_reset(&s);
     c.firstv[0][1] = 0;
     c.udp = 0;
     fw_script(&c, FW_NFT, 1, &s);
@@ -211,6 +231,146 @@ TEST(fwx_nft)
     CHECK_STR(s.data, "'/opt/pre' up iptables 310\n# --ext-flowoffload works with nft only\n'/opt/post' up iptables 310\n");
     sb_free(&s);
 }
+
+#  ifdef __linux__
+static void mk(const char *root, const char *path, const char *text)
+{
+    char p[512];
+    FILE *f;
+    snprintf(p, sizeof(p), "%s/%s", root, path);
+    if (!text) {
+        mkdir(p, 0755);
+        return;
+    }
+    f = fopen(p, "w");
+    if (f) {
+        fputs(text, f);
+        fclose(f);
+    }
+}
+
+static void rmtree(const char *root)
+{
+    char cmd[600];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", root);
+    if (system(cmd) != 0)
+        fprintf(stderr, "cannot remove %s\n", root);
+}
+
+static const char *devs_join(char (*d)[FW_DEVNAME], int n)
+{
+    static char buf[512];
+    buf[0] = 0;
+    for (int i = 0; i < n; i++)
+        snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), "%s%s", i ? " " : "", d[i]);
+    return buf;
+}
+
+/* zapret2 1.0.7's resolve_hw_offload over a made-up /sys/class/net */
+TEST(fwx_hw_devs)
+{
+    char root[] = "/tmp/geneva-sysfs-XXXXXX";
+    char d[32][FW_DEVNAME];
+    int n;
+    sbuf s;
+    fw_config c;
+    if (!mkdtemp(root)) {
+        CHECK(!"mkdtemp");
+        return;
+    }
+    /* br-lan: lan2, lan1, wlan0, the VLAN vl (over eth9) and wlan1.sta3 */
+    mk(root, "br-lan", NULL);
+    mk(root, "br-lan/bridge", NULL);
+    mk(root, "br-lan/uevent", "DEVTYPE=bridge\nINTERFACE=br-lan\n");
+    mk(root, "br-lan/lower_lan2", NULL);
+    mk(root, "br-lan/lower_lan1", NULL);
+    mk(root, "br-lan/lower_wlan0", NULL);
+    mk(root, "br-lan/lower_vl", NULL);
+    mk(root, "br-lan/lower_wlan1.sta3", NULL);
+    mk(root, "br-lan/lower_", NULL);
+    mk(root, "lan1", NULL);
+    mk(root, "lan2", NULL);
+    mk(root, "wlan0", NULL);
+    mk(root, "wlan0/phy80211", NULL);
+    mk(root, "vl", NULL);
+    mk(root, "vl/uevent", "INTERFACE=vl\nDEVTYPE=vlan\n");
+    mk(root, "vl/lower_eth9", NULL);
+    mk(root, "eth9", NULL);
+    mk(root, "wlan1.sta3", NULL);
+    mk(root, "wlan1.sta3/wireless", NULL);
+    mk(root, "longwifiname", NULL); /* 12 bytes: no ".sta*" */
+    mk(root, "longwifiname/phy80211", NULL);
+    mk(root, "br-empty", NULL);
+    mk(root, "br-empty/bridge", NULL);
+    /* a bridge in itself: the depth ends it */
+    mk(root, "loop", NULL);
+    mk(root, "loop/bridge", NULL);
+    mk(root, "loop/lower_loop", NULL);
+
+    n = fw_hw_offload_devs(root, "br-lan", 1, d, 0, 32);
+    CHECK_STR(devs_join(d, n), "lan1 lan2 eth9 wlan0 wlan0.sta* wlan1.sta*"); /* by lower_ name */
+    /* before Linux 6.17: no ".sta*" names */
+    n = fw_hw_offload_devs(root, "br-lan", 0, d, 0, 32);
+    CHECK_STR(devs_join(d, n), "lan1 lan2 eth9 wlan0 wlan1.sta3");
+    n = fw_hw_offload_devs(root, "vl", 1, d, 0, 32);
+    CHECK_STR(devs_join(d, n), "eth9");
+    n = fw_hw_offload_devs(root, "wlan0", 1, d, 0, 32);
+    CHECK_STR(devs_join(d, n), "wlan0 wlan0.sta*");
+    n = fw_hw_offload_devs(root, "longwifiname", 1, d, 0, 32);
+    CHECK_STR(devs_join(d, n), "longwifiname");
+    n = fw_hw_offload_devs(root, "a.sta", 1, d, 0, 32);
+    CHECK_STR(devs_join(d, n), "a.sta");
+    n = fw_hw_offload_devs(root, "a.sta1x", 1, d, 0, 32);
+    CHECK_STR(devs_join(d, n), "a.sta1x");
+    n = fw_hw_offload_devs(root, ".sta1", 1, d, 0, 32);
+    CHECK_STR(devs_join(d, n), ".sta1");
+    n = fw_hw_offload_devs(root, "x.sta1.sta22", 1, d, 0, 32);
+    CHECK_STR(devs_join(d, n), "x.sta1.sta*");
+    n = fw_hw_offload_devs(root, "nosuch", 1, d, 0, 32);
+    CHECK_STR(devs_join(d, n), "nosuch");
+    n = fw_hw_offload_devs(root, "br-empty", 1, d, 0, 32);
+    CHECK_INT(n, 0);
+    n = fw_hw_offload_devs(root, "loop", 1, d, 0, 32);
+    CHECK_INT(n, 0);
+    n = fw_hw_offload_devs(root, "../etc", 1, d, 0, 32);
+    CHECK_INT(n, 0);
+    /* appends without duplicates, up to max */
+    n = fw_hw_offload_devs(root, "lan1", 1, d, 0, 32);
+    n = fw_hw_offload_devs(root, "br-lan", 1, d, n, 32);
+    CHECK_STR(devs_join(d, n), "lan1 lan2 eth9 wlan0 wlan0.sta* wlan1.sta*");
+    n = fw_hw_offload_devs(root, "br-lan", 1, d, 0, 2);
+    CHECK_STR(devs_join(d, n), "lan1 lan2");
+
+    /* the rules: the bridge's devices, the bridge itself when none went in */
+    fw_config_default(&c);
+    c.offload = 2;
+    c.iface = "eth9";
+    c.nlan = 2;
+    c.lan[0] = "br-lan";
+    c.lan[1] = "br-empty";
+    sb_init(&s);
+    fw_set_offload_env(root, 0);
+    fw_script(&c, FW_NFT, 1, &s);
+    fw_set_offload_env(NULL, -1);
+    CHECK_INT(count(s.data, "EOF\nnft 'add flowtable inet geneva_310 ft { hook ingress priority 0; flags offload; "
+                            "devices = { \"eth9\" }; }' 2>/dev/null\nb=\n"),
+              1);
+    CHECK_INT(count(s.data, "devices = { \"lan1\" }; }' 2>/dev/null && b=1\n"), 1);
+    CHECK_INT(count(s.data, "devices = { \"wlan1.sta3\" }; }' 2>/dev/null && b=1\n[ -n \"$b\" ] || nft 'add "
+                            "flowtable inet geneva_310 ft { hook ingress priority 0; flags offload; devices = { "
+                            "\"br-lan\" }; }' 2>/dev/null\nb=\n[ -n \"$b\" ] || nft 'add flowtable inet geneva_310 ft { "
+                            "hook ingress priority 0; flags offload; devices = { \"br-empty\" }; }' 2>/dev/null\n"),
+              1);
+    /* eth9 is the WAN and under the bridge: tried twice, harmless */
+    CHECK_INT(count(s.data, "devices = { \"eth9\" }"), 2);
+    /* down: the table with its flowtable */
+    sb_reset(&s);
+    fw_script(&c, FW_NFT, 0, &s);
+    CHECK_INT(count(s.data, "add flowtable"), 0);
+    rmtree(root);
+    sb_free(&s);
+}
+#  endif
 
 TEST(fwx_iptables)
 {
@@ -563,6 +723,9 @@ void suite_fwx(void)
     RUN(fwx_first);
     RUN(fwx_iflist);
     RUN(fwx_nft);
+#  ifdef __linux__
+    RUN(fwx_hw_devs);
+#  endif
     RUN(fwx_iptables);
     RUN(fwx_windivert_ifaces);
     RUN(fwx_options);
