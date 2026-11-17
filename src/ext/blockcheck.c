@@ -1227,7 +1227,8 @@ void bc_print(const bc_run *b, int ndomains, FILE *out)
             if (h[i].gen)
                 fprintf(out, "  geneva: %s\n", h[i].gen);
         }
-    qsort(h, nh, sizeof(*h), by_coverage);
+    if (nh) /* qsort takes no NULL, even for 0 elements */
+        qsort(h, nh, sizeof(*h), by_coverage);
     fprintf(out, "\n* COVERAGE\n");
     for (size_t i = 0; i < nh; i++) {
         fprintf(out, "%zu/%d : %s\n", h[i].count, ndomains, h[i].key);
@@ -1287,7 +1288,8 @@ void bc_print_json(const bc_run *b, int ndomains, sbuf *out)
             sb_free(&t);
         }
     jw_arr_end(&w);
-    qsort(h, nh, sizeof(*h), by_coverage);
+    if (nh) /* qsort takes no NULL, even for 0 elements */
+        qsort(h, nh, sizeof(*h), by_coverage);
     jw_key(&w, "coverage");
     jw_arr(&w);
     for (size_t i = 0; ndomains > 1 && i < nh; i++) {
