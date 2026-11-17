@@ -1,12 +1,12 @@
 /*
- * Blobs of the extensions (docs/EXT_ROADMAP.md, J1, J2): named byte strings
+ * Blobs of the extensions (docs/PARITY.md, J1, J2): named byte strings
  * the x-actions send as fakes or fill patterns with ("blob=fake_default_tls",
  * "pattern=0x1603", "seqovl=#fake_default_tls"), as zapret2's --blob.
  *
  *   --ext-blob NAME:0xHEX            the bytes of the hex string
  *   --ext-blob NAME:[+OFS]@FILE      a file from offset OFS (FILE alone too)
  *
- * Built in, made here rather than copied (decision 11.3 of the roadmap):
+ * Built in, made here rather than copied:
  *   fake_default_tls    a TLS 1.3 ClientHello for www.iana.org, 680 bytes,
  *                       ending in a padding extension (what tlsmod=padencap
  *                       grows)

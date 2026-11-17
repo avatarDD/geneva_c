@@ -1,7 +1,7 @@
 #!/bin/sh
 # Golden snapshots of geneva's output: every command in cases.txt must print
 # (stdout, stderr and exit code) exactly what expected.txt holds. They pin the
-# behaviour of the build without --ext (docs/EXT_ROADMAP.md, stage X0); in a
+# behaviour of the build without --ext (docs/EXT.md); in a
 # build with --ext the cases tagged "ext" are run again with --ext and must
 # match too, because --ext changes nothing for strategies without x-actions.
 #

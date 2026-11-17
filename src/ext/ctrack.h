@@ -1,5 +1,5 @@
 /*
- * Userspace conntrack of the extensions (docs/EXT_ROADMAP.md, 4.2; D1-D8,
+ * Userspace conntrack of the extensions (docs/PARITY.md, D1-D8,
  * E8): a port of zapret2's nfq2/conntrack.c with its semantics, so that
  * positions and ranges mean here what they mean in nfqws2.
  *

@@ -1,5 +1,5 @@
 /*
- * The autolist of the extensions (docs/EXT_ROADMAP.md, C5): zapret2's
+ * The autolist of the extensions (docs/PARITY.md, C5): zapret2's
  * --hostlist-auto (nfq2/desync.c auto_hostlist_*, process_retrans_fail,
  * process_udp_fail and the incoming checks). A flow of a profile with an
  * autolist whose host is not in the profile's lists (and not excluded) is

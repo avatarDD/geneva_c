@@ -1,5 +1,5 @@
 /*
- * "geneva resolve --ext" and "geneva ip2net --ext" (docs/EXT_ROADMAP.md,
+ * "geneva resolve --ext" and "geneva ip2net --ext" (docs/PARITY.md,
  * P7): zapret2's mdig (a resolver of name lists with threads) and ip2net
  * (addresses into subnets). Only in a build with the extensions.
  */

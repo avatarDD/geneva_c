@@ -1,6 +1,6 @@
 /*
  * One fuzz target of src/ext/fuzz.c for libFuzzer or AFL++
- * (docs/EXT_ROADMAP.md, 7.2; built by tests/fuzz/run.sh):
+ * (docs/EXT.md, X7c; built by tests/fuzz/run.sh):
  *
  *   clang -fsanitize=fuzzer,address,undefined -DFUZZ_TARGET='"l7"' ...
  *

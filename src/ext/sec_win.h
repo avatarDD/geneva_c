@@ -1,5 +1,5 @@
 /*
- * winws2's sandbox (docs/EXT_ROADMAP.md, N3; zapret2's nfq2/darkmagic.c,
+ * winws2's sandbox (docs/PARITY.md, N3; zapret2's nfq2/darkmagic.c,
  * win_sandbox): once packets flow, geneva run --ext on Windows
  *   - removes every privilege of its token but SeChangeNotifyPrivilege,
  *   - lowers its integrity to Low: no writes to files, registry keys and

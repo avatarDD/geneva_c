@@ -1,5 +1,5 @@
 #!/bin/sh
-# The static Linux build on Android (stage X13c of docs/EXT_ROADMAP.md, A6):
+# The static Linux build on Android (docs/EXT.md, X13c; docs/PARITY.md, A6):
 # a chroot shaped like Android's root (/system/build.prop, /data/local/tmp,
 # no /etc/resolv.conf, no /tmp, no /var/run) runs the binary as it is. Needs
 # root and a static build (make STATIC=1, e.g. with musl-gcc).

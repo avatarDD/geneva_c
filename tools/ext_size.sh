@@ -1,5 +1,5 @@
 #!/bin/sh
-# Size budget of the --ext extensions (docs/EXT_ROADMAP.md, 6.1): builds the
+# Size budget of the --ext extensions (docs/EXT.md): builds the
 # router binary with and without src/ext/ and fails when the stripped
 # difference is above LIMIT bytes. There is no fixed cap: the limit only
 # catches unexpected growth and is raised as each stage lands.

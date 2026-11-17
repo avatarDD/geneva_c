@@ -1,5 +1,5 @@
 #!/bin/sh
-# The surgical path (stage X10b of docs/EXT_ROADMAP.md): a connection the
+# The surgical path (docs/EXT.md, X10b): a connection the
 # engine is done with gets the healthy mark in its conntrack entry and its
 # later packets skip the queue. Checked with iptables and nft, one and four
 # workers: the download arrives whole, the conntrack entry carries the

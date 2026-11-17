@@ -41,6 +41,15 @@ WinDivert).
   Kazakhstan.
 - **Lab censors** (`geneva censor`): Geneva's censors 1–11 and a DNS
   censor, to test strategies on a test bed.
+- **`--ext` extensions** (since 2.0): parity with zapret2 (nfqws2,
+  winws2, dvtws2). Conntrack, L7 recognition and ClientHello reassembly,
+  x-actions (`xfake`, `xsplit`, `xdisorder`, `xoob`…), combinators,
+  profiles with host and IP lists, the autolist, two-sided obfuscation,
+  zapret2's firewall rules, `geneva blockcheck`. The `--ext-auto` detector
+  finds blocked resources by itself and picks a strategy for them (with
+  confirmation or automatically). Without `--ext` everything works as in
+  1.x. What zapret2 has and geneva does or does not: `docs/PARITY.md`
+  (Russian); the options: `docs/EXT.md` (Russian).
 - **Offline** (`geneva apply`, `geneva check`): a strategy over a pcap,
   validation and the canonical form of strategies.
 
@@ -207,10 +216,8 @@ The documents are in Russian.
 | server side and `geneva agent` | `docs/SERVER_SIDE.md` |
 | lab censors and the test bed | `docs/CENSOR.md` |
 | embedding in zapret-gui and Zapret2_AutoTuner | `docs/INTEGRATION.md` |
-| work plan | `docs/PLAN.md` |
 | `--ext` extensions: options and differences (Russian) | `docs/EXT.md` |
 | parity with zapret2: what is there and what is not (Russian) | `docs/PARITY.md` |
-| `--ext` design: parity with zapret2, autonomous adaptation (Russian) | `docs/EXT_ROADMAP.md` |
 | version history | `CHANGELOG.md` |
 
 A reference for AI agents that work on this repository or embed geneva:

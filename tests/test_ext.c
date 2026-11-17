@@ -1,4 +1,4 @@
-/* The --ext switch (stage X0 of docs/EXT_ROADMAP.md). */
+/* The --ext switch (docs/EXT.md). */
 #include <string.h>
 
 #include "args.h"

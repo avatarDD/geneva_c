@@ -1,5 +1,5 @@
 /*
- * L7 recognition of the extensions (docs/EXT_ROADMAP.md, E1, E2, E5): the
+ * L7 recognition of the extensions (docs/PARITY.md, E1, E2, E5): the
  * protocols and payload types of zapret2 (nfq2/protocol.c, MIT, see
  * docs/EXT.md) with the same names, order and checks, so that
  * "--payload=..." and "--filter-l7=..." lists mean the same here.

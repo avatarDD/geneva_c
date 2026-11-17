@@ -1,5 +1,5 @@
 /*
- * The detector of --ext-auto (docs/EXT_ROADMAP.md, 4.4; C5, E7, K3, K4):
+ * The detector of --ext-auto (docs/PARITY.md, C5, E7, K3, K4):
  * what the observation plane sees of a flow (the first packets of each
  * direction and the ICMP errors, src/ext/nflog.c) gives the flow an
  * outcome, and the outcomes of a key's flows decide whether the key is

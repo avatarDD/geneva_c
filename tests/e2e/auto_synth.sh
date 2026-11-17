@@ -1,6 +1,6 @@
 #!/bin/sh
-# --ext-auto observe on traffic without a censor (stage X9c, the criterion of
-# docs/EXT_ROADMAP.md, section 10): long-polls, WebSocket-style connections
+# --ext-auto observe on traffic without a censor (docs/EXT.md, X9c,
+# the criterion against false alarms): long-polls, WebSocket-style connections
 # and 50 MB downloads for DURATION seconds (default 1800) must give no key a
 # class and the link no LINK_DEGRADED. Needs root, iproute2, python3, curl,
 # tc, and nft or iptables.

@@ -1,5 +1,5 @@
 /*
- * --ext-auto (docs/EXT.md, X9; docs/EXT_ROADMAP.md, 4.4 and 4.8): the
+ * --ext-auto (docs/EXT.md, X9): the
  * observation plane and the detector of the running engine. "observe"
  * watches the first packets of every flow the client starts, on any port,
  * through NFLOG (src/ext/nflog.c; on Windows, every packet), gives each flow an outcome and each key

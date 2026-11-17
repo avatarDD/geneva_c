@@ -1,9 +1,10 @@
 # Паритет с zapret2
 
-Итог плана `docs/EXT_ROADMAP.md` (этапы X0–X14) к выпуску 2.0: каждая
-строка матрицы паритета (раздел 3.2 плана, 132 строки) — что из неё есть
-в geneva_c 2.0. Всё перечисленное работает только с `--ext`; без него
-geneva ведёт себя как 1.x.
+Расширения `--ext` (с 2.0) повторяют возможности zapret2 1.0.6 (nfqws2,
+winws2, dvtws2 и его скрипты). Ниже — матрица паритета: каждая
+возможность zapret2 (132 строки, ID строк используются в комментариях
+кода и тестах) и что из неё есть в geneva_c 2.0. Всё перечисленное
+работает только с `--ext`; без него geneva ведёт себя как 1.x.
 
 Статусы:
 
@@ -11,8 +12,8 @@ geneva ведёт себя как 1.x.
 - **есть (до 2.0)** — было и без `--ext`;
 - **с отличием** — есть, но поведение расходится; главное отличие указано
   в строке, полный список — в абзаце «Отличия» раздела;
-- **не переносится** — решение владельца проекта (раздел 11 плана): без
-  Lua (11.1) переносить нечего или незачем.
+- **не переносится** — без Lua (geneva — C11 и только libc) переносить
+  нечего или незачем.
 
 Итого: 88 строк «есть» (из них 3 — до 2.0), 38 «с отличием», 6 «не
 переносится».
@@ -30,7 +31,7 @@ geneva ведёт себя как 1.x.
 | A3 | `--wf-raw`, `--wf-raw-part` (OR), `--wf-raw-filter` (AND) | `--wf-raw`, `--wf-raw-part`, `--wf-raw-filter` (сборка выражения), прежние `--filter`, `--filter-file` | есть | X7b |
 | A4 | `--wf-tcp-empty` (пустые ACK не перехватываются), `--wf-filter-lan`, `--wf-filter-loopback`, `--wf-priority`, `--wf-dup-check`, `--wf-save` | `--wf-tcp-empty`, `--wf-filter-lan`, `--wf-filter-loopback`, `--wf-priority`, `--wf-save`; `--wf-dup-check` принимается и ничего не делает | с отличием: `--wf-dup-check` ничего не делает | X7b |
 | A5 | BSD: divert-сокет FreeBSD (PF_DIVERT в 14+), OpenBSD pf `divert-packet`, `--port`, `--sockarg` | `eng_divert.c`: FreeBSD (ipfw, pf) и OpenBSD (pf `divert-packet`), `--firewall ipfw\|pf`; порт — `-q`, без `--port` и `--sockarg` | с отличием: нет `--port`, `--sockarg`; часть `--ext` только на Linux | X13b |
-| A6 | Android-сборка, вывод лога в logcat | статические сборки Linux работают на Android (`--log-file`, stderr); без logcat (решение 11.4) | с отличием: нет logcat (11.4) | X13c |
+| A6 | Android-сборка, вывод лога в logcat | статические сборки Linux работают на Android (`--log-file`, stderr); без logcat | с отличием: нет logcat | X13c |
 | A7 | raw-отправка: `IPPROTO_RAW`, `SO_MARK`, `IP_NODEFRAG`, `IP_FREEBIND`/`IPV6_FREEBIND`, `SO_PRIORITY 6`, `--bind-fix4/6` (`SO_BINDTODEVICE` на `ifout`), `--fwmark` | `IP_FREEBIND`/`IPV6_FREEBIND`, `SO_PRIORITY`, `--ext-bind-fix4/6`, `ifout` из исходного пакета, `--mark` | есть | X5a |
 | A8 | Linux: `ifin/ifout` из NFQUEUE (ioctl `SIOCGIFNAME` через один сокет) | `ifin/ifout` доступны в условиях и для `bind-fix` | есть | X3 |
 
@@ -38,7 +39,7 @@ geneva ведёт себя как 1.x.
 
 | ID | zapret2 | geneva_c 2.0 | Статус | Раздел |
 |---|---|---|---|---|
-| B1 | несколько профилей в одном процессе: `--new[=name]`, `--skip`, `--name`, `--template`, `--import`, `--cookie` | профили `--new`, `--name`, `--skip`, `--template`, `--import` в CLI и в `--ext-profile FILE`; без `--cookie` (решение 11.1) | с отличием: нет `--cookie`; стратегия шаблона заменяется, а не дописывается | X6a |
+| B1 | несколько профилей в одном процессе: `--new[=name]`, `--skip`, `--name`, `--template`, `--import`, `--cookie` | профили `--new`, `--name`, `--skip`, `--template`, `--import` в CLI и в `--ext-profile FILE`; без `--cookie` (нет Lua) | с отличием: нет `--cookie`; стратегия шаблона заменяется, а не дописывается | X6a |
 | B2 | `--filter-l3=ipv4,ipv6` | `--filter-l3` на профиль | есть | X6a |
 | B3 | `--filter-tcp/udp=[~]p1-p2,...\|*` | `--filter-tcp`, `--filter-udp` на профиль, с `~` и `*` | есть | X6a |
 | B4 | `--filter-icmp=type[:code]\|*`, `--filter-ipp=proto` | `--filter-icmp`, `--filter-ipp` на профиль | есть | X6a |
@@ -123,7 +124,7 @@ geneva ведёт себя как 1.x.
 | G23 | `oob` (`char/byte`, `urp=b\|e\|маркер`; с SYN: исходящий seq−1 на весь поток, входящий ack+1) | `xoob{…}` на seqtrack | с отличием: ack переводится точно, повтор сообщения изменён | X8 |
 | G24 | `udplen` (`min, max, increment` ±, `pattern, pattern_offset`) | `xudplen{…}` | есть | X5b |
 | G25 | `dht_dn` (`dn=N`, правка bencode) | `xdhtdn{dn}` | есть | X5b |
-| G26 | вспомогательные: `pass`, `luaexec`, `pktdebug`, `argdebug`, `posdebug`, `detect_payload_str` | `xlog{…}` (события `ext_pkt`), `xtag{pattern,payload}`; без `luaexec` (решение 11.1) | с отличием: нет `luaexec` (11.1) | X5b |
+| G26 | вспомогательные: `pass`, `luaexec`, `pktdebug`, `argdebug`, `posdebug`, `detect_payload_str` | `xlog{…}` (события `ext_pkt`), `xtag{pattern,payload}`; без `luaexec` (нет Lua) | с отличием: нет `luaexec` (нет Lua) | X5b |
 
 ## H. Стандартные аргументы (fooling, отправка, ip_id, ipfrag)
 
@@ -140,7 +141,7 @@ geneva ведёт себя как 1.x.
 | H9 | `tcp_ts_up` (TS-опция первой; «badack без badseq») | `tsup` | есть | X5a |
 | H10 | `tcp_nop_del` (убрать NOP ради места под MD5) | `nopdel` | есть | X5a |
 | H11 | `badsum` | плюс аргумент `badsum` | есть | X5a |
-| H12 | `fool=функция` (свой fooling) | не переносится (решение 11.1); встроенный набор fooling | не переносится | — |
+| H12 | `fool=функция` (свой fooling) | не переносится (нет Lua); встроенный набор fooling | не переносится | — |
 | H13 | `repeats`, `ifout`, `fwmark` (бит десинхронизации ставится всегда) | общие аргументы | есть | X5a |
 | H14 | `ip_id=seq\|rnd\|zero\|none`, `ip_id_conn` (непрерывный seq на поток) | `ipid=` | есть | X5a |
 | H15 | `ipfrag[=функция]`, `ipfrag_disorder`, `ipfrag_pos_tcp` (32), `_udp` (8), `_icmp` (8), `ipfrag_pos` (32), `ipfrag_next` (иной next-header второго фрагмента v6) | `ipfrag=` с теми же параметрами | есть | X5a |
@@ -152,7 +153,7 @@ geneva ведёт себя как 1.x.
 | ID | zapret2 | geneva_c 2.0 | Статус | Раздел |
 |---|---|---|---|---|
 | J1 | `--blob=name:[+ofs]@file\|0xHEX` (до 16 КБ) | `--ext-blob ИМЯ:0xHEX` (до 16 КБ), `--ext-blob ИМЯ:[+ofs]@FILE` (до 1 МБ); байты прямо в параметре (`blob=0x…`) | с отличием: имя опции `--ext-blob`; из файла до 1 МБ | X5a |
-| J2 | встроенные `fake_default_tls` (680 байт), `fake_default_http`, `fake_default_quic`; файлы `files/fake/*.bin` (QUIC разных клиентов, DTLS, DHT, Discord, STUN, WireGuard, RDP, NTP, ISAKMP, BGP, bitcoin…) | свои генераторы (TLS ClientHello, HTTP, QUIC Initial с шифрованием); фейки BGP, ISAKMP, RDP, bitcoin — файлы zapret2 в `files/fake` (решение 11.3) | есть | X5a |
+| J2 | встроенные `fake_default_tls` (680 байт), `fake_default_http`, `fake_default_quic`; файлы `files/fake/*.bin` (QUIC разных клиентов, DTLS, DHT, Discord, STUN, WireGuard, RDP, NTP, ISAKMP, BGP, bitcoin…) | свои генераторы (TLS ClientHello, HTTP, QUIC Initial с шифрованием); фейки BGP, ISAKMP, RDP, bitcoin — файлы zapret2 в `files/fake` | есть | X5a |
 | J3 | `tls_mod`: `rnd`, `rndsni`, `sni=`, `dupsid`, `padencap`, `none` | `tlsmod=` в `xfake`, `xsyndata` | с отличием: `tlsmod` только на TCP | X5a |
 | J4 | полный разбор и сборка TLS (записи, многозаписные handshake, расширения SNI/ALPN/versions/groups/sigalgs/key_share/psk_modes/QUIC TP) | `ext/tls.c` | есть | X5a |
 | J5 | `genhost(len, шаблон)` — случайное имя той же длины | в `ext/tls.c` / `xhostfake` | есть | X5a |
@@ -165,9 +166,9 @@ geneva ведёт себя как 1.x.
 | K2 | `standard_hostkey`: имя хоста, `nld=N` (обрезать до N-го уровня), `reqhost`, иначе IP | ключ тюнера `nld=N`, `reqhost`, иначе адрес | есть | X11a |
 | K3 | `standard_failure_detector`: ретрансмиссии (`retrans`, `maxseq`), RST в `inseq`, DPI-редирект, UDP `udp_out/udp_in`, `reset` (RST ретранслятору), `no_rst`, `no_http_redirect` | детекторы `--ext-auto` (классы X9a–X9c: в том числе заморозка, замедление, RST с чужим TTL) | с отличием: RST после данных сервера — неудача только с чужим TTL | X9a, X9b |
 | K4 | `standard_success_detector`: исходящий seq > `maxseq`, входящий > `inseq`, UDP `in > udp_in` | критерии успеха класса, с поправкой на заморозку | есть | X9a, X11d |
-| K5 | пользовательские детекторы по имени функции | не переносится (решение 11.1); детекторы параметризуются | не переносится | — |
+| K5 | пользовательские детекторы по имени функции | не переносится (нет Lua); детекторы параметризуются | не переносится | — |
 | K6 | `condition` (`iff, neg, instances`), `per_instance_condition` (`cond, cond_neg`), `stopif`, `repeater` (`repeats, instances, iff, neg, stop, clear`) | комбинаторы `xwhen`, `xstop`, `xrepeat` (5.1) | есть | X5c |
-| K7 | условия `cond_true/false`, `cond_random` (`percent`), `cond_payload_str` (`pattern`), `cond_tcp_has_ts`, `cond_lua` | условия `rnd:P`, `has:строка`, `tcpts`, триггерные выражения; без `cond_lua` (решение 11.1) | с отличием: нет `cond_lua` (11.1) | X5c |
+| K7 | условия `cond_true/false`, `cond_random` (`percent`), `cond_payload_str` (`pattern`), `cond_tcp_has_ts`, `cond_lua` | условия `rnd:P`, `has:строка`, `tcpts`, триггерные выражения; без `cond_lua` (нет Lua) | с отличием: нет `cond_lua` (нет Lua) | X5c |
 | K8 | вложенные оркестраторы, `execution_plan` | вложенные комбинаторы в дереве | есть | X5c |
 | K9 | состояние хостов `autostate` в памяти процесса | состояние тюнера и лечения в памяти и в `--ext-state FILE` | с отличием: априори без `sdb`; состояние переживает перезапуск | X11b, X11c |
 
@@ -186,7 +187,7 @@ geneva ведёт себя как 1.x.
 |---|---|---|---|---|
 | M1 | `pcap` (`file, keep`) — запись пакетов функцией | `xpcap{file}` в любой точке дерева | с отличием: пишет пакет в его состоянии в этой точке дерева | X5b |
 | M2 | таймеры Lua (`timer_set/del/info/enum`), `--intercept=0` (только Lua и таймеры) | не переносится: отложенная отправка (`xsend{delay}`) есть | не переносится | — |
-| M3 | Lua C API: dissect/reconstruct, rawsend, csum, crypto, gzip, resolve_pos, get_source_ip, get_ifaddrs, time | не переносится как API (решение 11.1); возможности — x-действия | не переносится | — |
+| M3 | Lua C API: dissect/reconstruct, rawsend, csum, crypto, gzip, resolve_pos, get_source_ip, get_ifaddrs, time | не переносится как API (нет Lua); возможности — x-действия | не переносится | — |
 | M4 | `zapret-tests.lua` — самопроверка C API | юнит-тесты модулей, e2e на стенде, сверка с nfqws2 1.0.6 | есть | — |
 
 ## N. Безопасность и эксплуатация
@@ -211,7 +212,7 @@ geneva ведёт себя как 1.x.
 | O3 | connbytes отдельно по направлениям: `TCP_PKT_OUT=20`, `TCP_PKT_IN=10`, `UDP_PKT_OUT=5`, `UDP_PKT_IN=3` | `--ext-first tcp-out=N,tcp-in=M,udp-out=…` | есть | X7b |
 | O4 | `FILTER_TTL_EXPIRED_ICMP`: ct mark на потоках с фейками и отбрасывание входящих ICMP time-exceeded по нему (иначе фейк с малым TTL вызывает ошибку сокета у клиента) | то же; правила снимаются при выходе | есть | X7b |
 | O5 | `FLOWOFFLOAD=donttouch\|none\|software\|hardware`: исключение потоков из flowtable, пока они нужны очереди | `--ext-flowoffload software\|hardware` (nft): свой flowtable, потоки не выгружаются, пока нужны очереди | с отличием: только nft | X7b |
-| O6 | метки `DESYNC_MARK=0x40000000`, `DESYNC_MARK_POSTNAT=0x20000000` | метка не меняется; предупреждение о пересечении при старте (решение 11.5) | есть | X7b |
+| O6 | метки `DESYNC_MARK=0x40000000`, `DESYNC_MARK_POSTNAT=0x20000000` | метка не меняется; предупреждение о пересечении при старте | есть | X7b |
 | O7 | LAN/WAN-интерфейсы (`IFACE_LAN/WAN/WAN6`, `OPENWRT_LAN/WAN4/WAN6`) | `--ext-wan`, `--ext-lan` (до 8 интерфейсов) | с отличием: один список на IPv4 и IPv6 | X7b |
 | O8 | хуки до и после правил (`INIT_FW_*_HOOK`), `DISABLE_IPV4/6` | `--fw-hook-pre/post FILE` (аргументы `up\|down BACKEND QUEUE`) | с отличием: аргументы вместо переменных окружения | X7b |
 
@@ -222,8 +223,8 @@ geneva ведёт себя как 1.x.
 | P1 | проверка без обхода (curl, полный ответ), прекращение при кодах curl 1, 2, 3, 4, 6, 27 | baseline, коды результата проб | есть (до 2.0) | — |
 | P2 | проверка подмены DNS через DoH | `geneva blockcheck`: DNS по UDP и TCP, сравнение с публичными резолверами, DoH через curl | с отличием: адреса сравниваются целиком; подмена ловится и по TCP | X12b |
 | P3 | тесты блокировки по IP (заблокированный домен на чужом IP и наоборот) и порта (netcat) | класс `untreatable` (`--ext-auto`), `geneva blockcheck` с тестами по IP | есть | X9a, X12b |
-| P4 | сетка стратегий `blockcheck2.d/standard`: http-моды; multisplit/multidisorder по `method+2, midsld` (HTTP) и `2, 1, sniext+1, sniext+4, host+1, midsld, 1,midsld, 1,midsld,1220, 1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1` (TLS); всё то же с `wssize:wsize=1:scale=6`; `tcpseg` с `repeats` 1/20/100/260; `oob urp=b,0,2,midsld`; seqovl с `padencap`; `syndata`; `fake` с TTL 1–12, autottl delta 1–5 (3–20), fooling `tcp_md5`, `badsum`, `tcp_seq=-3000`, `tcp_seq=1000000`, `tcp_ack=-66000:tcp_ts_up`, `tcp_ts=-1000`, `tcp_flags_unset=ACK`, `tcp_flags_set=SYN` (+ IPv6 расширения); «ttl=1 у пустого ACK после SYN,ACK»; «дубль SYN с MD5»; faked/hostfake; комбинации с фейком только если без него не вышло; QUIC: `fake` repeats 1–20, IPv6 расширения, `ipfrag_pos_udp` 8–64 | `geneva blockcheck --ext`: вся сетка `blockcheck2.d/standard`, строки переводятся в стратегии geneva; строки с Lua (`luaexec`) — неудача | с отличием: строки с Lua не переводятся (11.1) | X12b |
+| P4 | сетка стратегий `blockcheck2.d/standard`: http-моды; multisplit/multidisorder по `method+2, midsld` (HTTP) и `2, 1, sniext+1, sniext+4, host+1, midsld, 1,midsld, 1,midsld,1220, 1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1` (TLS); всё то же с `wssize:wsize=1:scale=6`; `tcpseg` с `repeats` 1/20/100/260; `oob urp=b,0,2,midsld`; seqovl с `padencap`; `syndata`; `fake` с TTL 1–12, autottl delta 1–5 (3–20), fooling `tcp_md5`, `badsum`, `tcp_seq=-3000`, `tcp_seq=1000000`, `tcp_ack=-66000:tcp_ts_up`, `tcp_ts=-1000`, `tcp_flags_unset=ACK`, `tcp_flags_set=SYN` (+ IPv6 расширения); «ttl=1 у пустого ACK после SYN,ACK»; «дубль SYN с MD5»; faked/hostfake; комбинации с фейком только если без него не вышло; QUIC: `fake` repeats 1–20, IPv6 расширения, `ipfrag_pos_udp` 8–64 | `geneva blockcheck --ext`: вся сетка `blockcheck2.d/standard`, строки переводятся в стратегии geneva; строки с Lua (`luaexec`) — неудача | с отличием: строки с Lua не переводятся (нет Lua) | X12b |
 | P5 | уровни `quick/standard/force/veryquick`, `REPEATS`, `PARALLEL`, IPv4/IPv6, HTTP / TLS 1.2 / TLS 1.3 / HTTP3 | `--level`, `--repeats`, `--test http3` (curl `--http3-only`) | есть | X12b |
 | P6 | отчёт: стратегии по доменам, пересечение по всем доменам, покрытие (сколько доменов закрывает стратегия) | отчёт SUMMARY, COMMON, COVERAGE; `--json` | есть | X12b |
-| P7 | `mdig` (многопоточный резолвер списков), `ip2net` (свёртка IP в подсети), скрипты загрузки списков (antifilter, antizapret, reestr, refilter, ipban) | `geneva resolve`, `geneva ip2net`; загрузчики списков — в zapret-gui (решение 11.6) | с отличием: загрузчики списков — в zapret-gui (11.6) | X12a |
+| P7 | `mdig` (многопоточный резолвер списков), `ip2net` (свёртка IP в подсети), скрипты загрузки списков (antifilter, antizapret, reestr, refilter, ipban) | `geneva resolve`, `geneva ip2net`; загрузчики списков — в zapret-gui | с отличием: загрузчики списков — в zapret-gui | X12a |
 | P8 | установщики и init-скрипты: openrc, openwrt, pfsense, runit, s6, systemd, sysv | `packaging/`: OpenRC, runit, s6, SysV, pfSense | есть | README |

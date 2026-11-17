@@ -1,7 +1,7 @@
 # geneva_c — rules for agents
 
 C port of Geneva (Genetic Evasion): the strategy engine and the genetic
-search in one static binary for routers and PCs. Plan: `docs/PLAN.md`.
+search in one static binary for routers and PCs. Docs: `README.md`, `docs/`.
 
 Read `.claude/skills/geneva/SKILL.md` before changing code: repository
 map, build and tests, strategy language, commands, protocol, integration.

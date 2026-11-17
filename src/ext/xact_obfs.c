@@ -1,6 +1,6 @@
 /*
  * The two-sided obfuscation of zapret2's lua/zapret-obfs.lua (docs/
- * EXT_ROADMAP.md, L1-L4): the same action runs on both ends, in the
+ * PARITY.md, L1-L4): the same action runs on both ends, in the
  * outbound forest of one and the inbound forest of the other.
  *
  *   xwgobfs{secret=S;padmin=0;padmax=16}  WireGuard's handshake messages

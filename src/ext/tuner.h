@@ -1,5 +1,5 @@
 /*
- * The tuner of the extensions (docs/EXT_ROADMAP.md, 4.7; K1, K2, K9): a
+ * The tuner of the extensions (docs/PARITY.md, K1, K2, K9): a
  * profile with arms (--ext-arm STRATEGY, repeatable: arm 1, 2, ...) runs on
  * each key the arm the key is at, and the outcomes of the key's flows move
  * it to another arm.

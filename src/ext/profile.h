@@ -1,5 +1,5 @@
 /*
- * Profiles of the extensions (docs/EXT_ROADMAP.md, 4.3; B1-B6, B8): several
+ * Profiles of the extensions (docs/PARITY.md, B1-B6, B8): several
  * strategies in one process, each for its own traffic, as zapret2's desync
  * profiles (nfq2/desync.c dp_match, dp_find, dp_rediscovery; nfq2/filter.c).
  *

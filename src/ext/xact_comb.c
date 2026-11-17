@@ -1,5 +1,5 @@
 /*
- * Combinators (docs/EXT_ROADMAP.md K6-K8): zapret2's orchestrators of
+ * Combinators (docs/PARITY.md, K6-K8): zapret2's orchestrators of
  * zapret-auto.lua as x-actions that steer the packet through their
  * subtrees.
  *
@@ -11,7 +11,7 @@
  * COND is one of zapret2's conditions (cond_true, cond_false, cond_random
  * with percent=, cond_payload_str with pattern=, cond_tcp_has_ts) or a
  * trigger expression of its own ("FLOW:n:<5", "TCP:flags:PA",
- * "L7:payload:empty"). cond_lua is not ported (decision 11.1).
+ * "L7:payload:empty"). cond_lua is not ported (no Lua).
  */
 #include <stdlib.h>
 #include <string.h>

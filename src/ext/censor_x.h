@@ -1,5 +1,5 @@
 /*
- * Lab censors 12-20 (docs/EXT_ROADMAP.md, 7.3): models of the DPI the --ext
+ * Lab censors 12-20 (docs/CENSOR.md): models of the DPI the --ext
  * extensions must detect and get around, beyond Geneva's censors 1-11.
  * censor.c hands them every packet when the model is one of these; they keep
  * their own per-connection table. docs/CENSOR.md describes each one.

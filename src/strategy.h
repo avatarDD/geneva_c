@@ -115,7 +115,7 @@ void pktlist_push(pktlist *l, gpkt *p);
 /* Frees the packets and the array. */
 void pktlist_free(pktlist *l);
 
-/* Triggers of the extensions (docs/EXT_ROADMAP.md, 5.1): pseudo-layers that
+/* Triggers of the extensions (docs/EXT.md, X3): pseudo-layers that
  * look at the packet's flow (FLOW:n:1-5) or at where it came from
  * (META:ifin:eth0). They exist only once --ext registers them; without, the
  * layer is unknown as before. The value is kept as written, so a strategy
@@ -140,7 +140,7 @@ void strategy_set_xtrig(const strat_xtrig *ops);
  * Gas counts as for a tree's trigger; no tree is ever cut off by it. */
 int trigger_match(trigger *t, const gpkt *p, void *xctx, strat_dir dir);
 
-/* x-actions of the extensions (docs/EXT_ROADMAP.md, 5.1): "xfake{blob=...;
+/* x-actions of the extensions (docs/EXT.md, X5a): "xfake{blob=...;
  * ttl=3}" and the like, with named parameters separated by ";". They exist
  * only once --ext registers them; while they do, the tree parser skips
  * commas inside "{...}", which x-parameters use for lists. An x-action

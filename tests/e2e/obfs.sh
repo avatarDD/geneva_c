@@ -1,5 +1,5 @@
 #!/bin/sh
-# The two-sided obfuscation (stage X13a of docs/EXT_ROADMAP.md, zapret2's
+# The two-sided obfuscation (docs/EXT.md, X13a; zapret2's
 # zapret-obfs.lua): geneva run --ext with xwgobfs, xippxor, xudp2icmp and
 # xsynhide in the client namespace, and on the server geneva too, or
 # nfqws2 with the Lua functions (with NFQWS2_DIR: an unpacked official

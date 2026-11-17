@@ -1,5 +1,5 @@
 #!/bin/sh
-# Coverage-guided fuzzing of geneva's readers (docs/EXT_ROADMAP.md, 7.2):
+# Coverage-guided fuzzing of geneva's readers (docs/EXT.md, X7c):
 # the targets of src/ext/fuzz.c ("geneva selftest --ext --list") under
 # libFuzzer (default) or AFL++, with ASan and UBSan.
 #

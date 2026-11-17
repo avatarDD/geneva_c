@@ -1,5 +1,5 @@
 /*
- * Seqtrack (docs/EXT_ROADMAP.md, 6.3; G23): the TCP numbering of a flow
+ * Seqtrack (docs/PARITY.md, G23; docs/EXT.md, X8): the TCP numbering of a flow
  * whose client's first message an x-action made longer (xoob: one urgent
  * byte, xtlsrec: a second TLS record header).
  *

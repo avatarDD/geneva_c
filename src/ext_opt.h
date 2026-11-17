@@ -1,5 +1,5 @@
 /*
- * The --ext switch (docs/EXT_ROADMAP.md): the extensions for parity with
+ * The --ext switch (docs/EXT.md): the extensions for parity with
  * zapret2 live in src/ext/ and work only when a command gets --ext. Without
  * --ext every command behaves exactly as before (tests/golden). A build with
  * "make EXT=0" has no src/ext/ at all and refuses --ext.

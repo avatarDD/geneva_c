@@ -1,5 +1,5 @@
 /*
- * winws2's --ssid-filter and --nlm-filter (docs/EXT_ROADMAP.md, B7;
+ * winws2's --ssid-filter and --nlm-filter (docs/PARITY.md, B7;
  * zapret2's nfq2/darkmagic.c, win_dark_init and logical_net_filter_match):
  * the strategies run only while the computer is connected to one of the
  * Wi-Fi networks (WLAN API) or one of the Network List Manager networks

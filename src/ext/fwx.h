@@ -1,5 +1,5 @@
 /*
- * Firewall parity with zapret2 under --ext (docs/EXT_ROADMAP.md, X7b: A2-A4,
+ * Firewall parity with zapret2 under --ext (docs/PARITY.md, A2-A4,
  * O2-O8): the options of "geneva run" and "geneva fw" that fill the --ext
  * part of fw_config (the rules themselves are made in src/fw.c), and
  * winws2's --wf-* filter builder for WinDivert.

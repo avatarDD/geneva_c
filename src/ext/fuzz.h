@@ -1,5 +1,5 @@
 /*
- * Fuzz targets (docs/EXT_ROADMAP.md, N6 and 7.2): every reader of
+ * Fuzz targets (docs/PARITY.md, N6; docs/EXT.md, X7c): every reader of
  * untrusted bytes or text as one function over a buffer, with built-in
  * seed inputs and a mutator. tests/fuzz/fuzz_target.c runs a target under
  * libFuzzer or AFL++; "geneva selftest --ext --fuzz N" runs them all in

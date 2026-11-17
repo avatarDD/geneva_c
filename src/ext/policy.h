@@ -1,5 +1,5 @@
 /*
- * The policy of --ext (docs/EXT_ROADMAP.md, 4.6; docs/EXT.md, X10b): the
+ * The policy of --ext (docs/EXT.md, X10b): the
  * state of each key (port, /24 or /48, address, host name, as the detector
  * names them) as an immutable snapshot the workers read without a lock.
  *

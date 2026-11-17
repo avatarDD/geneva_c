@@ -1,5 +1,5 @@
 /*
- * The L7 layer of a tracked flow (docs/EXT_ROADMAP.md, 4.5; E1-E5, C7): what
+ * The L7 layer of a tracked flow (docs/PARITY.md, E1-E5, C7): what
  * each packet carries, the flow's protocol and host name, and the
  * reassembly of a TLS ClientHello split over TCP segments or of a QUIC
  * ClientHello split over several Initials, as nfqws2 does it

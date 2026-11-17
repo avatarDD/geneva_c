@@ -1,6 +1,6 @@
 /*
  * "geneva selftest --ext": the fuzz targets of src/ext/fuzz.c run in the
- * binary itself (docs/EXT_ROADMAP.md, N6): every built-in seed, then N
+ * binary itself (docs/PARITY.md, N6): every built-in seed, then N
  * mutations of them per target, reproducible from --seed. On POSIX each
  * target runs in a child process, so that a crash or a hang is reported
  * with the input that caused it instead of taking the command down.

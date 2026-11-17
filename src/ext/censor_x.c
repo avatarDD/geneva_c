@@ -1,6 +1,6 @@
 /*
  * Lab censors 12-20. Each one models a DPI behaviour the extensions answer
- * (docs/EXT_ROADMAP.md, 7.3):
+ * (docs/CENSOR.md):
  *
  *   12 freeze     forbidden word in the first client payload: the server's
  *                 data stops after freeze_bytes (dropped, the connection stays)
