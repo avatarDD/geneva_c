@@ -1,5 +1,5 @@
 /*
- * x-actions of the extensions (docs/EXT_ROADMAP.md 5.1, G, H): the desync
+ * x-actions of the extensions (docs/PARITY.md, G, H): the desync
  * functions of zapret2 (lua/zapret-antidpi.lua) with their parameters and
  * behaviour, as actions of a Geneva tree.
  *

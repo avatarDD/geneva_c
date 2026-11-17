@@ -1,6 +1,6 @@
 /*
- * The treatment of --ext-auto propose|apply (docs/EXT_ROADMAP.md, 4.6-4.8;
- * docs/EXT.md, X11c): a key the detector found impaired (its address or
+ * The treatment of --ext-auto propose|apply (docs/EXT.md,
+ * X11c): a key the detector found impaired (its address or
  * host name) gets the arms of a built-in portfolio for its class and
  * Thompson sampling over them (the outcomes are the detector's verdicts on
  * the key's flows).

@@ -1,7 +1,7 @@
 /*
  * tls_client_hello_mod of zapret2 (lua/zapret-lib.lua): tls_dissect,
  * tls_dissect_handshake, tls_dissect_ext, the SNI changes and
- * tls_reconstruct, ported with their quirks (docs/EXT_ROADMAP.md, G12, J4).
+ * tls_reconstruct, ported with their quirks (docs/PARITY.md, G12, J4).
  * Offsets here are 0-based where Lua counts from 1.
  */
 #include <stdlib.h>

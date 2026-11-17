@@ -1,5 +1,5 @@
 /*
- * IP sets of the extensions (docs/EXT_ROADMAP.md, C2): zapret2's ipset
+ * IP sets of the extensions (docs/PARITY.md, C2): zapret2's ipset
  * (nfq2/ipset.c): IPv4 and IPv6 addresses and subnets, kept as sorted,
  * merged intervals and searched by bisection.
  */

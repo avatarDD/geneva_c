@@ -1,5 +1,5 @@
 /*
- * Combinators (docs/EXT_ROADMAP.md K6-K8): zapret2's orchestrators of
+ * Combinators (docs/PARITY.md, K6-K8): zapret2's orchestrators of
  * zapret-auto.lua as x-actions that steer the packet through their
  * subtrees.
  *

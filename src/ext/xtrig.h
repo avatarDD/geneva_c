@@ -1,5 +1,5 @@
 /*
- * Triggers of the extensions (docs/EXT_ROADMAP.md, 5.1): FLOW: (the
+ * Triggers of the extensions (docs/EXT.md, X3): FLOW: (the
  * packet's flow in ctrack), META: (where the packet came from) and L7:
  * (what it carries, src/ext/xl7.c).
  *

@@ -1,5 +1,5 @@
 /*
- * Cryptography for the extensions, C11 only (docs/EXT_ROADMAP.md, 6.5):
+ * Cryptography for the extensions, C11 only:
  * AES-128/256 (encryption direction only: ECB block, CTR, GCM), SHA-256,
  * HMAC-SHA256, HKDF (RFC 5869) and HKDF-Expand-Label of TLS 1.3.
  *

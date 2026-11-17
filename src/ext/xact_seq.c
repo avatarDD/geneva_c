@@ -1,6 +1,6 @@
 /*
  * The x-actions that change the length or the pace of the client's first
- * message (X8; docs/EXT_ROADMAP.md, G23 and 7): xoob (zapret2's oob),
+ * message (X8; docs/PARITY.md, G23): xoob (zapret2's oob),
  * xtlsrec (one TLS record cut in two) on seqtrack (seqtrack.h), and xdrip
  * (the first bytes one per segment, with a pause).
  */

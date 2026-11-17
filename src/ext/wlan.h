@@ -1,5 +1,5 @@
 /*
- * Wi-Fi networks for the profile filter --filter-ssid (docs/EXT_ROADMAP.md,
+ * Wi-Fi networks for the profile filter --filter-ssid (docs/PARITY.md,
  * B7; zapret2's nfq2/darkmagic.c, HAS_FILTER_SSID).
  *
  * Linux: nl80211 over generic netlink, without libmnl. The interfaces come

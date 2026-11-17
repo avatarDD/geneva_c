@@ -132,7 +132,7 @@ typedef struct {
 } counters;
 
 /* The extensions of --ext reach the engine only through this table
- * (engine_opts.ext, NULL without --ext; docs/EXT_ROADMAP.md, 6.4). */
+ * (engine_opts.ext, NULL without --ext). */
 struct ext_hooks {
     /* Per worker: set up and free w->x. open returns 0 or -1 with err. */
     int (*worker_open)(eng_worker *w, sbuf *err);

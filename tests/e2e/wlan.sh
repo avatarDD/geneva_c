@@ -1,5 +1,5 @@
 #!/bin/sh
-# --filter-ssid on a real Wi-Fi link (stage X13c of docs/EXT_ROADMAP.md):
+# --filter-ssid on a real Wi-Fi link (docs/EXT.md, X13c):
 # two radios of mac80211_hwsim, an open access point (hostapd) in one
 # namespace and a station connected to it (iw) in the other, where geneva
 # run --ext reads the SSID over nl80211. The SYN of a profile that takes

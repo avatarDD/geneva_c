@@ -1,5 +1,5 @@
 /*
- * TLS ClientHello reading for the extensions (docs/EXT_ROADMAP.md, J4): the
+ * TLS ClientHello reading for the extensions (docs/PARITY.md, J4): the
  * server name of a ClientHello that may come cut short, in TLS records (TCP)
  * or as a bare handshake message (the CRYPTO stream of QUIC). Bounds are
  * checked on every read; nothing is allocated.

@@ -17,11 +17,11 @@ jobs:
       - name: Build and unit tests
         run: make -j"$(nproc)" CC=${{ matrix.cc }} CFLAGS="-O1 -g -Werror" test
       # Without --ext every command prints what it printed before the
-      # extensions (docs/EXT_ROADMAP.md, X0); with --ext too, for strategies
+      # extensions (docs/EXT.md); with --ext too, for strategies
       # without x-actions. Same snapshots for the build without src/ext/.
       - name: Golden snapshots
         run: tests/golden/run.sh build/geneva
-      # the engine's worker contexts and the probes' threads (EXT_ROADMAP 7.1)
+      # the engine's worker contexts and the probes' threads
       - name: ThreadSanitizer
         if: matrix.cc == 'gcc'
         run: |
@@ -107,7 +107,7 @@ jobs:
       - name: the two-sided obfuscation against itself and against nfqws2
         run: sudo env NFQWS2_DIR="$NFQWS2_DIR" tests/e2e/obfs.sh build/geneva
 
-  # Fuzzing (docs/EXT_ROADMAP.md, 7.2): selftest's random inputs under
+  # Fuzzing (docs/EXT.md, X7c): selftest's random inputs under
   # ASan and UBSan, then libFuzzer 60 s per target. A crash prints its
   # input in base64 (no artifact upload: the storage quota is exhausted).
   fuzz:

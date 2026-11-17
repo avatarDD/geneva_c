@@ -1,5 +1,5 @@
 /*
- * Options from a file (docs/EXT_ROADMAP.md, B9): zapret2's "nfqws2 @FILE"
+ * Options from a file (docs/PARITY.md, B9): zapret2's "nfqws2 @FILE"
  * (or $FILE). The first argument of a command, @FILE or $FILE, is replaced
  * by the words of FILE, split as a shell would without running anything:
  * blanks and newlines separate words, '...' is literal, "..." keeps blanks

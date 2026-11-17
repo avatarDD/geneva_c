@@ -1,5 +1,5 @@
 #!/bin/sh
-# --ext-workers (stage X10a of docs/EXT_ROADMAP.md): geneva run with four
+# --ext-workers (docs/EXT.md, X10a): geneva run with four
 # workers in two namespaces. The rules spread the flows over the queues
 # (iptables --queue-balance, nft "queue num A-B"), every worker gets
 # packets, every download arrives whole and the rules are gone afterwards.

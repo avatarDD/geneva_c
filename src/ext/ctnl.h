@@ -1,5 +1,5 @@
 /*
- * ctnetlink (Linux; docs/EXT_ROADMAP.md, 4.4): the kernel conntrack's
+ * ctnetlink (Linux; docs/EXT.md, X9b): the kernel conntrack's
  * counters of single flows for --ext-auto. A request asks for one flow by
  * its original tuple; the answers come back on the socket in any order
  * and are matched by their tuple (an answer that the flow is gone, by the

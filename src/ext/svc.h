@@ -1,5 +1,5 @@
 /*
- * geneva run --ext as a service (docs/EXT_ROADMAP.md, N1, N2, N4, N5):
+ * geneva run --ext as a service (docs/PARITY.md, N1, N2, N4, N5):
  * zapret2's --daemon, --pidfile, --user/--uid with capabilities, seccomp
  * (sec_harden), systemd's sd_notify and syslog.
  *

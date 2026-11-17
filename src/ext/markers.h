@@ -1,5 +1,5 @@
 /*
- * Position markers of zapret2 (docs/EXT_ROADMAP.md, F1, F2; nfq2/protocol.c
+ * Position markers of zapret2 (docs/PARITY.md, F1, F2; nfq2/protocol.c
  * posmarker_*, *Pos, ResolveMultiPos): "5", "-1", "host", "endhost+1",
  * "sld", "midsld", "endsld", "method+2", "extlen", "sniext". The x-actions
  * that split or cut (stage X5) take lists of them.

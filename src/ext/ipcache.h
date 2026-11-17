@@ -1,5 +1,5 @@
 /*
- * The IP cache of the extensions (docs/EXT_ROADMAP.md, C6, E6): zapret2's
+ * The IP cache of the extensions (docs/PARITY.md, C6, E6): zapret2's
  * ipcache (nfq2/pools.c, desync.c). Per address (and interface) it keeps
  *
  *   - a host name: from DNS answers (A, AAAA) seen in captured traffic and

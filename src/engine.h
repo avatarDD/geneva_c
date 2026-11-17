@@ -64,7 +64,7 @@ typedef struct {
     void (*on_ready)(void *ctx, int rc);
     void *ready_ctx;
 
-    /* --ext: the extensions' hooks (docs/EXT_ROADMAP.md, 6.4); NULL keeps
+    /* --ext: the extensions' hooks; NULL keeps
      * the engine exactly as without the extensions. */
     const struct ext_hooks *ext;
     /* --ext-workers (docs/EXT.md, X10a): workers with a queue and a thread

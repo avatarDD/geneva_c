@@ -23,7 +23,7 @@ void rawsend_close(rawsend *r);
 /* Sends one IP packet. Returns 0 or -1 (errno set). */
 int rawsend_send(rawsend *r, const uint8_t *pkt, size_t len);
 
-/* --ext (docs/EXT_ROADMAP.md, A7), as nfqws2 sends: sockets opened after
+/* --ext (docs/PARITY.md, A7), as nfqws2 sends: sockets opened after
  * this get SO_PRIORITY 6 and IP_FREEBIND/IPV6_FREEBIND; with bind-fix for
  * a family, rawsend_send_x() binds the socket to the packet's interface
  * (SO_BINDTODEVICE), since Linux may pick a wrong one when ip rules

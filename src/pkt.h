@@ -92,7 +92,7 @@ typedef struct gpkt {
     double sleep; /* seconds to delay before sending (sleep action) */
 
     /* --ext: made by an x-action (it never rides on the captured packet's
-     * verdict, docs/EXT_ROADMAP.md 5.1), and how it is sent */
+     * verdict), and how it is sent */
     uint8_t xgen;
     uint8_t xdrop;    /* an x-action dropped it (VERDICT_DROP): later ones still see it */
     uint32_t xmark;   /* fwmark bits added to the engine's own (0: none) */

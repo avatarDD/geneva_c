@@ -1,5 +1,5 @@
 /*
- * Host lists of the extensions (docs/EXT_ROADMAP.md, C1): zapret2's
+ * Host lists of the extensions (docs/PARITY.md, C1): zapret2's
  * hostlist pool (nfq2/hostlist.c, nfq2/pools.c). A list is a set of lower
  * case names, each with its flags: "^name" matches the name only, not its
  * subdomains; "!name" exempts the name (and its subdomains) from the list.

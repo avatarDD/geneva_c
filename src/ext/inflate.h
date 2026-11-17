@@ -1,5 +1,5 @@
 /*
- * Inflate of the extensions (docs/EXT_ROADMAP.md, C3): DEFLATE (RFC 1951)
+ * Inflate of the extensions (docs/PARITY.md, C3): DEFLATE (RFC 1951)
  * in a gzip (RFC 1952) or zlib (RFC 1950) wrapper, for lists in .gz as
  * zapret2 reads them through zlib (inflateInit2 with 47: either wrapper,
  * the first member). No zlib: libc only. Every length is checked; a

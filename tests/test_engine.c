@@ -1,5 +1,5 @@
 /* The engine core without a capture: a fake backend records verdicts and
- * injections, so the worker context (X1 of docs/EXT_ROADMAP.md) and the
+ * injections, so the worker context (stage X1 of --ext) and the
  * extension hooks are tested without NFQUEUE or WinDivert. */
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,5 +1,5 @@
 /*
- * NFLOG over raw netlink (Linux; docs/EXT_ROADMAP.md, 4.4): the
+ * NFLOG over raw netlink (Linux; docs/EXT.md, X9a): the
  * observation plane of --ext-auto. The firewall copies the first packets of
  * every flow (and the ICMP errors) to a log group; the kernel does not wait
  * for us, so a slow reader loses copies, never traffic.

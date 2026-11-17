@@ -50,6 +50,15 @@ Windows через WinDivert).
   долями успеха против цензоров Китая, Индии и Казахстана.
 - **Лабораторные цензоры** (`geneva censor`): цензоры Geneva 1–11 и
   DNS-цензор для проверки стратегий на стенде.
+- **Расширения `--ext`** (с 2.0): паритет с zapret2 (nfqws2, winws2,
+  dvtws2). Conntrack, распознавание L7 и сборка ClientHello, x-действия
+  (`xfake`, `xsplit`, `xdisorder`, `xoob`…), комбинаторы, профили со
+  списками хостов и IP, автосписок, двусторонняя обфускация, правила
+  firewall как у zapret2, `geneva blockcheck`. Детектор блокировок
+  `--ext-auto` сам находит заблокированные ресурсы и подбирает им
+  стратегию (с подтверждением или автоматически). Без `--ext` всё работает
+  как в 1.x. Что из zapret2 есть и что нет — `docs/PARITY.md`, опции —
+  `docs/EXT.md`.
 - **Офлайн** (`geneva apply`, `geneva check`): стратегия над pcap, проверка
   и каноническая форма стратегий.
 
@@ -216,10 +225,8 @@ net.inet.ip.fw.default_to_accept=1; kldload ipfw ipdivert`, иначе ipfw
 | server-side и `geneva agent` | `docs/SERVER_SIDE.md` |
 | лабораторные цензоры и стенд | `docs/CENSOR.md` |
 | встраивание в zapret-gui и Zapret2_AutoTuner | `docs/INTEGRATION.md` |
-| план работ | `docs/PLAN.md` |
 | расширения `--ext`: опции и отличия | `docs/EXT.md` |
 | паритет с zapret2: что есть, что нет | `docs/PARITY.md` |
-| проект `--ext`: паритет с zapret2, автономная адаптация | `docs/EXT_ROADMAP.md` |
 | история версий | `CHANGELOG.md` |
 
 Справочник для ИИ-агентов, которые работают с этим репозиторием или

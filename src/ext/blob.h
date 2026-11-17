@@ -1,5 +1,5 @@
 /*
- * Blobs of the extensions (docs/EXT_ROADMAP.md, J1, J2): named byte strings
+ * Blobs of the extensions (docs/PARITY.md, J1, J2): named byte strings
  * the x-actions send as fakes or fill patterns with ("blob=fake_default_tls",
  * "pattern=0x1603", "seqovl=#fake_default_tls"), as zapret2's --blob.
  *

@@ -1,5 +1,5 @@
 /*
- * List files of the profiles (docs/EXT_ROADMAP.md, C1-C4): zapret2's
+ * List files of the profiles (docs/PARITY.md, C1-C4): zapret2's
  * hostlist and ipset files (nfq2/hostlist.c, nfq2/ipset.c). A file named
  * by several profiles is loaded once (by its full path). A list in gzip
  * is inflated (inflate.h). A file is read again when its time or
