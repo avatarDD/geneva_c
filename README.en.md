@@ -142,8 +142,11 @@ Releases carry binaries for all architectures:
 `packaging/`; x86_64, x86, aarch64, armv7, armv6, armv5, mips, mipsel,
 mips64, riscv64, ppc; mips and mipsel are soft-float, as on most routers)
 and `geneva-VERSION-windows-ARCH.zip` (x86_64 and x86 with WinDivert from
-its official release; arm64 without it, as WinDivert has no ARM64 driver).
-Checksums are in `SHA256SUMS`. Building from source needs
+its official release; arm64 without it, as WinDivert has no ARM64 driver),
+and `geneva-VERSION-freebsd-ARCH.tar.gz`, `geneva-VERSION-openbsd-ARCH.tar.gz`
+(x86_64, aarch64; linked dynamically against the system libc). Every
+archive carries `packaging/` and the fakes in `files/fake`. Checksums are
+in `SHA256SUMS`. Building from source needs
 only a C compiler (gcc, clang, `zig cc` or mingw):
 
 ```
@@ -180,11 +183,12 @@ Service scripts are in `packaging/`:
 | SysV init (Debian, Devuan) | `sysv/geneva`, `sysv/geneva.default` | `/etc/init.d/geneva`, `/etc/default/geneva`; the binary in `/usr/bin/geneva` |
 | runit (Void) | the directory `runit/geneva` (`run`, `finish`, `conf`, `log/run`) | `/etc/sv/geneva`, then `ln -s /etc/sv/geneva /var/service/` |
 | s6 | the directory `s6/geneva` (`run`, `finish`, `conf`, `type`) | an s6 scan directory or s6-rc source |
+| pfSense (FreeBSD) | `pfsense/geneva.sh`, `pfsense/geneva.conf` | `/usr/local/etc/rc.d/geneva.sh` (pfSense runs it at boot), `/usr/local/etc/geneva/geneva.conf`; the binary in `/usr/local/bin/geneva`. The script loads the `ipfw` and `ipdivert` modules; geneva adds the rules (`--firewall ipfw`) |
 
 The strategy lives in a file (one line, by default
 `/etc/geneva/strategy.txt` or `/opt/etc/geneva/strategy.txt`). Enable the
 service in its config (`enabled`/`ENABLED`; with OpenRC, runit and s6 in
-the service manager itself). `reload` (`sv hup geneva`, `s6-svc -h`)
+the service manager itself, on pfSense by the script being in `rc.d`). `reload` (`sv hup geneva`, `s6-svc -h`)
 re-reads the strategy without dropping connections; `stop` (`sv down`,
 `s6-svc -d`) removes the firewall rules. Under runit and s6 geneva waits
 for a strategy in the file, checking it every few seconds.
@@ -204,7 +208,8 @@ The documents are in Russian.
 | lab censors and the test bed | `docs/CENSOR.md` |
 | embedding in zapret-gui and Zapret2_AutoTuner | `docs/INTEGRATION.md` |
 | work plan | `docs/PLAN.md` |
-| `--ext` extensions: what is done so far (Russian) | `docs/EXT.md` |
+| `--ext` extensions: options and differences (Russian) | `docs/EXT.md` |
+| parity with zapret2: what is there and what is not (Russian) | `docs/PARITY.md` |
 | `--ext` design: parity with zapret2, autonomous adaptation (Russian) | `docs/EXT_ROADMAP.md` |
 | version history | `CHANGELOG.md` |
 

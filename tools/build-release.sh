@@ -1,16 +1,25 @@
 #!/bin/sh
 # Builds the release archives with zig for every target into OUTDIR:
 #   geneva-VERSION-linux-ARCH.tar.gz   static musl binary + docs + packaging/
+#   geneva-VERSION-freebsd-ARCH.tar.gz, geneva-VERSION-openbsd-ARCH.tar.gz
+#                                      the binary (divert sockets) + docs + packaging/
 #   geneva-VERSION-windows-ARCH.zip    geneva.exe (+ WinDivert from WINDIVERT_DIR)
+#   every archive also carries zapret2's fakes in files/fake
 #   SHA256SUMS
 #
 #   tools/build-release.sh [--test] VERSION OUTDIR [TARGET...]
 #
 # --test also builds and runs the unit tests of every Linux target (with
-# qemu-user through binfmt for foreign architectures). WINDIVERT_DIR is the
+# qemu-user through binfmt for foreign architectures); the BSD ones run in
+# CI's FreeBSD VM (job bsd), not here. WINDIVERT_DIR is the
 # unpacked official WinDivert release (WinDivert-X.Y.Z-A); without it the
-# Windows archives carry only geneva.exe. Needs zig 0.14, make, tar, zip.
+# Windows archives carry only geneva.exe. Needs zig ($ZIG, default zig;
+# 0.14 is what releases use: zig 0.17's libc lacks the __sync helpers armv5
+# needs) and for the BSD targets zig 0.15 or later ($ZIG_BSD, default $ZIG),
+# make, tar, zip.
 set -eu
+ZIG=${ZIG:-zig}
+ZIG_BSD=${ZIG_BSD:-$ZIG}
 
 TEST=0
 if [ "${1:-}" = "--test" ]; then TEST=1; shift; fi
@@ -35,6 +44,10 @@ linux-mipsel|-target mipsel-linux-musleabi -mcpu=mips32+soft_float|posix
 linux-mips64|-target mips64-linux-muslabi64 -Wno-option-ignored|posix
 linux-riscv64|-target riscv64-linux-musl|posix
 linux-ppc|-target powerpc-linux-musleabi|posix
+freebsd-x86_64|-target x86_64-freebsd|bsd
+freebsd-aarch64|-target aarch64-freebsd|bsd
+openbsd-x86_64|-target x86_64-openbsd|bsd
+openbsd-aarch64|-target aarch64-openbsd|bsd
 windows-x86_64|-target x86_64-windows-gnu|windows
 windows-x86|-target x86-windows-gnu -mcpu=i686|windows
 windows-arm64|-target aarch64-windows-gnu|windows
@@ -57,7 +70,10 @@ echo "$ALL" | while IFS='|' read -r name flags os; do
     O="$OUT/obj/$name"
     rm -rf "$O"
     echo "== $name"
-    make -s -j"$JOBS" O="$O" CC="zig cc $flags" AR="zig ar" OS_TARGET="$os" STATIC=1 SMALL=1 \
+    # the BSDs link their libc dynamically (no static libc there); posix
+    # sources otherwise
+    if [ "$os" = bsd ]; then mos=posix static= z=$ZIG_BSD; else mos=$os static=STATIC=1 z=$ZIG; fi
+    make -s -j"$JOBS" O="$O" CC="$z cc $flags" AR="$z ar" OS_TARGET="$mos" $static SMALL=1 \
         VERSION="$VERSION" CFLAGS="-Werror" LDFLAGS="-s" >> "$OUT/build.log" 2>&1 ||
         { tail -30 "$OUT/build.log"; exit 1; }
     pkg="geneva-$VERSION-$name"
@@ -65,6 +81,10 @@ echo "$ALL" | while IFS='|' read -r name flags os; do
     rm -rf "$stage"
     mkdir -p "$stage"
     cp README.md README.en.md LICENSE "$stage/"
+    mkdir -p "$stage/files"
+    # zapret2's fakes that geneva does not make itself (BGP, ISAKMP, RDP,
+    # bitcoin), with their MIT license: --ext-blob NAME@FILE
+    cp -r files/fake "$stage/files/"
     if [ "$os" = windows ]; then
         cp "$O/geneva.exe" "$stage/"
         arch=${name#windows-}
@@ -79,9 +99,9 @@ echo "$ALL" | while IFS='|' read -r name flags os; do
         cp "$O/geneva" "$stage/"
         cp -r packaging "$stage/"
         tar -C "$OUT/stage" -czf "$OUT/$pkg.tar.gz" "$pkg"
-        if [ $TEST -eq 1 ]; then
+        if [ $TEST -eq 1 ] && [ "$os" != bsd ]; then
             echo "   unit tests"
-            make -s -j"$JOBS" O="$O" CC="zig cc $flags" AR="zig ar" OS_TARGET="$os" STATIC=1 SMALL=1 \
+            make -s -j"$JOBS" O="$O" CC="$z cc $flags" AR="$z ar" OS_TARGET="$os" STATIC=1 SMALL=1 \
                 VERSION="$VERSION" CFLAGS="-Werror" "$O/geneva-tests" >> "$OUT/build.log" 2>&1 ||
                 { tail -30 "$OUT/build.log"; exit 1; }
             "$O/geneva-tests" > "$OUT/test-$name.log" 2>&1 || { tail -40 "$OUT/test-$name.log"; exit 1; }

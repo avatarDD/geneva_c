@@ -20,7 +20,7 @@ trap 'rm -rf "$W"' EXIT
 
 [ -x "$B/geneva" ] && [ -x "$B/geneva-tests" ] || { echo "no $B/geneva and $B/geneva-tests"; exit 1; }
 mkdir "$W/iso"
-tar -cf "$W/iso/payload.tar" tests "$B/geneva" "$B/geneva-tests"
+tar -cf "$W/iso/payload.tar" tests packaging "$B/geneva" "$B/geneva-tests"
 printf 'instance-id: geneva-ci\nlocal-hostname: geneva-ci\n' > "$W/iso/meta-data"
 cat > "$W/iso/user-data" <<EOF
 #!/bin/sh

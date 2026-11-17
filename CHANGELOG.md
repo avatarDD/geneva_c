@@ -1,12 +1,14 @@
 # Changelog
 
-Протокол событий и управления — `proto 1` во всех версиях 1.x: новые поля,
-события и команды только добавляются.
+Протокол событий и управления — `proto 1` во всех версиях 1.x и 2.x: новые
+поля, события и команды только добавляются.
 
-## Не выпущено
+## v2.0.0
 
 Расширения `--ext` по `docs/EXT_ROADMAP.md` (паритет с zapret2). Без
-`--ext` поведение всех команд прежнее.
+`--ext` поведение всех команд прежнее, протокол — тот же `proto 1`.
+Что из zapret2 есть, с какими отличиями и что не переносится —
+`docs/PARITY.md`.
 
 - X0: ключ `--ext` у `run`, `check`, `apply`, `eval`, `evolve`, `fw`;
   опции `--ext-*` без `--ext` — ошибка 2. `--help` описывает расширения
@@ -256,6 +258,14 @@
   перенаправление на чужой домен — неудача. Фича `ext_blockcheck`.
   `tests/e2e/blockcheck_grid.sh` сверяет сетку со скриптами релиза
   zapret2 строка в строку на всех уровнях, IPv4 и IPv6.
+- X14b: отчёт паритета `docs/PARITY.md` (все 132 строки матрицы плана).
+  Скрипт службы pfSense (`packaging/pfsense`: модули ipfw и ipdivert, правила
+  ipfw через `--firewall ipfw`), e2e в образе FreeBSD. Релиз собирает и
+  FreeBSD, OpenBSD (x86_64, aarch64; динамически, как требует libc BSD),
+  архивы содержат `packaging/` и фейки `files/fake`; BSD собираются zig
+  0.17.1, остальные — прежним 0.14.1 (в libc zig 0.17 нет `__sync` для armv5). В `geneva
+  version --json` — признаки расширений `ext_*` (таблица в
+  `docs/PROTOCOL.md`).
 - X14a: скрипты служб OpenRC (`packaging/openrc`), SysV init
   (`packaging/sysv`), runit и s6 (`packaging/runit/geneva`,
   `packaging/s6/geneva`) рядом с systemd, procd и Entware. Остановка снимает

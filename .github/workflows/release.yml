@@ -1,7 +1,8 @@
 name: Release
 
 # Every pull request builds all release targets with zig and runs the unit
-# tests of each Linux target (foreign ones under qemu-user). A tag v* also
+# tests of each Linux target (foreign ones under qemu-user; the FreeBSD and
+# OpenBSD ones run in the bsd job of ci.yml, in a FreeBSD VM). A tag v* also
 # publishes the archives and SHA256SUMS as a GitHub release. Everything is
 # built in one job: the account's Actions artifact storage is exhausted, so
 # nothing passes between jobs as artifacts.
@@ -21,7 +22,10 @@ jobs:
     permissions:
       contents: write
     env:
+      # Linux and Windows targets; 0.17's libc lacks the __sync helpers of armv5
       ZIG_VERSION: 0.14.1
+      # FreeBSD and OpenBSD targets (as the bsd job in ci.yml)
+      ZIG_WHEEL: ziglang==0.17.1 --hash=sha256:ea6cc5d87b033cf0aedfbc8f9549a908cae6c50ac31f1698188fa48a74524b54
       WINDIVERT_VERSION: 2.2.2
       WINDIVERT_SHA256: 63cb41763bb4b20f600b6de04e991a9c2be73279e317d4d82f237b150c5f3f15
     steps:
@@ -40,6 +44,13 @@ jobs:
           mkdir "$RUNNER_TEMP/zig"
           tar -C "$RUNNER_TEMP/zig" --strip-components=1 -xJf "$RUNNER_TEMP/zig.tar.xz"
           echo "$RUNNER_TEMP/zig" >> "$GITHUB_PATH"
+      - name: Fetch zig for the BSDs (the official PyPI package of the Zig Software Foundation, pinned by SHA-256)
+        run: |
+          echo "$ZIG_WHEEL" > "$RUNNER_TEMP/zigbsd.txt"
+          python3 -m pip download --no-deps --require-hashes -r "$RUNNER_TEMP/zigbsd.txt" -d "$RUNNER_TEMP/zigwhl"
+          python3 -m zipfile -e "$RUNNER_TEMP"/zigwhl/*.whl "$RUNNER_TEMP/zigbsd"
+          chmod +x "$RUNNER_TEMP/zigbsd/ziglang/zig"
+          echo "ZIG_BSD=$RUNNER_TEMP/zigbsd/ziglang/zig" >> "$GITHUB_ENV"
       - name: Fetch WinDivert (official release)
         run: |
           curl -fsSL -o "$RUNNER_TEMP/windivert.zip" "https://github.com/basil00/WinDivert/releases/download/v${WINDIVERT_VERSION}/WinDivert-${WINDIVERT_VERSION}-A.zip"
@@ -55,6 +66,7 @@ jobs:
       - name: Build all targets and run the unit tests
         run: |
           zig version
+          "$ZIG_BSD" version
           WINDIVERT_DIR="$RUNNER_TEMP/WinDivert-${WINDIVERT_VERSION}-A" \
             tools/build-release.sh --test "$VERSION" dist
       - name: Publish the release

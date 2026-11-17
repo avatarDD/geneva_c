@@ -154,7 +154,10 @@ geneva.exe run -s '[TCP:flags:S]-duplicate-| \/' -p 80,443 -c tcp:47123   # Wind
 mips, mipsel, mips64, riscv64, ppc; mips и mipsel — soft-float, как на
 большинстве роутеров) и `geneva-ВЕРСИЯ-windows-АРХИТЕКТУРА.zip` (x86_64 и
 x86 с WinDivert из официального релиза; arm64 без него, так как у
-WinDivert нет драйвера для ARM64). Суммы — в `SHA256SUMS`. Для сборки
+WinDivert нет драйвера для ARM64), а также
+`geneva-ВЕРСИЯ-freebsd-АРХИТЕКТУРА.tar.gz` и `geneva-ВЕРСИЯ-openbsd-АРХИТЕКТУРА.tar.gz`
+(x86_64, aarch64; бинарник собран динамически с libc системы). Во всех
+архивах — `packaging/` и фейки `files/fake`. Суммы — в `SHA256SUMS`. Для сборки
 из исходников нужен только компилятор C (gcc, clang, `zig cc` или mingw):
 
 ```
@@ -191,11 +194,12 @@ net.inet.ip.fw.default_to_accept=1; kldload ipfw ipdivert`, иначе ipfw
 | SysV init (Debian, Devuan) | `sysv/geneva`, `sysv/geneva.default` | `/etc/init.d/geneva`, `/etc/default/geneva`; бинарник в `/usr/bin/geneva` |
 | runit (Void) | каталог `runit/geneva` (`run`, `finish`, `conf`, `log/run`) | `/etc/sv/geneva`, затем `ln -s /etc/sv/geneva /var/service/` |
 | s6 | каталог `s6/geneva` (`run`, `finish`, `conf`, `type`) | каталог служб s6 или исходников s6-rc |
+| pfSense (FreeBSD) | `pfsense/geneva.sh`, `pfsense/geneva.conf` | `/usr/local/etc/rc.d/geneva.sh` (pfSense запускает его при загрузке), `/usr/local/etc/geneva/geneva.conf`; бинарник в `/usr/local/bin/geneva`. Скрипт загружает модули `ipfw` и `ipdivert`, правила ставит geneva (`--firewall ipfw`) |
 
 Стратегия хранится в файле (одна строка, по умолчанию
 `/etc/geneva/strategy.txt` или `/opt/etc/geneva/strategy.txt`). Служба
 включается в конфиге (`enabled`/`ENABLED`; у OpenRC, runit и s6 — самой
-системой служб). `reload` (`sv hup geneva`, `s6-svc -h`) перечитывает
+системой служб, у pfSense — наличием скрипта в `rc.d`). `reload` (`sv hup geneva`, `s6-svc -h`) перечитывает
 стратегию без разрыва соединений, `stop` (`sv down`, `s6-svc -d`) снимает
 правила firewall. Под runit и s6 geneva без стратегии в файле не
 запускается и ждёт её, проверяя файл раз в несколько секунд.
@@ -213,7 +217,8 @@ net.inet.ip.fw.default_to_accept=1; kldload ipfw ipdivert`, иначе ipfw
 | лабораторные цензоры и стенд | `docs/CENSOR.md` |
 | встраивание в zapret-gui и Zapret2_AutoTuner | `docs/INTEGRATION.md` |
 | план работ | `docs/PLAN.md` |
-| расширения `--ext`: что уже сделано | `docs/EXT.md` |
+| расширения `--ext`: опции и отличия | `docs/EXT.md` |
+| паритет с zapret2: что есть, что нет | `docs/PARITY.md` |
 | проект `--ext`: паритет с zapret2, автономная адаптация | `docs/EXT_ROADMAP.md` |
 | история версий | `CHANGELOG.md` |
 
