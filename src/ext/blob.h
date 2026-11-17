@@ -6,7 +6,7 @@
  *   --ext-blob NAME:0xHEX            the bytes of the hex string
  *   --ext-blob NAME:[+OFS]@FILE      a file from offset OFS (FILE alone too)
  *
- * Built in, made here rather than copied (decision 11.3 of the roadmap):
+ * Built in, made here rather than copied:
  *   fake_default_tls    a TLS 1.3 ClientHello for www.iana.org, 680 bytes,
  *                       ending in a padding extension (what tlsmod=padencap
  *                       grows)

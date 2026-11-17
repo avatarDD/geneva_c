@@ -11,7 +11,7 @@
  * COND is one of zapret2's conditions (cond_true, cond_false, cond_random
  * with percent=, cond_payload_str with pattern=, cond_tcp_has_ts) or a
  * trigger expression of its own ("FLOW:n:<5", "TCP:flags:PA",
- * "L7:payload:empty"). cond_lua is not ported (decision 11.1).
+ * "L7:payload:empty"). cond_lua is not ported (no Lua).
  */
 #include <stdlib.h>
 #include <string.h>

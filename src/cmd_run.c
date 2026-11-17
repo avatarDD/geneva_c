@@ -283,7 +283,7 @@ static void on_run_ready(void *ctx, int rc)
 }
 
 /* zapret2's marks (DESYNC_MARK, DESYNC_MARK_POSTNAT): our default is the
- * second (decision 11.5: warn only) */
+ * second (only a warning) */
 static void warn_mark(uint32_t mark)
 {
 #  if defined(__FreeBSD__) || defined(__OpenBSD__)
