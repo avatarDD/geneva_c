@@ -310,6 +310,15 @@
   (`--skip-dnscheck`, `--skip-ipblock`, `--unblocked-domain`); в `--json`
   поля `dns`, `doh`, `checks`. Проба `tcp` с `connect_only`, адреса ответа
   пробы `dns` (`dns_out`), `probe_spawn` для команд.
+- Паритет с zapret2 1.0.7 (`docs/PARITY.md` теперь сверяется с 1.0.7):
+  `geneva blockcheck --priority N` (Windows, по умолчанию 2000, как
+  winws2 в `blockcheck2.sh`: хэндл проверки видит пакеты раньше
+  оставленного работать экземпляра); `--ext-flowoffload hardware`
+  раскладывает мосты и VLAN на нижние устройства (Wi-Fi получает
+  `ИМЯ.sta*` на ядре 6.17+); если ядро не берёт их все сразу, flowtable
+  создаётся без устройств и каждое добавляется отдельно: неспособное к
+  offload пропускается, а если у интерфейса не добавилось ни одно —
+  пробуется он сам (`geneva fw print` печатает эти команды).
 
 ## v1.2.0
 

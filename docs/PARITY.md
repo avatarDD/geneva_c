@@ -1,6 +1,6 @@
 # Паритет с zapret2
 
-Расширения `--ext` (с 2.0) повторяют возможности zapret2 1.0.6 (nfqws2,
+Расширения `--ext` (с 2.0) повторяют возможности zapret2 1.0.7 (nfqws2,
 winws2, dvtws2 и его скрипты). Ниже — матрица паритета: каждая
 возможность zapret2 (132 строки, ID строк используются в комментариях
 кода и тестах) и что из неё есть в geneva_c 2.0. Всё перечисленное
@@ -8,7 +8,7 @@ winws2, dvtws2 и его скрипты). Ниже — матрица парит
 
 Статусы:
 
-- **есть** — равноценно zapret2 (nfqws2, winws2, dvtws2 и скрипты 1.0.6);
+- **есть** — равноценно zapret2 (nfqws2, winws2, dvtws2 и скрипты 1.0.7);
 - **есть (до 2.0)** — было и без `--ext`;
 - **с отличием** — есть, но поведение расходится; главное отличие указано
   в строке, полный список — в абзаце «Отличия» раздела;
@@ -53,7 +53,7 @@ winws2, dvtws2 и его скрипты). Ниже — матрица парит
 
 | ID | zapret2 | geneva_c 2.0 | Статус | Раздел |
 |---|---|---|---|---|
-| C1 | `--hostlist`, `--hostlist-domains`, `--hostlist-exclude`, `--hostlist-exclude-domains`; поддомены автоматически | `--hostlist`, `--hostlist-domains`, `--hostlist-exclude[-domains]`: хэш по суффиксам домена | есть | X6b |
+| C1 | `--hostlist`, `--hostlist-domains`, `--hostlist-exclude`, `--hostlist-exclude-domains`; поддомены автоматически, `^` — без поддоменов, `!` — локальное исключение (в автолисте — exclude); один файл в профиле — один раз | `--hostlist`, `--hostlist-domains`, `--hostlist-exclude[-domains]`: хэш по суффиксам домена, `^` и `!` в любом порядке; повтор файла в профиле — ошибка | есть | X6b |
 | C2 | `--ipset`, `--ipset-ip`, `--ipset-exclude`, `--ipset-exclude-ip`; CIDR v4/v6 | `--ipset`, `--ipset-ip`, `--ipset-exclude[-ip]`: отсортированные интервалы, двоичный поиск | с отличием: ICMP без потока — только по адресу пакета | X6b |
 | C3 | списки в gzip | свой inflate (gzip, RFC 1951/1952) | есть | X6b |
 | C4 | перечитывание списков по изменению файла и по SIGHUP | перечитывание по времени файла (не чаще раза в секунду); команда `reload_lists` | с отличием: проверка времени файла раз в секунду | X6b |
@@ -211,7 +211,7 @@ winws2, dvtws2 и его скрипты). Ниже — матрица парит
 | O2 | `predefrag` (−401): notrack своих пакетов, IP-фрагментов, `datanoack` (пакетов без SYN/RST/ACK) | `--ext-notrack all\|frag\|none`, `--ext-ttl-icmp` | с отличием: ct mark на всех пакетах очереди; отбрасывание в `mangle PREROUTING` | X7b |
 | O3 | connbytes отдельно по направлениям: `TCP_PKT_OUT=20`, `TCP_PKT_IN=10`, `UDP_PKT_OUT=5`, `UDP_PKT_IN=3` | `--ext-first tcp-out=N,tcp-in=M,udp-out=…` | есть | X7b |
 | O4 | `FILTER_TTL_EXPIRED_ICMP`: ct mark на потоках с фейками и отбрасывание входящих ICMP time-exceeded по нему (иначе фейк с малым TTL вызывает ошибку сокета у клиента) | то же; правила снимаются при выходе | есть | X7b |
-| O5 | `FLOWOFFLOAD=donttouch\|none\|software\|hardware`: исключение потоков из flowtable, пока они нужны очереди | `--ext-flowoffload software\|hardware` (nft): свой flowtable, потоки не выгружаются, пока нужны очереди | с отличием: только nft | X7b |
+| O5 | `FLOWOFFLOAD=donttouch\|none\|software\|hardware`: исключение потоков из flowtable, пока они нужны очереди; у `hardware` мосты и VLAN раскладываются на нижние устройства (Wi-Fi `.sta*` на ядре 6.17+), каждое добавляется отдельно | `--ext-flowoffload software\|hardware` (nft): свой flowtable, потоки не выгружаются, пока нужны очереди; устройства `hardware` — как в zapret2 | с отличием: только nft | X7b |
 | O6 | метки `DESYNC_MARK=0x40000000`, `DESYNC_MARK_POSTNAT=0x20000000` | метка не меняется; предупреждение о пересечении при старте | есть | X7b |
 | O7 | LAN/WAN-интерфейсы (`IFACE_LAN/WAN/WAN6`, `OPENWRT_LAN/WAN4/WAN6`) | `--ext-wan`, `--ext-lan` (до 8 интерфейсов) | с отличием: один список на IPv4 и IPv6 | X7b |
 | O8 | хуки до и после правил (`INIT_FW_*_HOOK`), `DISABLE_IPV4/6` | `--fw-hook-pre/post FILE` (аргументы `up\|down BACKEND QUEUE`) | с отличием: аргументы вместо переменных окружения | X7b |
@@ -224,7 +224,7 @@ winws2, dvtws2 и его скрипты). Ниже — матрица парит
 | P2 | проверка подмены DNS через DoH | `geneva blockcheck`: DNS по UDP и TCP, сравнение с публичными резолверами, DoH через curl | с отличием: адреса сравниваются целиком; подмена ловится и по TCP | X12b |
 | P3 | тесты блокировки по IP (заблокированный домен на чужом IP и наоборот) и порта (netcat) | класс `untreatable` (`--ext-auto`), `geneva blockcheck` с тестами по IP | есть | X9a, X12b |
 | P4 | сетка стратегий `blockcheck2.d/standard`: http-моды; multisplit/multidisorder по `method+2, midsld` (HTTP) и `2, 1, sniext+1, sniext+4, host+1, midsld, 1,midsld, 1,midsld,1220, 1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1` (TLS); всё то же с `wssize:wsize=1:scale=6`; `tcpseg` с `repeats` 1/20/100/260; `oob urp=b,0,2,midsld`; seqovl с `padencap`; `syndata`; `fake` с TTL 1–12, autottl delta 1–5 (3–20), fooling `tcp_md5`, `badsum`, `tcp_seq=-3000`, `tcp_seq=1000000`, `tcp_ack=-66000:tcp_ts_up`, `tcp_ts=-1000`, `tcp_flags_unset=ACK`, `tcp_flags_set=SYN` (+ IPv6 расширения); «ttl=1 у пустого ACK после SYN,ACK»; «дубль SYN с MD5»; faked/hostfake; комбинации с фейком только если без него не вышло; QUIC: `fake` repeats 1–20, IPv6 расширения, `ipfrag_pos_udp` 8–64 | `geneva blockcheck --ext`: вся сетка `blockcheck2.d/standard`, строки переводятся в стратегии geneva; строки с Lua (`luaexec`) — неудача | с отличием: строки с Lua не переводятся (нет Lua) | X12b |
-| P5 | уровни `quick/standard/force/veryquick`, `REPEATS`, `PARALLEL`, IPv4/IPv6, HTTP / TLS 1.2 / TLS 1.3 / HTTP3 | `--level`, `--repeats`, `--test http3` (curl `--http3-only`) | есть | X12b |
+| P5 | уровни `quick/standard/force/veryquick`, `REPEATS`, `PARALLEL`, IPv4/IPv6, HTTP / TLS 1.2 / TLS 1.3 / HTTP3; winws2 проверки с `--wf-priority=2000` | `--level`, `--repeats`, `--test http3` (curl `--http3-only`); `--priority` (2000 на Windows) | есть | X12b |
 | P6 | отчёт: стратегии по доменам, пересечение по всем доменам, покрытие (сколько доменов закрывает стратегия) | отчёт SUMMARY, COMMON, COVERAGE; `--json` | есть | X12b |
 | P7 | `mdig` (многопоточный резолвер списков), `ip2net` (свёртка IP в подсети), скрипты загрузки списков (antifilter, antizapret, reestr, refilter, ipban) | `geneva resolve`, `geneva ip2net`; загрузчики списков — в zapret-gui | с отличием: загрузчики списков — в zapret-gui | X12a |
 | P8 | установщики и init-скрипты: openrc, openwrt, pfsense, runit, s6, systemd, sysv | `packaging/`: OpenRC, runit, s6, SysV, pfSense | есть | README |

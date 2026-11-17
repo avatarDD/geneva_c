@@ -357,6 +357,7 @@ int xcmd_blockcheck(int argc, char **argv)
         {"queue", 'q', 1, "N", "NFQUEUE number (default 311)"},
         {"mark", 0, 1, "MASK", "fwmark of packets the engine sends (default 0x20000000)"},
         {"firewall", 0, 1, "TYPE", "auto, nft or iptables"},
+        {"priority", 0, 1, "N", "Windows: WinDivert handle priority, -30000..30000 (default 2000)"},
         {"log-level", 'l', 1, "LEVEL", "error, warn (default), info, debug or trace"},
         EXT_OPT,
         EXT_CTRACK_OPTS,
@@ -569,6 +570,16 @@ int xcmd_blockcheck(int argc, char **argv)
     if ((s = arg_str(&a, "firewall", NULL)) != NULL && fw_backend_parse(s, &o.fw.backend) < 0) {
         fprintf(stderr, "geneva blockcheck: --firewall must be auto, nft or iptables\n");
         goto done;
+    }
+    {
+        sbuf err;
+        sb_init(&err);
+        if (bc_priority(arg_str(&a, "priority", NULL), FW_WINDOWS, &o.fw.priority, &err) < 0) {
+            fprintf(stderr, "geneva blockcheck: %s\n", err.data);
+            sb_free(&err);
+            goto done;
+        }
+        sb_free(&err);
     }
     stop_on_signals(&stop);
     res.curl = curl;

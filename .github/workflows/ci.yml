@@ -70,6 +70,8 @@ jobs:
         run: sudo env BENCH=1 tests/e2e/workers.sh build/geneva
       - name: surgical path e2e (healthy connections skip the queue, iptables and nft)
         run: sudo tests/e2e/surgical.sh build/geneva
+      - name: --ext-flowoffload e2e (flowtable devices, bridges and VLANs resolved for hardware)
+        run: sudo tests/e2e/flowoffload.sh build/geneva
       # X13c: a Wi-Fi link of two mac80211_hwsim radios, hostapd and iw from Ubuntu
       - name: --filter-ssid e2e (mac80211_hwsim, hostapd)
         run: |

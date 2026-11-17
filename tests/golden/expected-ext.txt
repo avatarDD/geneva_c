@@ -1023,7 +1023,7 @@ geneva run: --ext-auto watches the client side: not with --server-side
 geneva run: --ext-auto needs --ext
 [exit 2]
 ### fw-ext-nft
-$ $G fw print --ext -p 443 --proto tcp,udp --ext-first tcp-out=20,tcp-in=10,udp-out=5,udp-in=3 --ext-wan eth0,ppp0 --ext-notrack frag --ext-ttl-icmp --ext-flowoffload hardware --ext-lan br-lan --firewall nft --fw-hook-post /bin/true
+$ $G fw print --ext -p 443 --proto tcp,udp --ext-first tcp-out=20,tcp-in=10,udp-out=5,udp-in=3 --ext-wan wan9,ppp9 --ext-notrack frag --ext-ttl-icmp --ext-flowoffload hardware --ext-lan brlan9 --firewall nft --fw-hook-post /bin/true
 # nft: apply
 nft -f - <<'EOF'
 add table inet geneva_310
@@ -1032,14 +1032,14 @@ table inet geneva_310 {
 	chain out {
 		type filter hook postrouting priority 101; policy accept;
 		meta mark & 0x20000000 == 0x20000000 return
-		oifname { "eth0", "ppp0" } tcp dport { 443 } ct original packets 1-20 ct mark set ct mark or 0x20000000 queue num 310 bypass
-		oifname { "eth0", "ppp0" } udp dport { 443 } ct original packets 1-5 ct mark set ct mark or 0x20000000 queue num 310 bypass
+		oifname { "wan9", "ppp9" } tcp dport { 443 } ct original packets 1-20 ct mark set ct mark or 0x20000000 queue num 310 bypass
+		oifname { "wan9", "ppp9" } udp dport { 443 } ct original packets 1-5 ct mark set ct mark or 0x20000000 queue num 310 bypass
 	}
 	chain in {
 		type filter hook prerouting priority -150; policy accept;
 		meta mark & 0x20000000 == 0x20000000 return
-		iifname { "eth0", "ppp0" } tcp sport { 443 } ct reply packets 1-10 ct mark set ct mark or 0x20000000 queue num 310 bypass
-		iifname { "eth0", "ppp0" } udp sport { 443 } ct reply packets 1-3 ct mark set ct mark or 0x20000000 queue num 310 bypass
+		iifname { "wan9", "ppp9" } tcp sport { 443 } ct reply packets 1-10 ct mark set ct mark or 0x20000000 queue num 310 bypass
+		iifname { "wan9", "ppp9" } udp sport { 443 } ct reply packets 1-3 ct mark set ct mark or 0x20000000 queue num 310 bypass
 	}
 	chain ttl {
 		type filter hook prerouting priority -160; policy accept;
@@ -1047,12 +1047,12 @@ table inet geneva_310 {
 		icmpv6 type time-exceeded ct mark & 0x20000000 == 0x20000000 counter drop
 	}
 	flowtable ft {
-		hook ingress priority 0; devices = { "eth0", "ppp0", "br-lan" };
+		hook ingress priority 0;
 		flags offload;
 	}
 	chain forward {
 		type filter hook forward priority -1; policy accept;
-		meta l4proto { tcp, udp } oifname { "eth0", "ppp0" } jump flow_offload
+		meta l4proto { tcp, udp } oifname { "wan9", "ppp9" } jump flow_offload
 	}
 	chain flow_offload {
 		tcp dport { 443 } ct original packets 1-20 return
@@ -1069,6 +1069,9 @@ table inet geneva_310 {
 	}
 }
 EOF
+nft 'add flowtable inet geneva_310 ft { hook ingress priority 0; flags offload; devices = { "wan9" }; }' 2>/dev/null
+nft 'add flowtable inet geneva_310 ft { hook ingress priority 0; flags offload; devices = { "ppp9" }; }' 2>/dev/null
+nft 'add flowtable inet geneva_310 ft { hook ingress priority 0; flags offload; devices = { "brlan9" }; }' 2>/dev/null
 '/bin/true' up nft 310
 # nft: remove
 nft -f - <<'EOF'

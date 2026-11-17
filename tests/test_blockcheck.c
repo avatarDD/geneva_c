@@ -561,6 +561,33 @@ TEST(bc_checks_json)
     bc_free(&b);
 }
 
+/* --priority: 2000 on Windows as blockcheck2's winws2 (zapret2 1.0.7) */
+TEST(bc_priority_arg)
+{
+    sbuf err;
+    int p = -1;
+    sb_init(&err);
+    CHECK_INT(bc_priority(NULL, 1, &p, &err), 0);
+    CHECK_INT(p, BC_WF_PRIORITY);
+    CHECK_INT(BC_WF_PRIORITY, 2000);
+    CHECK_INT(bc_priority(NULL, 0, &p, &err), 0);
+    CHECK_INT(p, 0);
+    CHECK_INT(bc_priority("-30000", 1, &p, &err), 0);
+    CHECK_INT(p, -30000);
+    CHECK_INT(bc_priority("30000", 1, &p, &err), 0);
+    CHECK_INT(p, 30000);
+    CHECK_INT(bc_priority("0", 1, &p, &err), 0);
+    CHECK_INT(p, 0);
+    CHECK_INT(bc_priority("30001", 1, &p, &err), -1);
+    CHECK(err.data && strstr(err.data, "from -30000 to 30000") != NULL);
+    sb_reset(&err);
+    CHECK_INT(bc_priority("x", 1, &p, &err), -1);
+    sb_reset(&err);
+    CHECK_INT(bc_priority("5", 0, &p, &err), -1);
+    CHECK(err.data && strstr(err.data, "Windows only") != NULL);
+    sb_free(&err);
+}
+
 void suite_blockcheck(void);
 void suite_blockcheck(void)
 {
@@ -576,6 +603,7 @@ void suite_blockcheck(void)
 #  endif
     RUN(bc_port);
     RUN(bc_checks_json);
+    RUN(bc_priority_arg);
 }
 
 #else

@@ -163,6 +163,14 @@ int bc_port_open(const char *ip, uint16_t port, double timeout, char *detail, si
 /* adds a port or IP block test to the report */
 void bc_add_check(bc_run *b, const bc_check *c);
 
+/* --priority: the WinDivert handle priority of the probes' engine. Unset,
+ * it is BC_WF_PRIORITY on Windows, as blockcheck2 runs winws2 with
+ * --wf-priority=2000 (zapret2 1.0.7): its handle sees the packets before
+ * an instance that is still running at the default 0. Elsewhere the option
+ * is an error. Returns 0 or -1 with err. */
+#define BC_WF_PRIORITY 2000
+int bc_priority(const char *s, int windows, int *prio, sbuf *err);
+
 int xcmd_blockcheck(int argc, char **argv);
 
 #endif

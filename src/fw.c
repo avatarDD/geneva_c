@@ -16,6 +16,11 @@
 #  include <sys/wait.h>
 #  include <unistd.h>
 #endif
+#ifdef __linux__
+#  include <dirent.h>
+#  include <sys/stat.h>
+#  include <sys/utsname.h>
+#endif
 
 void fw_config_default(fw_config *c)
 {
@@ -64,6 +69,207 @@ int fw_first_any(const fw_config *c)
             if (fw_first(c, p, d) > 0)
                 return 1;
     return 0;
+}
+
+/* ---- --ext-flowoffload hardware: devices ---------------------------------- */
+
+static const char *g_sysfs;
+static int g_wlan_prefix = -1;
+
+void fw_set_offload_env(const char *sysfs, int wlan_prefix)
+{
+    g_sysfs = sysfs;
+    g_wlan_prefix = wlan_prefix;
+}
+
+/* A device name that goes into nft and shell quotes as it is */
+static int devname_ok(const char *name, size_t len)
+{
+    if (!len || len >= FW_DEVNAME)
+        return 0;
+    for (size_t i = 0; i < len; i++)
+        if ((unsigned char)name[i] <= ' ' || name[i] == '\'' || name[i] == '"' || name[i] == '\\' ||
+            name[i] == 0x7f)
+            return 0;
+    return 1;
+}
+
+static int devs_add(char (*out)[FW_DEVNAME], int n, int max, const char *name, size_t len)
+{
+    if (!devname_ok(name, len))
+        return n;
+    for (int i = 0; i < n; i++)
+        if (strlen(out[i]) == len && !memcmp(out[i], name, len))
+            return n;
+    if (n < max) {
+        memcpy(out[n], name, len);
+        out[n][len] = 0;
+        n++;
+    }
+    return n;
+}
+
+#ifdef __linux__
+
+int fw_wlan_prefix(void)
+{
+    struct utsname u;
+    unsigned long major, minor;
+    char *end;
+    if (uname(&u) < 0)
+        return 0;
+    major = strtoul(u.release, &end, 10);
+    if (*end != '.')
+        return 0;
+    minor = strtoul(end + 1, NULL, 10);
+    return major > 6 || (major == 6 && minor >= 17);
+}
+
+static int sys_isdir(const char *sysfs, const char *dev, const char *sub)
+{
+    char p[512];
+    struct stat st;
+    snprintf(p, sizeof(p), "%s/%s/%s", sysfs, dev, sub);
+    return stat(p, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+/* uevent has the line DEVTYPE=vlan */
+static int sys_isvlan(const char *sysfs, const char *dev)
+{
+    char p[512], line[128];
+    FILE *f;
+    int vlan = 0;
+    snprintf(p, sizeof(p), "%s/%s/uevent", sysfs, dev);
+    if (!(f = fopen(p, "r")))
+        return 0;
+    while (!vlan && fgets(line, sizeof(line), f))
+        vlan = !strcmp(line, "DEVTYPE=vlan\n") || !strcmp(line, "DEVTYPE=vlan");
+    fclose(f);
+    return vlan;
+}
+
+static int cmp_str(const void *a, const void *b)
+{
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+/* resolve_hw_offload_port */
+static int hw_port(const char *sysfs, const char *dev, int wlan_prefix, char (*out)[FW_DEVNAME], int n, int max)
+{
+    size_t len = strlen(dev);
+    const char *sta = NULL;
+    char buf[FW_DEVNAME];
+    if (!wlan_prefix)
+        return devs_add(out, n, max, dev, len);
+    /* "^.+\.sta[0-9]+$": the last ".sta" followed by digits only */
+    for (const char *p = dev + 1; (p = strstr(p, ".sta")) != NULL; p++)
+        sta = p;
+    if (sta && sta[4]) {
+        const char *d = sta + 4;
+        while (*d >= '0' && *d <= '9')
+            d++;
+        if (!*d) {
+            snprintf(buf, sizeof(buf), "%.*s.sta*", (int)(sta - dev), dev);
+            return devs_add(out, n, max, buf, strlen(buf));
+        }
+    }
+    n = devs_add(out, n, max, dev, len);
+    /* IFNAMSIZ - 5: "NAME.sta*" must name a possible device */
+    if (len < 16 - 5 && (sys_isdir(sysfs, dev, "phy80211") || sys_isdir(sysfs, dev, "wireless"))) {
+        snprintf(buf, sizeof(buf), "%s.sta*", dev);
+        n = devs_add(out, n, max, buf, strlen(buf));
+    }
+    return n;
+}
+
+static int hw_devs(const char *sysfs, const char *dev, int wlan_prefix, char (*out)[FW_DEVNAME], int n, int max,
+                   int depth)
+{
+    char p[512];
+    DIR *d;
+    struct dirent *e;
+    char *names[64];
+    int nn = 0;
+    if (!*dev || strchr(dev, '/') || !strcmp(dev, ".") || !strcmp(dev, ".."))
+        return n;
+    if (!sys_isdir(sysfs, dev, "bridge") && !sys_isvlan(sysfs, dev))
+        return hw_port(sysfs, dev, wlan_prefix, out, n, max);
+    if (depth >= 8)
+        return n;
+    snprintf(p, sizeof(p), "%s/%s", sysfs, dev);
+    if (!(d = opendir(p)))
+        return n;
+    while ((e = readdir(d)) != NULL && nn < 64)
+        if (!strncmp(e->d_name, "lower_", 6) && e->d_name[6] && (names[nn] = strdup(e->d_name + 6)) != NULL)
+            nn++;
+    closedir(d);
+    /* readdir's order is the file system's: sorted, the rules are stable */
+    qsort(names, (size_t)nn, sizeof(*names), cmp_str);
+    for (int i = 0; i < nn; i++) {
+        n = hw_devs(sysfs, names[i], wlan_prefix, out, n, max, depth + 1);
+        free(names[i]);
+    }
+    return n;
+}
+
+int fw_hw_offload_devs(const char *sysfs, const char *ifname, int wlan_prefix, char (*out)[FW_DEVNAME], int n,
+                       int max)
+{
+    return hw_devs(sysfs, ifname, wlan_prefix, out, n, max, 0);
+}
+
+#else
+
+int fw_wlan_prefix(void)
+{
+    return 0;
+}
+
+int fw_hw_offload_devs(const char *sysfs, const char *ifname, int wlan_prefix, char (*out)[FW_DEVNAME], int n,
+                       int max)
+{
+    (void)sysfs;
+    (void)wlan_prefix;
+    return devs_add(out, n, max, ifname, strlen(ifname));
+}
+
+#endif
+
+/* The flowtable devices of one configured interface: their names, n of them */
+#define FW_HW_MAX 32
+static int hw_offload_of(const char *ifname, char (*out)[FW_DEVNAME])
+{
+    static int auto_wp = -1; /* the kernel does not change under us */
+    int wp = g_wlan_prefix;
+    if (wp < 0) {
+        if (auto_wp < 0)
+            auto_wp = fw_wlan_prefix();
+        wp = auto_wp;
+    }
+    return fw_hw_offload_devs(g_sysfs ? g_sysfs : "/sys/class/net", ifname, wp, out, 0, FW_HW_MAX);
+}
+
+/* The configured flowtable interfaces: WAN, then LAN, each once */
+static int offload_ifaces(const fw_config *c, const char **v)
+{
+    const char *w[FW_MAX_IFS];
+    int nw = fw_ifaces(c, w), n = 0;
+    for (int i = 0; i < nw + c->nlan; i++) {
+        const char *x = i < nw ? w[i] : c->lan[i - nw];
+        int dup = 0;
+        for (int k = 0; k < n && !dup; k++)
+            dup = !strcmp(v[k], x);
+        if (!dup)
+            v[n++] = x;
+    }
+    return n;
+}
+
+/* "add flowtable" of one device (nft syntax, without the leading "nft") */
+static void hw_add_cmd(const fw_config *c, const char *dev, sbuf *s)
+{
+    sb_printf(s, "add flowtable inet geneva_%u ft { hook ingress priority 0; flags offload; devices = { \"%s\" }; }",
+              c->queue, dev);
 }
 
 /* The interfaces to match: --iface, or its list under --ext. 0: any. */
@@ -552,17 +758,39 @@ static void nft_obs_chain(const fw_config *c, sbuf *s, int outdir)
  * flowtable over the WAN (--iface) and LAN (--ext-lan) devices; flows to the
  * ports stay out of it while the queue needs their packets (all of them, or
  * the first N of --first). The system's own offload must be off. */
-static void nft_offload(const fw_config *c, sbuf *s)
+static void nft_offload(const fw_config *c, sbuf *s, int hw_inline)
 {
     const char *protos[2] = {c->tcp ? "tcp" : NULL, c->udp ? "udp" : NULL};
-    const char *v[FW_MAX_IFS];
-    int n = fw_ifaces(c, v);
-    sb_puts(s, "\tflowtable ft {\n\t\thook ingress priority 0; devices = { ");
-    for (int i = 0; i < n + c->nlan; i++)
-        sb_printf(s, "%s\"%s\"", i ? ", " : "", i < n ? v[i] : c->lan[i - n]);
-    sb_puts(s, " };\n");
-    if (c->offload == 2)
-        sb_puts(s, "\t\tflags offload;\n");
+    const char *v[FW_MAX_IFS * 2];
+    int n = offload_ifaces(c, v);
+    if (c->offload == 2 && hw_inline) {
+        /* hardware, first try: every resolved device at once (any kernel;
+         * fails as a whole when one device cannot offload) */
+        char all[FW_HW_MAX * 2][FW_DEVNAME];
+        int na = 0;
+        for (int i = 0; i < n; i++) {
+            char devs[FW_HW_MAX][FW_DEVNAME];
+            int nd = hw_offload_of(v[i], devs);
+            if (!nd)
+                na = devs_add(all, na, FW_HW_MAX * 2, v[i], strlen(v[i]));
+            for (int k = 0; k < nd; k++)
+                na = devs_add(all, na, FW_HW_MAX * 2, devs[k], strlen(devs[k]));
+        }
+        sb_puts(s, "\tflowtable ft {\n\t\thook ingress priority 0; devices = { ");
+        for (int i = 0; i < na; i++)
+            sb_printf(s, "%s\"%s\"", i ? ", " : "", all[i]);
+        sb_puts(s, " };\n\t\tflags offload;\n");
+    } else if (c->offload == 2) {
+        /* hardware as zapret2: no devices yet; they are added one by one
+         * after the script (hw_offload_up, hw_offload_script), as some of
+         * them cannot offload. Linux 5.8+ */
+        sb_puts(s, "\tflowtable ft {\n\t\thook ingress priority 0;\n\t\tflags offload;\n");
+    } else {
+        sb_puts(s, "\tflowtable ft {\n\t\thook ingress priority 0; devices = { ");
+        for (int i = 0; i < n; i++)
+            sb_printf(s, "%s\"%s\"", i ? ", " : "", v[i]);
+        sb_puts(s, " };\n");
+    }
     sb_puts(s, "\t}\n\tchain forward {\n\t\ttype filter hook forward priority -1; policy accept;\n\t\t");
     if (c->ipv4 != c->ipv6)
         sb_printf(s, "meta nfproto %s ", c->ipv4 ? "ipv4" : "ipv6");
@@ -597,7 +825,8 @@ static void nft_offload(const fw_config *c, sbuf *s)
     sb_puts(s, "\t\tflow add @ft\n\t}\n");
 }
 
-static char *gen_nft_script(const fw_config *c, int up, int notrack)
+/* hw_inline: --ext-flowoffload hardware with the devices in the script */
+static char *gen_nft_script(const fw_config *c, int up, int notrack, int hw_inline)
 {
     sbuf s;
     sb_init(&s);
@@ -622,7 +851,7 @@ static char *gen_nft_script(const fw_config *c, int up, int notrack)
         nft_obs_chain(c, &s, 0);
     }
     if (c->offload)
-        nft_offload(c, &s);
+        nft_offload(c, &s, hw_inline);
     if (notrack && c->notrack_frag)
         /* --ext: zapret2's predefrag, of our packets only fragments and
          * TCP without SYN, RST and ACK, which conntrack takes as invalid */
@@ -663,6 +892,33 @@ static char *gen_nft_script(const fw_config *c, int up, int notrack)
 
 /* ---- printing ------------------------------------------------------------ */
 
+/* --ext-flowoffload hardware, as zapret2's nft.sh: each device on its own
+ * (a device that cannot offload fails alone, silently); when none of an
+ * interface's devices went in, the interface itself */
+static void hw_offload_script(const fw_config *c, sbuf *out)
+{
+    const char *v[FW_MAX_IFS * 2];
+    int n = offload_ifaces(c, v);
+    for (int i = 0; i < n; i++) {
+        char devs[FW_HW_MAX][FW_DEVNAME];
+        int nd = hw_offload_of(v[i], devs), alone = nd == 1 && !strcmp(devs[0], v[i]);
+        if (!devname_ok(v[i], strlen(v[i])))
+            continue;
+        if (!alone)
+            sb_puts(out, "b=\n");
+        for (int k = 0; k < nd; k++) {
+            sb_puts(out, "nft '");
+            hw_add_cmd(c, devs[k], out);
+            sb_printf(out, "' 2>/dev/null%s\n", alone ? "" : " && b=1");
+        }
+        if (!alone) {
+            sb_puts(out, "[ -n \"$b\" ] || nft '");
+            hw_add_cmd(c, v[i], out);
+            sb_puts(out, "' 2>/dev/null\n");
+        }
+    }
+}
+
 /* --fw-hook-pre/post: "'PATH' up|down BACKEND QUEUE" */
 static void hook_line(const fw_config *c, const char *path, fw_backend b, int up, sbuf *out)
 {
@@ -676,9 +932,11 @@ void fw_script(const fw_config *c, fw_backend b, int up, sbuf *out)
     if (b == FW_IPFW || b == FW_PF) {
         fw_bsd_script(c, b, up, out);
     } else if (b == FW_NFT) {
-        char *s = gen_nft_script(c, up, c->notrack);
+        char *s = gen_nft_script(c, up, c->notrack, 0);
         sb_printf(out, "nft -f - <<'EOF'\n%sEOF\n", s);
         free(s);
+        if (up && c->offload == 2 && !c->forward)
+            hw_offload_script(c, out);
     } else if (up && c->offload) {
         sb_puts(out, "# --ext-flowoffload works with nft only\n");
     } else {
@@ -816,6 +1074,21 @@ int fw_read_filter_file(const char *path, sbuf *out, sbuf *err)
     return 0;
 }
 
+int fw_parse_priority(const char *s, int windows, int *prio, sbuf *err)
+{
+    int64_t v;
+    if (!windows) {
+        sb_puts(err, "--priority is Windows only (WinDivert handle priority)");
+        return -1;
+    }
+    if (parse_i64(s, &v) < 0 || v < -FW_PRIORITY_MAX || v > FW_PRIORITY_MAX) {
+        sb_printf(err, "--priority must be a number from %d to %d", -FW_PRIORITY_MAX, FW_PRIORITY_MAX);
+        return -1;
+    }
+    *prio = (int)v;
+    return 0;
+}
+
 int fw_parse_filter_args(const args_t *a, int windows, fw_config *c, char **owned, sbuf *err)
 {
     const char *f = arg_str(a, "filter", NULL), *ff = arg_str(a, "filter-file", NULL);
@@ -827,24 +1100,14 @@ int fw_parse_filter_args(const args_t *a, int windows, fw_config *c, char **owne
                       f ? "filter" : "filter-file");
             return -1;
         }
-        if (pr) {
-            sb_puts(err, "--priority is Windows only (WinDivert handle priority)");
-            return -1;
-        }
-        return 0;
+        return pr ? fw_parse_priority(pr, 0, &c->priority, err) : 0;
     }
     if (f && ff) {
         sb_puts(err, "--filter and --filter-file exclude each other");
         return -1;
     }
-    if (pr) {
-        int64_t v;
-        if (parse_i64(pr, &v) < 0 || v < -FW_PRIORITY_MAX || v > FW_PRIORITY_MAX) {
-            sb_printf(err, "--priority must be a number from %d to %d", -FW_PRIORITY_MAX, FW_PRIORITY_MAX);
-            return -1;
-        }
-        c->priority = (int)v;
-    }
+    if (pr && fw_parse_priority(pr, 1, &c->priority, err) < 0)
+        return -1;
     if (f) {
         while (*f == ' ' || *f == '\t')
             f++;
@@ -1258,32 +1521,138 @@ static int nft_run(const char *script, sbuf *out)
     return fw_run_argv(argv, script, out);
 }
 
-static int nft_up(const fw_config *c, sbuf *err)
+/* dev is among the devices of "nft list flowtable" output */
+static int ft_listed(const char *list, const char *dev)
 {
-    sbuf out;
-    char *s = gen_nft_script(c, 1, c->notrack);
-    int r;
+    const char *p = strstr(list, "devices = {"), *end;
+    size_t l = strlen(dev);
+    if (!p || !(end = strchr(p, '}')))
+        return 0;
+    for (p += 11; p < end && (p = strstr(p, dev)) != NULL && p < end; p++) {
+        char a = p[-1], b = p[l];
+        if ((a == ' ' || a == '{' || a == ',' || a == '"') && (b == ' ' || b == ',' || b == '}' || b == '"'))
+            return 1;
+    }
+    return 0;
+}
+
+/* One device into the hardware flowtable: 1 it is there now, 0 not.
+ * Kernels before 5.8 answer "add" on an existing flowtable with success
+ * and change nothing, so the flowtable is listed after each add. */
+static int hw_add_run(const fw_config *c, const char *dev, const char *iface)
+{
+    sbuf cmd, out;
+    int r, in = 0;
+    sb_init(&cmd);
     sb_init(&out);
-    r = nft_run(s, &out);
+    hw_add_cmd(c, dev, &cmd);
+    sb_putc(&cmd, '\n');
+    r = nft_run(cmd.data, &out);
+    fw_trim(&out);
+    if (r == 0) {
+        sb_reset(&cmd);
+        sb_reset(&out);
+        sb_printf(&cmd, "list flowtable inet geneva_%u ft\n", c->queue);
+        in = nft_run(cmd.data, &out) == 0 && ft_listed(out.data ? out.data : "", dev);
+        if (in)
+            LOGD("fw", "flowtable: %s (%s) offloads", dev, iface);
+        else
+            LOGD("fw", "flowtable: %s (%s) cannot offload: not in the flowtable after add", dev, iface);
+    } else {
+        LOGD("fw", "flowtable: %s (%s) cannot offload: %s", dev, iface, out.len ? out.data : "nft failed");
+    }
+    sb_free(&cmd);
+    sb_free(&out);
+    return in;
+}
+
+/* --ext-flowoffload hardware: hw_offload_script's commands, run; a device
+ * under several interfaces is tried once */
+static void hw_offload_up(const fw_config *c)
+{
+    const char *v[FW_MAX_IFS * 2];
+    char tried[FW_HW_MAX * 2][FW_DEVNAME];
+    int res[FW_HW_MAX * 2];
+    int n = offload_ifaces(c, v), total = 0, nt = 0;
+    for (int i = 0; i < n; i++) {
+        char devs[FW_HW_MAX][FW_DEVNAME];
+        int nd = hw_offload_of(v[i], devs), any = 0;
+        for (int k = 0; k <= nd; k++) {
+            /* k == nd: none went in, the interface itself */
+            const char *d = k < nd ? devs[k] : v[i];
+            int t = 0, prev = nt;
+            if (k == nd && (any || !devname_ok(d, strlen(d))))
+                break;
+            while (t < nt && strcmp(tried[t], d))
+                t++;
+            if (t == nt && nt < FW_HW_MAX * 2) {
+                nt = devs_add(tried, nt, FW_HW_MAX * 2, d, strlen(d));
+                if (nt > prev)
+                    res[t] = hw_add_run(c, d, v[i]);
+            }
+            if (t < nt)
+                any |= res[t];
+        }
+        if (!any)
+            LOGI("fw", "--ext-flowoffload hardware: %s is not offloaded", v[i]);
+        total += any;
+    }
+    if (!total)
+        LOGW("fw", "--ext-flowoffload hardware: no device took the flowtable, nothing is offloaded");
+}
+
+/* The rules, with the notrack fallback; err gets nft's message */
+static int nft_try(const fw_config *c, int hw_inline, sbuf *out)
+{
+    char *s = gen_nft_script(c, 1, c->notrack, hw_inline);
+    int r = nft_run(s, out);
     LOGD("fw", "nft -f - <<EOF\n%sEOF -> %d", s, r);
     free(s);
     if (r != 0 && c->notrack) {
         /* kernels without the nft notrack expression */
         sbuf o2;
         sb_init(&o2);
-        s = gen_nft_script(c, 1, 0);
+        s = gen_nft_script(c, 1, 0, hw_inline);
         if (nft_run(s, &o2) == 0) {
-            fw_trim(&out);
-            LOGW("fw", "nft notrack failed (%s); our packets stay tracked by conntrack", out.data);
+            fw_trim(out);
+            LOGW("fw", "nft notrack failed (%s); our packets stay tracked by conntrack", out->data);
             r = 0;
         }
         free(s);
         sb_free(&o2);
     }
+    return r;
+}
+
+static int nft_up(const fw_config *c, sbuf *err)
+{
+    sbuf out;
+    int hw = c->offload == 2 && !c->forward, r;
+    sb_init(&out);
+    /* hardware: all devices at once first (any kernel), then as zapret2
+     * one by one, skipping those that cannot offload (Linux 5.8+) */
+    r = nft_try(c, hw, &out);
+    if (r == 0 && hw)
+        LOGD("fw", "flowtable: all devices at once");
+    if (r != 0 && hw) {
+        sbuf o2;
+        sb_init(&o2);
+        fw_trim(&out);
+        LOGD("fw", "flowtable with all devices at once: %s; adding them one by one", out.len ? out.data : "failed");
+        r = nft_try(c, 0, &o2);
+        if (r == 0)
+            hw_offload_up(c);
+        else {
+            sb_reset(&out);
+            sb_puts(&out, o2.data ? o2.data : "");
+        }
+        sb_free(&o2);
+    }
     if (r != 0) {
+        char *s;
         fw_trim(&out);
         sb_printf(err, "nft: %s", out.len ? out.data : "cannot run");
-        s = gen_nft_script(c, 0, 0);
+        s = gen_nft_script(c, 0, 0, 0);
         nft_run(s, NULL);
         free(s);
     }
@@ -1293,7 +1662,7 @@ static int nft_up(const fw_config *c, sbuf *err)
 
 static void nft_down(const fw_config *c)
 {
-    char *s = gen_nft_script(c, 0, 0);
+    char *s = gen_nft_script(c, 0, 0, 0);
     nft_run(s, NULL);
     free(s);
 }
