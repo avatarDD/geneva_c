@@ -158,6 +158,37 @@ geneva ctl --json '{"cmd":"pause"}'
 | `first` | Linux, Windows | `--first N` работает (Windows: счёт в движке, с 1.1) |
 | `firewall_none_eval` | Linux | `eval`/`evolve --firewall none` |
 | `external_workers` | везде | `--probe external` с `--workers N`: запросы воркеров идут одновременно, ответы по `id` в любом порядке (с 1.2) |
+| `divert` | FreeBSD, OpenBSD | бэкенд движка — divert-сокеты, правила ipfw или pf (с 2.0) |
+
+Расширения `--ext` (с 2.0, `docs/EXT.md`) идут в конце списка; в сборке
+`make EXT=0` их нет:
+
+| Флаг | Где | Смысл |
+|---|---|---|
+| `ext` | везде | ключ `--ext` у `run`, `check`, `apply`, `eval`, `evolve`, `fw` |
+| `ext_crypto` | везде, кроме `make EXT_CRYPTO=0` | AES-GCM, HKDF: расшифровка QUIC Initial, `fake_quic_initial`, `xwgobfs` |
+| `ext_ctrack` | везде | conntrack, триггеры `FLOW:` и `META:`, `--ext-ctrack-*` |
+| `ext_l7` | везде | распознавание L7, сборка ClientHello и QUIC, триггеры `L7:` |
+| `ext_xact` | везде | x-действия (`xfake`, `xsplit`, …), блобы `--ext-blob`, комбинаторы |
+| `ext_profile` | везде | профили `--new`/`--template`/`--import`, `--filter-*`, `--ext-profile` |
+| `ext_lists` | везде | `--hostlist*`, `--ipset*`, gzip, команда `reload_lists` |
+| `ext_autolist` | везде | `--hostlist-auto*`, `--ext-ipcache-*` |
+| `ext_service` | везде (часть — Linux) | `@FILE`, `--dry-run`, `--pidfile`, `--daemon`, `--user`/`--uid`, seccomp, syslog, команды `ext_flows`, `ext_keys` |
+| `ext_fw` | везде | `--ext-first`, `--ext-wan`/`--ext-lan`, `--ext-notrack`, `--ext-ttl-icmp`, `--ext-flowoffload`, `--fw-hook-*`, `--wf-*` |
+| `ext_selftest` | везде | `geneva selftest --ext --fuzz N` |
+| `ext_auto` | Linux, Windows | `--ext-auto observe`, события `ext_flow`, `ext_impaired`, `ext_class`, `ext_link`, команда `ext_status` |
+| `ext_tools` | везде | `geneva resolve --ext`, `geneva ip2net --ext` |
+| `ext_blockcheck` | везде | `geneva blockcheck --ext` |
+| `ext_seqtrack` | везде | `xoob`, `xtlsrec`, `xdrip` |
+| `ext_tuner` | везде | `--ext-arm`, `--ext-tune rr\|ts`, `--ext-state`, событие `ext_arm`, `ext_tuned`, предложения `ext_proposal` и команды `ext_proposals`, `ext_approve`, `ext_reject` |
+| `ext_treat` | Linux, Windows | `--ext-auto propose\|apply`, `--ext-treat-arms`, событие `ext_treat` |
+| `ext_obfs` | везде | `xwgobfs`, `xippxor`, `xudp2icmp`, `xsynhide` |
+| `ext_workers` | Linux | `--ext-workers N` |
+| `ext_surgical` | Linux | `--ext-healthy-mark`, счётчик `healthy` |
+| `ext_ga` | Linux | `--ext-ga` |
+| `ext_ssid` | Linux | `--filter-ssid`, `--filter-ssid-neg` у профиля |
+| `ext_nlm` | Windows | `--ssid-filter`, `--nlm-filter`, `--nlm-list` |
+| `ext_sandbox` | Windows | песочница `run --ext`, `--ext-sandbox` |
 
 ## Сигналы (POSIX)
 

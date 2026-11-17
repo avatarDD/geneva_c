@@ -139,7 +139,7 @@ int cmd_version(int argc, char **argv)
         jw_str(&w, "windivert");
 #endif
 #if defined(__FreeBSD__) || defined(__OpenBSD__)
-        jw_str(&w, "divert"); /* 1.3: divert sockets (ipfw, pf) */
+        jw_str(&w, "divert"); /* 2.0: divert sockets (ipfw, pf) */
 #endif
         jw_str(&w, "ipv6");
         jw_str(&w, "pcap");

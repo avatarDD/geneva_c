@@ -201,5 +201,33 @@ check "fw down removes them" '[ $(ipfw_ours) -eq 0 ]'
 "$GENEVA" fw print -p $PORT > "$WORK/cap.txt"
 check "fw print shows ipfw by default" 'grep -q "^ipfw -q add \$R divert 310 tcp from any to any 7 out not diverted // geneva 310$" "$WORK/cap.txt"'
 
+# the pfSense service script (packaging/pfsense/geneva.sh) on this host;
+# it enables pf (with no rules: everything passes), which cleanup undoes
+CASE="pfsense script"
+PF=$(dirname "$0")/../../packaging/pfsense/geneva.sh
+if [ -f "$PF" ]; then
+    pf_was=$(pfctl -s info 2>/dev/null | grep -c "Status: Enabled")
+    echo '[TCP:flags:S]-duplicate-| \/' > "$WORK/pf.txt"
+    cat > "$WORK/pf.conf" <<CONF
+STRATEGY_FILE=$WORK/pf.txt
+PORTS=$PORT
+CONTROL=unix:$WORK/pf.sock
+LOG_FILE=$WORK/pf.log
+CONF
+    PFS() { GENEVA="$GENEVA" GENEVA_CONF="$WORK/pf.conf" GENEVA_PIDFILE="$WORK/pf.pid" sh "$PF" "$@"; }
+    PFS start > "$WORK/cap.txt" 2>&1
+    check "start: running, ipfw rules up" 'PFS status >/dev/null && [ $(ipfw_ours) -ge 2 ]'
+    exchange && ok "exchange works" || bad "exchange failed" "$WORK/pf.log"
+    echo '[TCP:flags:S]-duplicate(tamper{TCP:window:replace:7},)-| \/' > "$WORK/pf.txt"
+    PFS reload
+    sleep 0.5
+    "$GENEVA" ctl -c "unix:$WORK/pf.sock" status > "$WORK/cap.txt" 2>&1
+    check "reload re-reads the strategy" 'grep -q "replace:7" "$WORK/cap.txt"'
+    PFS stop
+    check "stop: rules removed" '! PFS status >/dev/null && [ $(ipfw_ours) -eq 0 ]'
+    [ "$pf_was" -eq 0 ] && pfctl -d >/dev/null 2>&1
+    exchange && ok "exchange works after stop" || bad "exchange failed after stop"
+fi
+
 echo "divert e2e: $passes passed, $fails failed"
 [ $fails -eq 0 ]

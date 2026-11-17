@@ -47,9 +47,26 @@ const char *const ext_features[] = {
     "ext_service",  /* X7a: @FILE, --dry-run, --daemon, --pidfile, --user/--uid, seccomp, syslog, ctl ext_flows/ext_keys */
     "ext_fw",       /* X7b: --ext-first, --ext-wan/--ext-lan, --ext-notrack, --ext-ttl-icmp, --ext-flowoffload, --fw-hook-*, --wf-* */
     "ext_selftest", /* X7c: geneva selftest --ext --fuzz N, fuzz targets for libFuzzer/AFL++ */
-    "ext_auto",     /* X9: --ext-auto observe (NFLOG, detector), ext_flow/ext_impaired/ext_class, ext_status */
     "ext_tools",    /* X12a: geneva resolve --ext (mdig), geneva ip2net --ext */
     "ext_blockcheck", /* X12b: geneva blockcheck --ext (blockcheck2 and its grid) */
+    "ext_seqtrack",   /* X8: xoob, xtlsrec, xdrip (the flow's seq shifted) */
+    "ext_tuner",      /* X11a/b: --ext-arm, --ext-tune rr|ts, --ext-state, ext_proposals/ext_approve/ext_reject */
+    "ext_obfs",       /* X13a: xwgobfs, xippxor, xudp2icmp, xsynhide */
+#if defined(PLAT_LINUX) || defined(_WIN32)
+    /* --ext-auto: NFLOG and ctnetlink, or a WinDivert sniffer; not on the BSDs */
+    "ext_auto",  /* X9: --ext-auto observe (NFLOG, detector), ext_flow/ext_impaired/ext_class, ext_status */
+    "ext_treat", /* X11c: --ext-auto propose|apply, --ext-treat-arms, ext_treat */
+#endif
+#ifdef PLAT_LINUX
+    "ext_workers",    /* X10a: --ext-workers N */
+    "ext_surgical",   /* X10b: --ext-healthy-mark */
+    "ext_ga",         /* X11d: --ext-ga */
+    "ext_ssid",       /* X13c: --filter-ssid of a profile (nl80211) */
+#endif
+#ifdef _WIN32
+    "ext_nlm",     /* X13c: --ssid-filter, --nlm-filter, --nlm-list */
+    "ext_sandbox", /* X13d: the sandbox of run --ext, --ext-sandbox */
+#endif
     0,
 };
 

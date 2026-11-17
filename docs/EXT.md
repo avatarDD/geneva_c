@@ -56,6 +56,7 @@ geneva run --ext -s '...'
 | X13c | фильтр профиля `--filter-ssid` (Linux, nl80211), `--ssid-filter`, `--nlm-filter`, `--nlm-list` (Windows), статическая сборка на Android | ниже |
 | X13d | песочница `run --ext` на Windows (как у winws2): Low integrity, без привилегий и дочерних процессов, `--ext-sandbox` | ниже |
 | X14a | скрипты служб OpenRC, SysV init, runit, s6 (`packaging/`) | README, «Скрипты служб» |
+| X14b | отчёт паритета, скрипт pfSense, архивы FreeBSD и OpenBSD, релиз 2.0.0 | `docs/PARITY.md`, README |
 | X12c | `geneva blockcheck`: проверка DNS (системный резолвер против публичных DNS, UDP против TCP), DoH через curl при подмене, тесты блокировки по порту и по IP | ниже |
 
 ## Conntrack и триггеры `FLOW:`, `META:` (X3)
@@ -1051,8 +1052,7 @@ CI: libFuzzer по 60 с на цель и `selftest --fuzz` под санита�
 дробного), ICMP без данных в распознавании L7 (`xl7.c`), утечка пустого
 блоба `0x` (`--ext-blob имя:0x`, `pattern=0x` и т.п.).
 
-Отличие от плана: целей `nflog` и `ctnl` пока нет — их разборщики
-появятся на этапе X9 вместе со своими целями.
+Цели `nflog` и `ctnl` добавлены на этапе X9 вместе с их разборщиками.
 
 ## Seqtrack: `xoob`, `xtlsrec`, `xdrip` (X8)
 

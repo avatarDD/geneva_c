@@ -26,6 +26,7 @@ O=${O:-build-fuzz}
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 cd "$root"
+case $O in /*) ;; *) O=$root/$O ;; esac
 
 case $FUZZER in
 libfuzzer)
@@ -91,7 +92,7 @@ for t in $targets; do
     fi
     echo "== $t: $T s"
     if [ "$FUZZER" = libfuzzer ]; then
-        if ! (cd "$d" && "$root/$O/fuzz-$t" -max_total_time="$T" -max_len=65536 -timeout=10 -rss_limit_mb=2048 \
+        if ! (cd "$d" && "$O/fuzz-$t" -max_total_time="$T" -max_len=65536 -timeout=10 -rss_limit_mb=2048 \
             -print_final_stats=1 corpus >"$d/log.txt" 2>&1); then
             tail -40 "$d/log.txt"
             failed="$failed $t"
@@ -101,7 +102,7 @@ for t in $targets; do
         echo
     else
         AFL_SKIP_CPUFREQ=1 AFL_NO_UI=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
-            afl-fuzz -V "$T" -i "$d/corpus" -o "$d/out" -- "$root/$O/fuzz-$t" >"$d/log.txt" 2>&1 || true
+            afl-fuzz -V "$T" -i "$d/corpus" -o "$d/out" -- "$O/fuzz-$t" >"$d/log.txt" 2>&1 || true
         if [ -n "$(ls "$d/out/default/crashes" 2>/dev/null | grep -v README)" ]; then
             failed="$failed $t"
         fi

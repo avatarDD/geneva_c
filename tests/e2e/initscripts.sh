@@ -248,7 +248,8 @@ echo "$out" | grep -q "instance" && bad "agent started without a token" || ok "a
 for f in packaging/openwrt/geneva.init packaging/entware/S51geneva packaging/entware/010-geneva.sh \
     packaging/sysv/geneva packaging/sysv/geneva.default packaging/openrc/geneva packaging/openrc/geneva.confd \
     packaging/runit/geneva/run packaging/runit/geneva/finish packaging/runit/geneva/log/run packaging/runit/geneva/conf \
-    packaging/s6/geneva/run packaging/s6/geneva/finish packaging/s6/geneva/conf; do
+    packaging/s6/geneva/run packaging/s6/geneva/finish packaging/s6/geneva/conf \
+    packaging/pfsense/geneva.sh packaging/pfsense/geneva.conf; do
     sh -n "$ROOT/$f" && ok "syntax: $f" || bad "syntax: $f"
 done
 

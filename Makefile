@@ -14,7 +14,7 @@ STRIP   ?= strip
 O       ?= build
 EXT     ?= 1
 EXT_CRYPTO ?= 1
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 1.2.0)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 2.0.0)
 
 TARGET_TRIPLE := $(shell $(CC) -dumpmachine 2>/dev/null)
 ifneq (,$(findstring mingw,$(TARGET_TRIPLE))$(findstring windows,$(TARGET_TRIPLE)))
