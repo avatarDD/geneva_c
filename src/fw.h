@@ -116,6 +116,9 @@ int fw_read_filter_file(const char *path, sbuf *out, sbuf *err);
  * both): elsewhere the options are refused. A file's expression goes to
  * *owned (free it). Returns 0, or -1 with a message (a usage error). */
 int fw_parse_filter_args(const args_t *a, int windows, fw_config *c, char **owned, sbuf *err);
+/* --priority's value s: -30000..30000, Windows only. Returns 0, or -1
+ * with a message. */
+int fw_parse_priority(const char *s, int windows, int *prio, sbuf *err);
 
 /* The rules of the evaluator's engine: local ports base .. base + span - 1
  * are the probes' (server_side: outbound packets come from them). */

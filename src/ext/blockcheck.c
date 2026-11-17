@@ -1344,18 +1344,6 @@ void bc_print_json(const bc_run *b, int ndomains, sbuf *out)
 
 int bc_priority(const char *s, int windows, int *prio, sbuf *err)
 {
-    int64_t v;
     *prio = windows ? BC_WF_PRIORITY : 0;
-    if (!s)
-        return 0;
-    if (!windows) {
-        sb_puts(err, "--priority is Windows only (WinDivert handle priority)");
-        return -1;
-    }
-    if (parse_i64(s, &v) < 0 || v < -FW_PRIORITY_MAX || v > FW_PRIORITY_MAX) {
-        sb_printf(err, "--priority must be a number from %d to %d", -FW_PRIORITY_MAX, FW_PRIORITY_MAX);
-        return -1;
-    }
-    *prio = (int)v;
-    return 0;
+    return s ? fw_parse_priority(s, windows, prio, err) : 0;
 }

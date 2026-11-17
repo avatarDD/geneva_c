@@ -334,6 +334,11 @@ TEST(fwx_hw_devs)
     CHECK_INT(n, 0);
     n = fw_hw_offload_devs(root, "../etc", 1, d, 0, 32);
     CHECK_INT(n, 0);
+    /* names that would need quoting in nft or the shell are left out */
+    n = fw_hw_offload_devs(root, "a'b", 1, d, 0, 32);
+    CHECK_INT(n, 0);
+    n = fw_hw_offload_devs(root, "a\"b", 0, d, 0, 32);
+    CHECK_INT(n, 0);
     /* appends without duplicates, up to max */
     n = fw_hw_offload_devs(root, "lan1", 1, d, 0, 32);
     n = fw_hw_offload_devs(root, "br-lan", 1, d, n, 32);
@@ -648,6 +653,128 @@ static void write_exe(const char *path, const char *body)
     chmod(path, 0755);
 }
 
+static void slurp(const char *path, sbuf *out)
+{
+    FILE *f = fopen(path, "r");
+    char line[512];
+    if (!f)
+        return;
+    while (fgets(line, sizeof(line), f))
+        sb_puts(out, line);
+    fclose(f);
+}
+
+/* --ext-flowoffload hardware applied through a fake nft on PATH: lan2
+ * cannot offload; MODE=old answers every "add" on the flowtable with
+ * success and keeps nothing (kernels before 5.8) */
+TEST(fwx_hw_up)
+{
+    char dir[] = "/tmp/geneva-fwxhw-XXXXXX", bin[64], log[64], st[64], body[2048], mode[64];
+    const char *old = getenv("PATH");
+    char *saved = old ? xstrdup(old) : NULL;
+    fw_config c;
+    sbuf e, s;
+    if (!mkdtemp(dir)) {
+        CHECK(0);
+        free(saved);
+        return;
+    }
+    snprintf(bin, sizeof(bin), "%s/nft", dir);
+    snprintf(log, sizeof(log), "%s/log", dir);
+    snprintf(st, sizeof(st), "%s/state", dir);
+    snprintf(mode, sizeof(mode), "%s/mode", dir);
+    snprintf(body, sizeof(body),
+             "#!/bin/sh\n"
+             "PATH=/usr/bin:/bin\n"
+             "in=$(cat)\n"
+             "printf '%%s\\n' \"$in\" >> %s\n"
+             "case \"$in\" in\n"
+             "*'list flowtable'*) printf 'table inet geneva_310 {\\n\\tflowtable ft {\\n\\t\\tdevices = { %%s }\\n\\t}\\n}\\n'"
+             " \"$(cat %s 2>/dev/null | tr '\\n' ',' | sed 's/,$//; s/,/, /g')\"; exit 0;;\n"
+             "*'add flowtable'*'\"lan2\"'*) echo 'Error: Operation not supported'; exit 1;;\n"
+             "*'add flowtable'*) [ \"$(cat %s)\" = old ] && exit 0\n"
+             "  d=${in##*devices = \\{ \\\"}; echo \"${d%%%%\\\"*}\" >> %s; exit 0;;\n"
+             "*'\"lan2\"'*) echo 'Error: Operation not supported'; exit 1;;\n"
+             "esac\nexit 0\n",
+             log, st, mode, st);
+    write_exe(bin, body);
+    write_exe(mode, "new\n");
+    setenv("PATH", dir, 1);
+    mk(dir, "br-lan", NULL);
+    mk(dir, "br-lan/bridge", NULL);
+    mk(dir, "br-lan/lower_lan1", NULL);
+    mk(dir, "br-lan/lower_lan2", NULL);
+    mk(dir, "br-two", NULL);
+    mk(dir, "br-two/bridge", NULL);
+    mk(dir, "br-two/lower_lan2", NULL);
+    mk(dir, "lan1", NULL);
+    mk(dir, "lan2", NULL);
+    fw_set_offload_env(dir, 0);
+    sb_init(&e);
+    sb_init(&s);
+    fw_config_default(&c);
+    ports_parse("443", &c.ports);
+    c.backend = FW_NFT;
+    c.notrack = 0;
+    c.offload = 2;
+    c.iface = "wan9";
+    c.nlan = 2;
+    c.lan[0] = "br-lan";
+    c.lan[1] = "br-two";
+
+    /* all at once fails (lan2); one by one: wan9, lan1 in; lan2 out, so
+     * br-two falls back to itself; lan2 is tried once */
+    CHECK_INT(fw_up(&c, &e), 0);
+    slurp(log, &s);
+    CHECK_INT(count(s.data, "devices = { \"wan9\", \"lan1\", \"lan2\" };\n\t\tflags offload;"), 1);
+    CHECK_INT(count(s.data, "\t\thook ingress priority 0;\n\t\tflags offload;\n"), 1);
+    CHECK_INT(count(s.data, "flags offload; devices = { \"wan9\" }"), 1);
+    CHECK_INT(count(s.data, "flags offload; devices = { \"lan1\" }"), 1);
+    CHECK_INT(count(s.data, "flags offload; devices = { \"lan2\" }"), 1);
+    CHECK_INT(count(s.data, "flags offload; devices = { \"br-lan\" }"), 0);
+    CHECK_INT(count(s.data, "flags offload; devices = { \"br-two\" }"), 1);
+    CHECK_INT(count(s.data, "list flowtable inet geneva_310 ft"), 3);
+    sb_reset(&s);
+    slurp(st, &s);
+    CHECK_STR(s.data, "wan9\nlan1\nbr-two\n");
+
+    /* before Linux 5.8: "add" succeeds and adds nothing, so every
+     * interface falls back to itself */
+    remove(log);
+    remove(st);
+    write_exe(mode, "old\n");
+    CHECK_INT(fw_up(&c, &e), 0);
+    sb_reset(&s);
+    slurp(log, &s);
+    CHECK_INT(count(s.data, "flags offload; devices = { \"lan1\" }"), 1);
+    CHECK_INT(count(s.data, "flags offload; devices = { \"br-lan\" }"), 1);
+    CHECK_INT(count(s.data, "flags offload; devices = { \"br-two\" }"), 1);
+    CHECK_INT(count(s.data, "flags offload; devices = { \"wan9\" }"), 1);
+
+    /* every device can: all at once, nothing added one by one */
+    remove(log);
+    c.nlan = 1;
+    c.lan[0] = "lan1";
+    CHECK_INT(fw_up(&c, &e), 0);
+    sb_reset(&s);
+    slurp(log, &s);
+    CHECK_INT(count(s.data, "devices = { \"wan9\", \"lan1\" };\n\t\tflags offload;"), 1);
+    CHECK_INT(count(s.data, "add flowtable"), 0);
+
+    fw_set_offload_env(NULL, -1);
+    if (saved)
+        setenv("PATH", saved, 1);
+    else
+        unsetenv("PATH");
+    free(saved);
+    if (!getenv("KEEP_FWXHW"))
+        rmtree(dir);
+    else
+        fprintf(stderr, "kept %s\n", dir);
+    sb_free(&e);
+    sb_free(&s);
+}
+
 /* The hooks run around the rules, through a fake iptables on PATH. */
 TEST(fwx_hooks)
 {
@@ -732,6 +859,7 @@ void suite_fwx(void)
     RUN(fwx_wf);
 #  ifdef __linux__
     RUN(fwx_hooks);
+    RUN(fwx_hw_up);
 #  endif
 }
 
