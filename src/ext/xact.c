@@ -100,6 +100,16 @@ static const char *canon_key(const xa_kind *k, const char *name)
     return NULL;
 }
 
+const char *xa_canon_key(const xa_kind *k, const char *name) { return canon_key(k, name); }
+
+const xa_kind *xa_kind_find(const char *name)
+{
+    for (size_t i = 0; i < ARRAY_LEN(kinds); i++)
+        if (!strcmp(kinds[i]->name, name))
+            return kinds[i];
+    return NULL;
+}
+
 static const xparam *find(const xact *a, const char *key)
 {
     for (int i = 0; i < a->np; i++)
@@ -703,7 +713,7 @@ static int std_all(xrun *r, const xact *a, xfool *f, xsendopt *o, sbuf *err)
 
 /* ---- parsing --------------------------------------------------------------------- */
 
-static void xact_free(void *x)
+void xa_free(void *x)
 {
     xact *a = x;
     if (!a)
@@ -719,15 +729,12 @@ static void xact_free(void *x)
     free(a);
 }
 
-static int op_parse(const char *name, const char *params, strat_dir dir, void **x, int *kids, sbuf *err)
+int xa_parse(const char *name, const char *params, strat_dir dir, void **x, int *kids, sbuf *err)
 {
-    const xa_kind *k = NULL;
+    const xa_kind *k = xa_kind_find(name);
     xact *a;
     xfool f;
     xsendopt o;
-    for (size_t i = 0; i < ARRAY_LEN(kinds); i++)
-        if (!strcmp(kinds[i]->name, name))
-            k = kinds[i];
     if (!k)
         return 0;
     if (dir == DIR_IN && !k->in_ok) {
@@ -788,7 +795,7 @@ static int op_parse(const char *name, const char *params, strat_dir dir, void **
     *kids = k->kids;
     return 1;
 fail:
-    xact_free(a);
+    xa_free(a);
     return -1;
 }
 
@@ -1468,4 +1475,6 @@ static void op_run(void *x, gpkt *p, strat_xenv *env)
     free(r);
 }
 
-const strat_xact xact_ops = {op_parse, op_print, op_name, xact_free, op_run, dyn_done};
+static int op_known(const char *name) { return xa_kind_find(name) != NULL; }
+
+const strat_xact xact_ops = {xa_parse, op_print, op_name, xa_free, op_run, dyn_done, op_known, xgen_random, xgen_mutate};

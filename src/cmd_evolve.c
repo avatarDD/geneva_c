@@ -121,7 +121,7 @@ int cmd_evolve(int argc, char **argv)
         {"protos", 0, 1, "LIST", "protocols the GA may use (default TCP)"},
         {"fields", 0, 1, "LIST", "only these header fields"},
         {"disable-fields", 0, 1, "LIST", "never these header fields"},
-        {"disable-action", 0, 1, "LIST", "never these actions (default sleep,trace)"},
+        {"disable-action", 0, 1, "LIST", "never these actions (default sleep,trace); --ext: also x (all x-actions) or x-action names"},
         {"no-gas", 0, 0, NULL, "triggers never get gas"},
         {"packets", 0, 1, "PCAP", "real packets to draw trigger and tamper values from"},
         EVAL_OPTS,
@@ -213,6 +213,7 @@ int cmd_evolve(int argc, char **argv)
         o.db_seed = 10;
     o.no_reject_empty = arg_has(&a, "no-reject-empty");
     o.gen.no_gas = arg_has(&a, "no-gas");
+    o.gen.server = use_probe && eo.agent != NULL; /* the strategies run on this server */
     o.seed = arg_str(&a, "seed", NULL);
     o.load_from = arg_str(&a, "load-from", NULL);
     o.out_dir = arg_str(&a, "output-dir", NULL);
@@ -253,6 +254,8 @@ int cmd_evolve(int argc, char **argv)
         fprintf(stderr, "geneva evolve: %s\n", msg.data);
         goto done;
     }
+    if (strategy_xact() && !o.gen.disabled[ACT_X])
+        LOGI("ga", "x-actions are made and their parameters changed too (--disable-action x: only crossed over)");
     if ((s = arg_str(&a, "fix-trigger", NULL)) != NULL) {
         sb_reset(&msg);
         if (trigger_parse(&fixed, s, &msg) < 0) {
@@ -418,6 +421,7 @@ done:
     for (size_t i = 0; i < o.gen.nenv; i++)
         pkt_free(o.gen.env[i]);
     free(o.gen.env);
+    gen_ctx_free(&o.gen);
     fields_reset_restrictions();
     sb_free(&msg);
     sb_free(&params);

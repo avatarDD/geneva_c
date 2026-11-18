@@ -269,7 +269,7 @@ Options:
       --protos LIST              protocols the GA may use (default TCP)
       --fields LIST              only these header fields
       --disable-fields LIST      never these header fields
-      --disable-action LIST      never these actions (default sleep,trace)
+      --disable-action LIST      never these actions (default sleep,trace); --ext: also x (all x-actions) or x-action names
       --no-gas                   triggers never get gas
       --packets PCAP             real packets to draw trigger and tamper values from
       --probe KIND               http (default), tls, dns, tcp, exec or external

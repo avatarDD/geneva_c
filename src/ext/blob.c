@@ -71,6 +71,15 @@ const xblob *blob_find(const char *name)
     return NULL;
 }
 
+const char *blob_name_at(size_t i, const xblob **b)
+{
+    if (i >= g_n)
+        return NULL;
+    if (b)
+        *b = &g_blobs[i].b;
+    return g_blobs[i].name;
+}
+
 /* Takes data (malloc'ed); -1 when the name is taken */
 static int add(const char *name, uint8_t *data, size_t len)
 {

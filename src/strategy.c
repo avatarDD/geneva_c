@@ -133,6 +133,7 @@ static const strat_xact *g_xact;
 
 void strategy_set_xtrig(const strat_xtrig *ops) { g_xtrig = ops; }
 void strategy_set_xact(const strat_xact *ops) { g_xact = ops; }
+const strat_xact *strategy_xact(void) { return g_xact; }
 
 static volatile int g_serial;
 

@@ -146,6 +146,15 @@ int trigger_match(trigger *t, const gpkt *p, void *xctx, strat_dir dir);
  * commas inside "{...}", which x-parameters use for lists. An x-action
  * makes its own packets (fakes, parts) and either hands the packet on to a
  * subtree, possibly changed, or absorbs it. */
+/* What the genetic operators may make an x-action for: the forest and
+ * the transports of the tree's trigger. */
+typedef struct {
+    strat_dir dir;
+    int tcp, udp;     /* the tree's packets may be TCP, UDP */
+    const char *skip; /* x-actions never made, comma-separated ("" none) */
+    int server;       /* evolve --agent: the strategy runs on the server */
+} strat_xgen;
+
 typedef struct {
     pktlist *out;    /* the results */
     void *xctx;      /* as given to strategy_apply_x() */
@@ -171,9 +180,22 @@ typedef struct {
     /* Frees *env->dyn once the packet went through every tree (NULL: no
      * state); called only when it is not NULL. */
     void (*done)(void *dyn);
+    /* The genetic operators of geneva evolve (mutate.c); NULL: x-actions are
+     * never made and their parameters never change. */
+    /* Is name an x-action (for --disable-action)? */
+    int (*known)(const char *name);
+    /* A new x-action for a tree of g->dir: 1 with *x and *kids set, 0 when
+     * none fits. */
+    int (*random)(const strat_xgen *g, void **x, int *kids);
+    /* Changes x in place: a parameter's value, a parameter more or less, or
+     * another action taking the same number of subtrees. 1 when it changed
+     * (the old *x is freed), 0 when it cannot. */
+    int (*mutate)(const strat_xgen *g, void **x, int kids);
 } strat_xact;
 
 void strategy_set_xact(const strat_xact *ops);
+/* The registered x-actions, NULL without --ext. */
+const strat_xact *strategy_xact(void);
 /* For x-actions: p goes into subtree which (0: left, 1: right); without
  * that subtree it is a result. */
 void strat_xchild(strat_xenv *env, int which, gpkt *p);

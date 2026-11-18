@@ -45,6 +45,9 @@ void blob_reset(void);
 int blob_opt(const char *spec, sbuf *err);
 /* NULL when there is no blob of that name. */
 const xblob *blob_find(const char *name);
+/* The blobs in the order they were added: the built-ins first. NULL past
+ * the end. */
+const char *blob_name_at(size_t i, const xblob **b);
 /* Frees every blob (tests, the end). */
 void blob_free_all(void);
 

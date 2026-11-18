@@ -23,8 +23,10 @@
 #include "strategy.h"
 
 typedef struct {
-    int disabled[ACT_TRACE + 1]; /* --disable-action */
+    int disabled[ACT_X + 1];     /* --disable-action ("x": every x-action) */
+    char *xskip;                 /* x-actions never made, comma-separated (NULL: none) */
     int no_gas;                  /* --no-gas: triggers never get gas */
+    int server;                  /* evolve --agent: strategies run on the server */
     const trigger *fixed;        /* --fix-trigger, or NULL */
     gpkt **env;                  /* real packets to draw values from */
     size_t nenv;
@@ -49,8 +51,11 @@ int strategy_mate(strategy *a, strategy *b, double indpb, int in_enabled, int ou
  * and *s is left alone. */
 int strategy_canon(strategy **s, char **text);
 
-/* Parses "sleep,trace" style lists into g->disabled. Returns -1 with a
- * message on unknown names. */
+/* Parses "sleep,trace" style lists into g->disabled; with --ext also "x"
+ * (no x-action is made or changed) and x-action names (never made, into
+ * g->xskip, which gen_ctx_free() frees). Returns -1 with a message on
+ * unknown names. */
 int gen_disable_actions(gen_ctx *g, const char *list, sbuf *err);
+void gen_ctx_free(gen_ctx *g);
 
 #endif

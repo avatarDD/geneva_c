@@ -1,5 +1,6 @@
 #include "mutate.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -75,6 +76,7 @@ int strategy_canon(strategy **s, char **text)
 int gen_disable_actions(gen_ctx *g, const char *list, sbuf *err)
 {
     static const char *const names[] = {"tamper", "duplicate", "fragment", "drop", "sleep", "trace"};
+    const strat_xact *xo = strategy_xact();
     const char *s = list;
     while (s && *s) {
         const char *c = strchr(s, ',');
@@ -83,18 +85,67 @@ int gen_disable_actions(gen_ctx *g, const char *list, sbuf *err)
         for (i = 0; i < ARRAY_LEN(names); i++)
             if (strlen(names[i]) == n && str_ieqn(s, names[i], n))
                 break;
-        if (i == ARRAY_LEN(names)) {
-            if (n) {
-                sb_printf(err, "unknown action \"%.*s\" (tamper, duplicate, fragment, drop, sleep, trace)",
+        if (i < ARRAY_LEN(names)) {
+            g->disabled[i] = 1;
+        } else if (n && xo && n == 1 && (*s == 'x' || *s == 'X')) {
+            g->disabled[ACT_X] = 1;
+        } else if (n && xo && xo->known) {
+            char *nm = xstrndup(s, n);
+            int ok;
+            for (size_t j = 0; j < n; j++) /* any case, as Geneva's names */
+                nm[j] = (char)tolower((unsigned char)nm[j]);
+            ok = xo->known(nm);
+            if (ok) {
+                size_t old = g->xskip ? strlen(g->xskip) : 0;
+                g->xskip = xrealloc(g->xskip, old + n + 2);
+                if (old)
+                    g->xskip[old++] = ',';
+                memcpy(g->xskip + old, nm, n + 1);
+            }
+            free(nm);
+            if (!ok) {
+                sb_printf(err, "unknown action \"%.*s\" (tamper, duplicate, fragment, drop, sleep, trace, x or an x-action)",
                           (int)n, s);
                 return -1;
             }
-        } else {
-            g->disabled[i] = 1;
+        } else if (n) {
+            sb_printf(err, "unknown action \"%.*s\" (tamper, duplicate, fragment, drop, sleep, trace)", (int)n, s);
+            return -1;
         }
         s = c ? c + 1 : NULL;
     }
     return 0;
+}
+
+void gen_ctx_free(gen_ctx *g)
+{
+    free(g->xskip);
+    g->xskip = NULL;
+}
+
+/* The x-actions' view of a tree: its forest and the transports its trigger
+ * lets through (TCP or UDP by the trigger's protocol, otherwise those the
+ * search may use). NULL when x-actions are off. */
+static const strat_xact *xgen_of(const gen_ctx *g, strat_dir dir, const trigger *t, strat_xgen *xg)
+{
+    const strat_xact *xo = strategy_xact();
+    if (!xo || !xo->random || !xo->mutate || g->disabled[ACT_X])
+        return NULL;
+    xg->dir = dir;
+    xg->skip = g->xskip;
+    xg->server = g->server;
+    xg->tcp = xg->udp = 0;
+    if (t && !t->x && t->layer == LAYER_TCP)
+        xg->tcp = 1;
+    else if (t && !t->x && (t->layer == LAYER_UDP || t->layer == LAYER_DNS || t->layer == LAYER_DNSQR))
+        xg->udp = 1;
+    else {
+        xg->tcp = layer_is_allowed(LAYER_TCP);
+        xg->udp = layer_is_allowed(LAYER_UDP);
+        if (!xg->tcp && !xg->udp)
+            xg->tcp = xg->udp = 1;
+    }
+    return xo;
 }
 
 /* ---- values: real packets or fuzzing ------------------------------------- */
@@ -245,7 +296,7 @@ static void fragment_mutate(action *a)
     }
 }
 
-static void action_mutate(const gen_ctx *g, action *a)
+static void action_mutate(const gen_ctx *g, const atree *t, action *a)
 {
     switch (a->type) {
     case ACT_TAMPER:
@@ -257,6 +308,14 @@ static void action_mutate(const gen_ctx *g, action *a)
     case ACT_FRAGMENT:
         fragment_mutate(a);
         break;
+    case ACT_X: {
+        /* geneva_c's own: Geneva has no x-actions */
+        strat_xgen xg;
+        const strat_xact *xo = xgen_of(g, t->dir, &t->trig, &xg);
+        if (xo)
+            xo->mutate(&xg, &a->x, a->xkids);
+        break;
+    }
     default: /* duplicate, drop, sleep and trace have nothing to change */
         break;
     }
@@ -264,23 +323,31 @@ static void action_mutate(const gen_ctx *g, action *a)
 
 /* ActionTree.get_rand_action(): weighted by Action.frequency (sleep and
  * trace have 0 and only come from parsed strategies). */
-static action *action_random(const gen_ctx *g, strat_dir dir)
+static action *action_random(const gen_ctx *g, const atree *t)
 {
+    /* x-actions (geneva_c's, with --ext) as often as tamper going out; of
+     * them only xwsize comes in */
     static const struct {
         act_type t;
         int freq;
         int in;
     } kinds[] = {
-        {ACT_TAMPER, 5, 1},
+        {ACT_TAMPER, 5, 5},
         {ACT_DUPLICATE, 3, 0},
         {ACT_FRAGMENT, 2, 0},
         {ACT_DROP, 1, 1},
+        {ACT_X, 5, 1},
     };
-    int total = 0, pick;
+    strat_dir dir = t->dir;
+    strat_xgen xg;
+    const strat_xact *xo = xgen_of(g, dir, &t->trig, &xg);
+    int total = 0, pick, no_x = !xo;
     action *a;
+again:
+    total = 0;
     for (size_t i = 0; i < ARRAY_LEN(kinds); i++)
-        if (!g->disabled[kinds[i].t] && (dir == DIR_OUT || kinds[i].in))
-            total += kinds[i].freq;
+        if (!g->disabled[kinds[i].t] && (dir == DIR_OUT || kinds[i].in) && (kinds[i].t != ACT_X || !no_x))
+            total += dir == DIR_OUT ? kinds[i].freq : kinds[i].in;
     if (!total)
         return NULL;
     pick = (int)rng_index((size_t)total);
@@ -292,15 +359,24 @@ static action *action_random(const gen_ctx *g, strat_dir dir)
     a->start_ttl = 1;
     a->end_ttl = 64;
     for (size_t i = 0; i < ARRAY_LEN(kinds); i++) {
-        if (g->disabled[kinds[i].t] || (dir == DIR_IN && !kinds[i].in))
+        int f = dir == DIR_OUT ? kinds[i].freq : kinds[i].in;
+        if (g->disabled[kinds[i].t] || !f || (kinds[i].t == ACT_X && no_x))
             continue;
-        if (pick < kinds[i].freq) {
+        if (pick < f) {
             a->type = kinds[i].t;
             break;
         }
-        pick -= kinds[i].freq;
+        pick -= f;
     }
-    if (a->type == ACT_TAMPER) {
+    if (a->type == ACT_X) {
+        if (xo->random(&xg, &a->x, &a->xkids) != 1) {
+            /* nothing fits this tree: one of Geneva's */
+            a->x = NULL;
+            action_free(a);
+            no_x = 1;
+            goto again;
+        }
+    } else if (a->type == ACT_TAMPER) {
         a->ttype = rng_chance(0.5) ? TAMPER_REPLACE : TAMPER_CORRUPT;
         if (tamper_retarget(g, a) < 0) {
             action_free(a);
@@ -394,7 +470,7 @@ static atree *tree_random(const gen_ctx *g, strat_dir dir, int nactions)
         return NULL;
     }
     for (int i = 0; i < nactions; i++)
-        tree_add(t, action_random(g, dir));
+        tree_add(t, action_random(g, t));
     return t;
 }
 
@@ -403,11 +479,11 @@ static void tree_mutate(const gen_ctx *g, atree *t)
 {
     double pick = rng_real();
     if (pick < 0.20 || !t->root) {
-        tree_add(t, action_random(g, t->dir));
+        tree_add(t, action_random(g, t));
     } else if (pick < 0.65) {
         slots s = {.n = 0};
         collect(&t->root, &s);
-        action_mutate(g, *s.v[rng_index(s.n)]);
+        action_mutate(g, t, *s.v[rng_index(s.n)]);
     } else if (pick < 0.80 && g->nenv) {
         trigger tr;
         if (trigger_random(g, &tr, 0.5) == 0) {
