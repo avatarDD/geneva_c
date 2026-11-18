@@ -52,6 +52,7 @@ const char *const ext_features[] = {
     "ext_seqtrack",   /* X8: xoob, xtlsrec, xdrip (the flow's seq shifted) */
     "ext_tuner",      /* X11a/b: --ext-arm, --ext-tune rr|ts, --ext-state, ext_proposals/ext_approve/ext_reject */
     "ext_obfs",       /* X13a: xwgobfs, xippxor, xudp2icmp, xsynhide */
+    "ext_xgen",       /* evolve --ext makes x-actions and mutates their parameters */
 #if defined(PLAT_LINUX) || defined(_WIN32)
     /* --ext-auto: NFLOG and ctnetlink, or a WinDivert sniffer; not on the BSDs */
     "ext_auto",  /* X9: --ext-auto observe (NFLOG, detector), ext_flow/ext_impaired/ext_class, ext_status */

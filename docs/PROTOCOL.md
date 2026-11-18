@@ -183,6 +183,7 @@ geneva ctl --json '{"cmd":"pause"}'
 | `ext_tuner` | везде | `--ext-arm`, `--ext-tune rr\|ts`, `--ext-state`, событие `ext_arm`, `ext_tuned`, предложения `ext_proposal` и команды `ext_proposals`, `ext_approve`, `ext_reject` |
 | `ext_treat` | Linux, Windows | `--ext-auto propose\|apply`, `--ext-treat-arms`, событие `ext_treat` |
 | `ext_obfs` | везде | `xwgobfs`, `xippxor`, `xudp2icmp`, `xsynhide` |
+| `ext_xgen` | везде | `evolve --ext` делает новые x-действия и меняет их параметры (`docs/EVOLVE.md`, «x-действия»); без фичи x-действия только скрещиваются |
 | `ext_workers` | Linux | `--ext-workers N` |
 | `ext_surgical` | Linux | `--ext-healthy-mark`, счётчик `healthy` |
 | `ext_ga` | Linux | `--ext-ga` |

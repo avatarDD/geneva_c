@@ -51,6 +51,7 @@ void suite_tools(void);
 void suite_wlan(void);
 void suite_blockcheck(void);
 void suite_obfs(void);
+void suite_xgen(void);
 
 int main(void)
 {
@@ -89,6 +90,7 @@ int main(void)
     suite_wlan();
     suite_blockcheck();
     suite_obfs();
+    suite_xgen();
     printf("%d checks, %d failures\n", t_checks, t_failures);
     return t_failures ? 1 : 0;
 }

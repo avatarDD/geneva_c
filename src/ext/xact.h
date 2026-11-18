@@ -220,6 +220,19 @@ void xa_opts_orig(const xrun *r, xsendopt *o);
 void xa_log(const xrun *r, const char *fmt, ...) PRINTF_LIKE(2, 3);
 
 /* The actions */
+/* The action of that name (NULL: none), the canonical form of a key it
+ * takes (NULL: it takes no such key). */
+const xa_kind *xa_kind_find(const char *name);
+const char *xa_canon_key(const xa_kind *k, const char *name);
+/* strat_xact.parse and .free */
+int xa_parse(const char *name, const char *params, strat_dir dir, void **x, int *kids, sbuf *err);
+void xa_free(void *x);
+
+/* The genetic operators (xgen.c, strat_xact.random and .mutate): x-actions
+ * made and changed with the values zapret2's strategies use */
+int xgen_random(const strat_xgen *g, void **x, int *kids);
+int xgen_mutate(const strat_xgen *g, void **x, int kids);
+
 extern const xa_kind xa_send, xa_mod, xa_fake, xa_split, xa_disorder, xa_tcpseg, xa_hostfake, xa_fakedsplit,
     xa_fakeddisorder;
 extern const xa_kind xa_synacksplit, xa_synack, xa_wsize, xa_wssize, xa_syndata, xa_rst;
