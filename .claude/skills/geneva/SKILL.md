@@ -20,7 +20,7 @@ English twin.
 | `src/strategy.c` | parser, printer, action trees (`tamper`, `duplicate`, `fragment`, `drop`, `sleep`, `trace`) |
 | `src/engine.c`, `eng_nfq.c`, `eng_windivert.c`, `nfq.c`, `rawsend.c`, `fw.c` | live engine: NFQUEUE / WinDivert, firewall rules (nft or iptables), WinDivert filters (`--filter`, `set_filter` handle switch), control socket |
 | `src/flowtab.c` | `--first N` on Windows: flow table (5-tuple by direction, FIN/RST/idle expiry, LRU at 65536) |
-| `src/evolve.c`, `mutate.c` | Geneva's genetic algorithm; checkpoints. With `--ext`, `src/ext/xgen.c` makes x-actions and mutates their parameters through `strat_xact.random`/`.mutate` (client-side kinds by the tree's transport, values as zapret2's strategies use, every result re-parsed by `xa_parse`; `--disable-action x` or x-action names, `gen_ctx.xskip`) |
+| `src/evolve.c`, `mutate.c` | Geneva's genetic algorithm; checkpoints. With `--ext`, `src/ext/xgen.c` makes x-actions and mutates their parameters through `strat_xact.random`/`.mutate` (every kind a censor sees but the obfuscators, xlog, xpcap; every key but ifout, fwmark; by the tree's transport and, with `--agent`, the server's side; xgen_coverage tests it; values as zapret2's strategies use, every result re-parsed by `xa_parse`; `--disable-action x` or x-action names, `gen_ctx.xskip`) |
 | `src/evaluator.c`, `probe.c` | fitness, probes (http, tls, dns, tcp, exec, external), engine slots per worker |
 | `src/agent.c`, `cmd_agent.c` | server-side evaluation: remote probes over the control protocol |
 | `src/censor.c`, `cmd_censor.c` | Geneva's lab censors 1–11 + DNS censor on a router namespace |

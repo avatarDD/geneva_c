@@ -152,6 +152,7 @@ typedef struct {
     strat_dir dir;
     int tcp, udp;     /* the tree's packets may be TCP, UDP */
     const char *skip; /* x-actions never made, comma-separated ("" none) */
+    int server;       /* evolve --agent: the strategy runs on the server */
 } strat_xgen;
 
 typedef struct {

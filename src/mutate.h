@@ -26,6 +26,7 @@ typedef struct {
     int disabled[ACT_X + 1];     /* --disable-action ("x": every x-action) */
     char *xskip;                 /* x-actions never made, comma-separated (NULL: none) */
     int no_gas;                  /* --no-gas: triggers never get gas */
+    int server;                  /* evolve --agent: strategies run on the server */
     const trigger *fixed;        /* --fix-trigger, or NULL */
     gpkt **env;                  /* real packets to draw values from */
     size_t nenv;

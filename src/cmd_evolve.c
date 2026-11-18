@@ -213,6 +213,7 @@ int cmd_evolve(int argc, char **argv)
         o.db_seed = 10;
     o.no_reject_empty = arg_has(&a, "no-reject-empty");
     o.gen.no_gas = arg_has(&a, "no-gas");
+    o.gen.server = use_probe && eo.agent != NULL; /* the strategies run on this server */
     o.seed = arg_str(&a, "seed", NULL);
     o.load_from = arg_str(&a, "load-from", NULL);
     o.out_dir = arg_str(&a, "output-dir", NULL);

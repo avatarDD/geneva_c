@@ -8,6 +8,12 @@
  * A changed action is written as text and parsed again by xa_parse(), so
  * it passes the same checks as one a person writes; what the checks refuse
  * is drawn again.
+ *
+ * Every action that changes what a censor sees is made, with every key it
+ * takes; tests/test_xgen.c (xgen_coverage) checks that. Left out: xlog and
+ * xpcap (they only log), the obfuscators (xwgobfs, xippxor, xudp2icmp,
+ * xsynhide: the other end has to undo them), and the keys of the host's own
+ * setup (ifout, fwmark) or of other protocols (ipfrag_pos_icmp, ipfrag_pos).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,44 +28,52 @@
 typedef struct {
     const char *name;
     unsigned char tcp, udp; /* transports it acts on */
-    unsigned char out, in;  /* forests it is made in */
+    unsigned char out, in;  /* forests it is made in on the client */
+    unsigned char sout;     /* made in the server's outbound forest (evolve
+                             * --agent: the strategy runs on the server; its
+                             * inbound forest gets none) */
     unsigned char fool;     /* sends fakes: the fooling that breaks a packet (TTL,
                              * seq, md5, badsum, ...) is drawn; not for the real data */
     unsigned char w;        /* weight among new ones; 0: never made, only changed */
     const char *req;        /* keys a new one gets, ";"-separated */
 } gkind;
 
-/* Client-side actions only: the obfuscators (xwgobfs, xippxor, xudp2icmp,
- * xsynhide) need the other end, xlog, xtag, xpcap and xtlsclone do nothing a
- * censor sees on their own. xwsize changes the server's SYN,ACK, so it is
- * made in the inbound forest. */
+/* xwsize changes the server's SYN,ACK: made in the client's inbound forest
+ * or in the server's outbound one. xsynacksplit, too, splits the server's
+ * SYN,ACK. The names xtlsclone and xtag give their blob and label are
+ * the ones the other actions draw now and then (GEN_CLONE, GEN_TAG). */
 static const gkind gkinds[] = {
-    {"xfake", 1, 1, 1, 0, 1, 8, "blob"},
-    {"xsplit", 1, 0, 1, 0, 0, 5, "pos"},
-    {"xdisorder", 1, 0, 1, 0, 0, 5, "pos"},
-    {"xfakedsplit", 1, 0, 1, 0, 1, 3, "pos"},
-    {"xfakeddisorder", 1, 0, 1, 0, 1, 3, "pos"},
-    {"xtcpseg", 1, 0, 1, 0, 0, 2, "pos"},
-    {"xhostfake", 1, 0, 1, 0, 1, 2, ""},
-    {"xtlsrec", 1, 0, 1, 0, 0, 2, "pos"},
-    {"xoob", 1, 0, 1, 0, 0, 1, "urp"},
-    {"xdrip", 1, 0, 1, 0, 0, 1, "n"},
-    {"xrst", 1, 0, 1, 0, 1, 1, ""},
-    {"xsyndata", 1, 0, 1, 0, 1, 1, ""},
-    {"xsynack", 1, 0, 1, 0, 1, 1, ""},
-    {"xwssize", 1, 0, 1, 0, 0, 1, "wsize;scale"},
-    {"xwsize", 1, 0, 0, 1, 0, 1, "wsize;scale"},
-    {"xhttp", 1, 0, 1, 0, 0, 1, "hostcase"},
-    {"xsend", 1, 1, 1, 0, 0, 2, "ipfrag"},
-    {"xmod", 1, 1, 1, 0, 0, 1, "ipid"},
-    {"xudplen", 0, 1, 1, 0, 0, 2, "increment"},
-    {"xdhtdn", 0, 1, 1, 0, 0, 1, "dn"},
-    {"xrepeat", 1, 1, 1, 0, 0, 1, "repeats"},
-    {"xwhen", 1, 1, 1, 0, 0, 1, "iff"},
-    {"xcutoff", 1, 1, 1, 0, 0, 1, ""},
-    {"xstop", 1, 1, 1, 0, 0, 0, "iff"},
-    {"xsynacksplit", 1, 0, 1, 0, 0, 0, ""},
+    {"xfake", 1, 1, 1, 0, 1, 1, 8, "blob"},
+    {"xsplit", 1, 0, 1, 0, 1, 0, 5, "pos"},
+    {"xdisorder", 1, 0, 1, 0, 1, 0, 5, "pos"},
+    {"xfakedsplit", 1, 0, 1, 0, 1, 1, 3, "pos"},
+    {"xfakeddisorder", 1, 0, 1, 0, 1, 1, 3, "pos"},
+    {"xtcpseg", 1, 0, 1, 0, 1, 0, 2, "pos"},
+    {"xhostfake", 1, 0, 1, 0, 0, 1, 2, ""},
+    {"xtlsrec", 1, 0, 1, 0, 1, 0, 2, "pos"},
+    {"xoob", 1, 0, 1, 0, 1, 0, 1, "urp"},
+    {"xdrip", 1, 0, 1, 0, 1, 0, 1, "n"},
+    {"xrst", 1, 0, 1, 0, 1, 1, 1, ""},
+    {"xsyndata", 1, 0, 1, 0, 0, 1, 1, ""},
+    {"xsynack", 1, 0, 1, 0, 0, 1, 1, ""},
+    {"xwssize", 1, 0, 1, 0, 0, 0, 1, "wsize;scale"},
+    {"xwsize", 1, 0, 0, 1, 1, 0, 1, "wsize;scale"},
+    {"xsynacksplit", 1, 0, 0, 0, 1, 0, 1, "mode"},
+    {"xhttp", 1, 0, 1, 0, 0, 0, 1, "hostcase"},
+    {"xtlsclone", 1, 0, 1, 0, 0, 0, 1, "blob"},
+    {"xtag", 1, 1, 1, 0, 1, 0, 1, "pattern;payload"},
+    {"xsend", 1, 1, 1, 0, 1, 0, 2, "ipfrag"},
+    {"xmod", 1, 1, 1, 0, 1, 0, 1, "ipid"},
+    {"xudplen", 0, 1, 1, 0, 1, 0, 2, "increment"},
+    {"xdhtdn", 0, 1, 1, 0, 1, 0, 1, "dn"},
+    {"xrepeat", 1, 1, 1, 0, 1, 0, 1, "repeats"},
+    {"xwhen", 1, 1, 1, 0, 1, 0, 1, "iff"},
+    {"xstop", 1, 1, 1, 0, 1, 0, 1, "iff"},
+    {"xcutoff", 1, 1, 1, 0, 1, 0, 1, ""},
 };
+
+#define GEN_CLONE "gclone" /* xtlsclone's blob */
+#define GEN_TAG "gtag"     /* xtag's labels: GEN_TAG and GEN_TAG "_no" */
 
 static const gkind *gkind_of(const char *name)
 {
@@ -71,7 +85,8 @@ static const gkind *gkind_of(const char *name)
 
 static int fits(const gkind *k, const strat_xgen *g)
 {
-    if (!k->w || !(g->dir == DIR_IN ? k->in : k->out) || !((k->tcp && g->tcp) || (k->udp && g->udp)))
+    int forest = g->server ? g->dir == DIR_OUT && k->sout : g->dir == DIR_IN ? k->in : k->out;
+    if (!k->w || !forest || !((k->tcp && g->tcp) || (k->udp && g->udp)))
         return 0;
     return !g->skip || !*g->skip || !xa_in_list(g->skip, k->name);
 }
@@ -167,6 +182,28 @@ static int blob_tcp(const xblob *b)
     return i >= 3 && i < b->len && d[i] == ' ';
 }
 
+/* the canonical keys that break the packet they are on: TTLs, IPv6 extension
+ * headers, seq, ack, ts, md5, flags, badsum (only fakes get them) */
+static int breaking(const char *k)
+{
+    static const char *const b[] = {"ttl", "ip_ttl", "ip_autottl", "seq", "ack", "ts", "md5", "flags+", "flags-",
+                                    "badsum", "ip6ext"};
+    for (size_t i = 0; i < ARRAY_LEN(b); i++)
+        if (!strcmp(k, b[i]))
+            return 1;
+    return !strncmp(k, "ip6_", 4);
+}
+
+/* the keys that change TCP headers: never drawn for a tree of UDP only */
+static int tcp_only(const char *k)
+{
+    static const char *const t[] = {"seq", "ack", "ts", "md5", "flags+", "flags-", "tsup", "nopdel"};
+    for (size_t i = 0; i < ARRAY_LEN(t); i++)
+        if (!strcmp(k, t[i]))
+            return 1;
+    return 0;
+}
+
 static void gen_blob(const strat_xgen *g, sbuf *v)
 {
     const char *names[256];
@@ -181,6 +218,10 @@ static void gen_blob(const strat_xgen *g, sbuf *v)
             sb_puts(v, d);
             return;
         }
+    }
+    if (g->tcp && !g->server && rng_chance(0.05)) {
+        sb_puts(v, GEN_CLONE); /* the ClientHello an xtlsclone before made */
+        return;
     }
     for (size_t i = 0; n < ARRAY_LEN(names) && (nm = blob_name_at(i, &b)); i++) {
         int t = blob_tcp(b);
@@ -198,14 +239,24 @@ static void gen_blob(const strat_xgen *g, sbuf *v)
     sb_puts(v, names[rng_index(n)]);
 }
 
-/* a position marker: a number or a named place with an offset */
+/* n random bytes as 0x... */
+static void gen_hex(sbuf *v, int n)
+{
+    sb_puts(v, "0x");
+    for (int i = 0; i < n; i++)
+        sb_printf(v, "%02x", (unsigned)rng_range(0, 255));
+}
+
+/* a position marker: a number (from the end when negative) or a named
+ * place with an offset */
 static void gen_marker(sbuf *v, int tls)
 {
     static const char *const names[] = {"host", "endhost", "sld", "midsld", "endsld", "method", "extlen", "sniext"};
     static const char *const tlsn[] = {"host", "endhost", "sld", "midsld", "endsld", "extlen", "sniext"};
     if (rng_chance(0.4)) {
         static const int small[] = {1, 2, 3, 4, 5, 6, 8, 10, 16, 32};
-        sb_printf(v, "%d", rng_chance(0.8) ? small[rng_index(ARRAY_LEN(small))] : (int)rng_range(1, 400));
+        int n = rng_chance(0.8) ? small[rng_index(ARRAY_LEN(small))] : (int)rng_range(1, 400);
+        sb_printf(v, "%d", rng_chance(0.1) ? -n : n);
         return;
     }
     sb_puts(v, tls ? PICK(tlsn) : PICK(names));
@@ -225,18 +276,38 @@ static void gen_markers(sbuf *v, int n, int tls)
     }
 }
 
+static const char *const snis[] = {"www.google.com", "www.microsoft.com", "yandex.ru", "vk.com", "www.iana.org",
+                                   "example.com"};
+
+/* a host name: a well-known one or a few random letters */
+static void gen_host(sbuf *v)
+{
+    if (rng_chance(0.7)) {
+        sb_puts(v, PICK(snis));
+        return;
+    }
+    for (int i = 0, n = (int)rng_range(3, 12); i < n; i++)
+        sb_putc(v, (char)('a' + rng_index(26)));
+    sb_puts(v, rng_chance(0.5) ? ".com" : ".ru");
+}
+
 static void gen_tlsmod(sbuf *v)
 {
     static const char *const mods[] = {"rnd", "rndsni", "dupsid", "padencap"};
-    static const char *const snis[] = {"www.google.com", "www.microsoft.com", "yandex.ru", "vk.com", "www.iana.org"};
     int any = 0;
+    if (rng_chance(0.05)) {
+        sb_puts(v, "none");
+        return;
+    }
     for (size_t i = 0; i < ARRAY_LEN(mods); i++)
         if (rng_chance(0.35)) {
             sb_printf(v, "%s%s", any ? "," : "", mods[i]);
             any = 1;
         }
-    if (!any || rng_chance(0.2))
-        sb_printf(v, "%ssni=%s", any ? "," : "", PICK(snis));
+    if (!any || rng_chance(0.2)) {
+        sb_printf(v, "%ssni=", any ? "," : "");
+        gen_host(v);
+    }
 }
 
 static void gen_flags(sbuf *v)
@@ -248,27 +319,99 @@ static void gen_flags(sbuf *v)
         sb_printf(v, ",%s", fl[b]);
 }
 
+/* an IPv6 extension header's data: 6+8N bytes (6+4N for AH) */
+static void gen_ext6_data(sbuf *v, int ah) { gen_hex(v, 6 + (ah ? 4 : 8) * (int)rng_range(0, 2)); }
+
 static void gen_ip6ext(sbuf *v)
 {
     static const char *const ext[] = {"hopbyhop", "hopbyhop2", "destopt", "destopt2", "routing", "ah"};
     size_t a = rng_index(ARRAY_LEN(ext)), b = rng_index(ARRAY_LEN(ext));
     sb_puts(v, ext[a]);
+    if (rng_chance(0.15))
+        sb_putc(v, ':'), gen_ext6_data(v, a == 5);
     if (b != a && rng_chance(0.3))
         sb_printf(v, ",%s", ext[b]);
 }
 
-static void gen_iff(const strat_xgen *g, sbuf *v)
+/* payload types (zapret2's names) of the transports, or the label xtag sets */
+static void gen_payload(const strat_xgen *g, sbuf *v)
 {
-    static const char *const tcp[] = {"L7:payload:tls_client_hello", "L7:payload:http_req", "cond_tcp_has_ts"};
-    static const char *const udp[] = {"L7:payload:quic_initial"};
-    static const char *const any[] = {"cond_random", "FLOW:n:1-2", "FLOW:d:1", "FLOW:n:<5", "L7:payload:known"};
-    int r = (int)rng_index(3);
-    if (r == 0 && g->tcp)
-        sb_puts(v, PICK(tcp));
-    else if (r == 1 && g->udp)
-        sb_puts(v, PICK(udp));
+    static const char *const tcp[] = {"tls_client_hello", "http_req",        "xmpp_stream",   "xmpp_starttls",
+                                      "mtproto_initial",  "bt_handshake",    "empty",         "unknown"};
+    static const char *const tcp_srv[] = {"tls_server_hello", "http_reply", "xmpp_proceed", "xmpp_features",
+                                          "empty", "unknown"};
+    static const char *const udp[] = {"quic_initial",         "dtls_client_hello",   "wireguard_initiation",
+                                      "wireguard_cookie",     "wireguard_keepalive", "wireguard_data",
+                                      "dht",                  "discord_ip_discovery", "stun",
+                                      "dns_query",            "utp_bt_handshake",    "unknown"};
+    static const char *const udp_srv[] = {"dtls_server_hello", "wireguard_response", "dns_response", "stun",
+                                          "unknown"};
+    static const char *const any[] = {"known", "all"};
+    double r = rng_real();
+    if (rng_chance(0.1))
+        sb_putc(v, '~');
+    if (r < 0.05)
+        sb_puts(v, rng_chance(0.5) ? GEN_TAG : GEN_TAG "_no");
+    else if (r < 0.45 && g->tcp && (!g->udp || rng_chance(0.5)))
+        sb_puts(v, g->server ? PICK(tcp_srv) : PICK(tcp));
+    else if (r < 0.45 && g->udp)
+        sb_puts(v, g->server ? PICK(udp_srv) : PICK(udp));
     else
         sb_puts(v, PICK(any));
+}
+
+/* a condition of xwhen, xstop, xrepeat: zapret2's cond_* or a trigger */
+static const char *gen_iff(const strat_xgen *g, sbuf *v)
+{
+    static const char *const conds[] = {"cond_random", "cond_payload_str", "cond_true", "cond_false",
+                                        "cond_tcp_has_ts"};
+    static const char *const protos[] = {"tls", "http", "quic", "dtls", "wireguard", "dht", "discord",
+                                         "stun", "xmpp", "dns", "mtproto", "bt", "utp_bt", "known", "unknown"};
+    static const char *const flags[] = {"PA", "A", "S", "SA", "FA", "R"};
+    int r = (int)rng_index(5);
+    const char *c;
+    if (r == 0) {
+        c = PICK(conds);
+        if (!strcmp(c, "cond_tcp_has_ts") && !g->tcp)
+            c = "cond_random";
+        sb_puts(v, c);
+        return c;
+    }
+    if (r == 1) {
+        sb_puts(v, "L7:payload:");
+        gen_payload(g, v);
+    } else if (r == 2) {
+        sb_printf(v, "L7:proto:%s%s", rng_chance(0.1) ? "~" : "", PICK(protos));
+    } else if (r == 3) {
+        static const char *const fields[] = {"n", "d", "b", "s", "p", "rn", "rd"};
+        const char *f = PICK(fields);
+        int b = !strcmp(f, "b") || !strcmp(f, "s") || !strcmp(f, "p");
+        int hi = b ? (int)rng_range(100, 4000) : (int)rng_range(1, 10);
+        int kind = (int)rng_index(3);
+        if (kind == 0)
+            sb_printf(v, "FLOW:%s:<%d", f, hi);
+        else if (kind == 1)
+            sb_printf(v, "FLOW:%s:%d", f, b ? hi : (int)rng_range(1, 5));
+        else
+            sb_printf(v, "FLOW:%s:%d-%d", f, b ? 0 : 1, hi);
+    } else if (g->tcp && rng_chance(0.7)) {
+        sb_printf(v, "TCP:flags:%s", PICK(flags));
+    } else {
+        static const char *const st[] = {"syn", "est", "fin"};
+        if (g->tcp && rng_chance(0.5))
+            sb_printf(v, "FLOW:state:%s", PICK(st));
+        else
+            sb_puts(v, "FLOW:retrans:1");
+    }
+    return "";
+}
+
+/* what cond_payload_str and xtag look for (no spaces in a strategy) */
+static void gen_pattern_str(sbuf *v)
+{
+    static const char *const s[] = {"GET",     "POST",     "Host:",   "HTTP/1.", "google",
+                                    "youtube", "discord", "telegram", "Blocked"};
+    sb_puts(v, PICK(s));
 }
 
 static int64_t gen_offset(const int64_t *common, size_t n, int64_t lo, int64_t hi)
@@ -276,16 +419,20 @@ static int64_t gen_offset(const int64_t *common, size_t n, int64_t lo, int64_t h
     return rng_chance(0.7) ? common[rng_index(n)] : rng_range(lo, hi);
 }
 
+static int is_comb(const char *kind) { return !strcmp(kind, "xwhen") || !strcmp(kind, "xstop") || !strcmp(kind, "xrepeat"); }
+
 /* Draws a value of key for an action named kind. Returns 1 with the value
  * in v, 0 for a flag (no value), -1 when the key is never drawn (files,
- * interfaces, marks, delays: what a search has no business changing). */
+ * interfaces, marks: the host's own setup). */
 static int gen_value(const char *kind, const char *key, const strat_xgen *g, sbuf *v)
 {
-    static const char *const flags[] = {"md5",      "badsum",  "tsup",    "nopdel",  "ipid_conn", "ipfrag",
-                                        "ipfrag_disorder", "optional", "nodrop", "legacy",  "nofake1",
-                                        "nofake2",  "nofake3", "nofake4", "rstack",  "neg",       "domcase",
-                                        "methodeol", "unixeol"};
+    static const char *const flags[] = {"badsum",  "tsup",    "nopdel",  "ipid_conn", "ipfrag_disorder", "optional",
+                                        "nodrop",  "legacy",  "nofake1", "nofake2",   "nofake3",         "nofake4",
+                                        "rstack",  "neg",     "domcase", "methodeol", "unixeol",         "stop",
+                                        "clear",   "sni_del_ext", "sni_del"};
     int tls = g->tcp && !strcmp(kind, "xtlsrec");
+    if (!g->tcp && tcp_only(key))
+        return -1;
     for (size_t i = 0; i < ARRAY_LEN(flags); i++)
         if (!strcmp(key, flags[i]))
             return 0;
@@ -296,6 +443,27 @@ static int gen_value(const char *kind, const char *key, const strat_xgen *g, sbu
             static const int mx[] = {12, 16, 20, 32, 64};
             sb_printf(v, "auto:%d:%d-%d", -(int)rng_range(1, 4), (int)rng_range(1, 5), mx[rng_index(ARRAY_LEN(mx))]);
         }
+    } else if (!strcmp(key, "ip_ttl") || !strcmp(key, "ip6_ttl")) {
+        sb_printf(v, "%d", (int)rng_range(1, 12));
+    } else if (!strcmp(key, "ip_autottl") || !strcmp(key, "ip6_autottl")) {
+        static const int mx[] = {12, 16, 20, 32, 64};
+        sb_printf(v, "%d,%d-%d", -(int)rng_range(1, 4), (int)rng_range(1, 5), mx[rng_index(ARRAY_LEN(mx))]);
+    } else if (!strncmp(key, "ip6_", 4)) {
+        /* ip6_hopbyhop, ..., ip6_ah: the header, empty or with data */
+        if (rng_chance(0.7))
+            return 0;
+        gen_ext6_data(v, !strcmp(key, "ip6_ah"));
+    } else if (!strcmp(key, "md5")) {
+        if (rng_chance(0.8))
+            return 0;
+        gen_hex(v, 16);
+    } else if (!strcmp(key, "ipfrag")) {
+        if (rng_chance(0.7))
+            return 0;
+        sb_puts(v, "ipfrag2");
+    } else if (!strcmp(key, "ipfrag_next")) {
+        static const int nh[] = {0, 6, 17, 41, 44, 58, 59, 255};
+        sb_printf(v, "%d", nh[rng_index(ARRAY_LEN(nh))]);
     } else if (!strcmp(key, "seq") || !strcmp(key, "ack")) {
         static const int64_t c[] = {1, 100, 1000, 10000, 66000, 100000, 1000000};
         int64_t n = gen_offset(c, ARRAY_LEN(c), 1, 1 << 24);
@@ -324,13 +492,15 @@ static int gen_value(const char *kind, const char *key, const strat_xgen *g, sbu
     } else if (!strcmp(key, "ip6ext")) {
         gen_ip6ext(v);
     } else if (!strcmp(key, "payload")) {
-        static const char *const pl[] = {"known", "all"};
-        if (g->tcp && rng_chance(0.2))
-            sb_puts(v, rng_chance(0.5) ? "tls_client_hello" : "http_req");
-        else if (g->udp && rng_chance(0.2))
-            sb_puts(v, "quic_initial");
+        if (!strcmp(kind, "xtag"))
+            sb_puts(v, GEN_TAG); /* the label it sets */
         else
-            sb_puts(v, PICK(pl));
+            gen_payload(g, v);
+    } else if (!strcmp(key, "undetected")) {
+        sb_puts(v, GEN_TAG "_no");
+    } else if (!strcmp(key, "forced_cutoff")) {
+        static const char *const fc[] = {"tls_client_hello", "http_req", "known", "tls_client_hello,http_req"};
+        sb_puts(v, PICK(fc));
     } else if (!strcmp(key, "pos")) {
         if (!strcmp(kind, "xtcpseg")) {
             if (rng_chance(0.5))
@@ -345,13 +515,22 @@ static int gen_value(const char *kind, const char *key, const strat_xgen *g, sbu
         }
     } else if (!strcmp(key, "midhost") || !strcmp(key, "disorder_after")) {
         gen_marker(v, 0);
+    } else if (!strcmp(key, "host")) {
+        gen_host(v);
     } else if (!strcmp(key, "seqovl")) {
         static const int64_t c[] = {1, 2, 5, 10, 100, 336, 568, 652};
         sb_printf(v, "%lld", (long long)gen_offset(c, ARRAY_LEN(c), 1, 700));
-    } else if (!strcmp(key, "blob") || !strcmp(key, "pattern") || !strcmp(key, "seqovl_pattern")) {
-        if (!strcmp(kind, "xwhen") || !strcmp(kind, "xstop") || !strcmp(kind, "xrepeat"))
-            return -1; /* cond_payload_str's text */
+    } else if (!strcmp(key, "pattern") && (is_comb(kind) || !strcmp(kind, "xtag"))) {
+        gen_pattern_str(v); /* cond_payload_str's text, xtag's */
+    } else if (!strcmp(key, "blob") && !strcmp(kind, "xtlsclone")) {
+        sb_puts(v, GEN_CLONE);
+    } else if (!strcmp(key, "blob") || !strcmp(key, "pattern") || !strcmp(key, "seqovl_pattern") ||
+               !strcmp(key, "fallback")) {
         gen_blob(g, v);
+    } else if (!strcmp(key, "sni_snt") || !strcmp(key, "sni_snt_new")) {
+        sb_printf(v, "%d", rng_chance(0.7) ? 0 : (int)rng_range(1, 255));
+    } else if (!strcmp(key, "sni_first") || !strcmp(key, "sni_last")) {
+        gen_host(v);
     } else if (!strcmp(key, "tlsmod")) {
         gen_tlsmod(v);
     } else if (!strcmp(key, "urp")) {
@@ -366,9 +545,8 @@ static int gen_value(const char *kind, const char *key, const strat_xgen *g, sbu
     } else if (!strcmp(key, "n")) {
         sb_printf(v, "%d", (int)rng_range(2, 16));
     } else if (!strcmp(key, "delay")) {
-        if (strcmp(kind, "xdrip"))
-            return -1; /* xsend's pause holds the connection */
-        sb_printf(v, "%d", (int)rng_range(0, 100));
+        /* xdrip's pause between the parts; xsend's holds the packet, so short */
+        sb_printf(v, "%d", strcmp(kind, "xdrip") ? (int)rng_range(1, 20) : (int)rng_range(0, 100));
     } else if (!strcmp(key, "wsize")) {
         sb_printf(v, "%d", rng_chance(0.7) ? (int)rng_range(1, 64) : (int)rng_range(65, 4096));
     } else if (!strcmp(key, "scale")) {
@@ -388,6 +566,8 @@ static int gen_value(const char *kind, const char *key, const strat_xgen *g, sbu
         sb_printf(v, "%d", (int)rng_range(64, 1200));
     } else if (!strcmp(key, "max")) {
         sb_printf(v, "%d", (int)rng_range(1200, 1500));
+    } else if (!strcmp(key, "pattern_offset")) {
+        sb_printf(v, "%d", (int)rng_range(0, 64));
     } else if (!strcmp(key, "dn")) {
         sb_printf(v, "%d", (int)rng_range(1, 10));
     } else if (!strcmp(key, "dir")) {
@@ -406,24 +586,53 @@ static int gen_value(const char *kind, const char *key, const strat_xgen *g, sbu
     return 1;
 }
 
-/* the common arguments a search draws (others: ifout, fwmark, the per-family
- * TTLs and fragment positions are left to people); the first ones break the
- * packet they are on, so only fakes get them */
-static const char *const std_drawn[] = {"ttl",  "seq",  "ack",  "ts",  "md5",  "flags+", "flags-", "badsum",
-                                        "ip6ext", "tsup", "nopdel", "repeats", "ipid", "ipid_conn", "ipfrag",
-                                        "ipfrag_disorder", "ipfrag_pos_tcp", "ipfrag_pos_udp", "payload"};
-#define STD_BREAKING 9
+/* the common arguments a search draws (not: ifout, fwmark, the host's own;
+ * ipfrag_pos_icmp, ipfrag_pos, for packets the trees never see); the
+ * breaking() ones only fakes get */
+static const char *const std_drawn[] = {
+    "ttl",          "ip_ttl",        "ip6_ttl",     "ip_autottl",    "ip6_autottl",   "seq",
+    "ack",          "ts",            "md5",         "flags+",        "flags-",        "badsum",
+    "ip6ext",       "ip6_hopbyhop",  "ip6_hopbyhop2", "ip6_destopt", "ip6_destopt2",  "ip6_routing",
+    "ip6_ah",       "tsup",          "nopdel",      "repeats",       "ipid",          "ipid_conn",
+    "ipfrag",       "ipfrag_disorder", "ipfrag_pos_tcp", "ipfrag_pos_udp", "ipfrag_next", "payload"};
 
 /* the keys of k that can be drawn, as k takes them */
 static int drawable_keys(const xa_kind *k, const gkind *gk, const char **out, int max)
 {
     int n = 0;
-    for (size_t i = gk->fool ? 0 : STD_BREAKING; i < ARRAY_LEN(std_drawn) && n < max; i++)
-        if (xa_canon_key(k, std_drawn[i]))
+    for (size_t i = 0; i < ARRAY_LEN(std_drawn) && n < max; i++)
+        if ((gk->fool || !breaking(std_drawn[i])) && xa_canon_key(k, std_drawn[i]))
             out[n++] = std_drawn[i];
     for (int i = 0; k->keys && k->keys[i] && n < max; i++)
         out[n++] = k->keys[i];
     return n;
+}
+
+/* the keys of a condition go together: cond_payload_str needs pattern, only
+ * cond_random takes percent */
+static void cond_couple(const xa_kind *k, const char *key, const strat_xgen *g, plist *l)
+{
+    int i = pl_find(l, "iff");
+    const char *iff = i >= 0 ? l->p[i].v : NULL;
+    if (!is_comb(k->name))
+        return;
+    if (!strcmp(key, "pattern") || !strcmp(key, "percent")) {
+        pl_set(l, "iff", xstrdup(key[1] == 'a' ? "cond_payload_str" : "cond_random"));
+        iff = key[1] == 'a' ? "cond_payload_str" : "cond_random";
+    }
+    if (!iff)
+        return;
+    if (strcmp(iff, "cond_payload_str") && (i = pl_find(l, "pattern")) >= 0)
+        pl_del(l, i);
+    if (strcmp(iff, "cond_random") && (i = pl_find(l, "percent")) >= 0)
+        pl_del(l, i);
+    if (!strcmp(iff, "cond_payload_str") && pl_find(l, "pattern") < 0) {
+        sbuf v;
+        sb_init(&v);
+        gen_pattern_str(&v);
+        pl_set(l, "pattern", sb_take(&v));
+    }
+    (void)g;
 }
 
 /* sets key to a drawn value; 0 when it cannot be drawn */
@@ -443,6 +652,7 @@ static int draw(const xa_kind *k, const char *key, const strat_xgen *g, plist *l
     } else {
         pl_set(l, key, sb_take(&v));
     }
+    cond_couple(k, key, g, l);
     return 1;
 }
 
@@ -536,8 +746,23 @@ int xgen_random(const strat_xgen *g, void **x, int *kids)
     return 0;
 }
 
+/* whether key means the same to both actions: a combinator's pattern is
+ * text, xudplen's and the fakes' a blob; xtlsclone's blob and xtag's payload
+ * are names they give */
+static int same_meaning(const char *from, const char *to, const char *key)
+{
+    if (!strcmp(key, "pattern"))
+        return is_comb(from) == is_comb(to) && !strcmp(from, "xtag") == !strcmp(to, "xtag");
+    if (!strcmp(key, "blob"))
+        return !strcmp(from, "xtlsclone") == !strcmp(to, "xtlsclone");
+    if (!strcmp(key, "payload") || !strcmp(key, "undetected"))
+        return !strcmp(from, "xtag") == !strcmp(to, "xtag");
+    return 1;
+}
+
 /* another action that takes as many subtrees, keeping what parameters it
- * takes */
+ * takes and that mean the same; one that sends the real data loses what
+ * breaks a packet */
 static const xa_kind *retype(const xa_kind *from, const strat_xgen *g, int kids, plist *l, const gkind **gk)
 {
     const gkind *cand[ARRAY_LEN(gkinds)];
@@ -553,9 +778,11 @@ static const xa_kind *retype(const xa_kind *from, const strat_xgen *g, int kids,
     *gk = cand[rng_index(n)];
     k = xa_kind_find((*gk)->name);
     for (int i = l->n - 1; i >= 0; i--)
-        if (!xa_canon_key(k, l->p[i].k))
+        if (!xa_canon_key(k, l->p[i].k) || (!(*gk)->fool && breaking(l->p[i].k)) ||
+            !same_meaning(from->name, k->name, l->p[i].k))
             pl_del(l, i);
     add_required(k, *gk, g, l);
+    cond_couple(k, "iff", g, l);
     return k;
 }
 
@@ -565,9 +792,10 @@ int xgen_mutate(const strat_xgen *g, void **x, int kids)
     const gkind *gk = gkind_of(a->kind->name);
     char *old;
     plist start = {.n = 0};
-    if (!gk)
-        return 0; /* the obfuscators, logs, captures, clones: left as written */
-    for (int i = 0; i < a->np && i < GP_MAX; i++)
+    if (!gk || a->np > GP_MAX)
+        return 0; /* the obfuscators, logs, captures, clones: left as written;
+                   * so is one with more parameters than a list holds */
+    for (int i = 0; i < a->np; i++)
         pl_set(&start, a->p[i].k, a->p[i].v ? xstrdup(a->p[i].v) : NULL);
     old = pl_text(&start);
     for (int tries = 0; tries < 32; tries++) {

@@ -1,5 +1,6 @@
 #include "mutate.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -90,7 +91,10 @@ int gen_disable_actions(gen_ctx *g, const char *list, sbuf *err)
             g->disabled[ACT_X] = 1;
         } else if (n && xo && xo->known) {
             char *nm = xstrndup(s, n);
-            int ok = xo->known(nm);
+            int ok;
+            for (size_t j = 0; j < n; j++) /* any case, as Geneva's names */
+                nm[j] = (char)tolower((unsigned char)nm[j]);
+            ok = xo->known(nm);
             if (ok) {
                 size_t old = g->xskip ? strlen(g->xskip) : 0;
                 g->xskip = xrealloc(g->xskip, old + n + 2);
@@ -129,6 +133,7 @@ static const strat_xact *xgen_of(const gen_ctx *g, strat_dir dir, const trigger 
         return NULL;
     xg->dir = dir;
     xg->skip = g->xskip;
+    xg->server = g->server;
     xg->tcp = xg->udp = 0;
     if (t && !t->x && t->layer == LAYER_TCP)
         xg->tcp = 1;

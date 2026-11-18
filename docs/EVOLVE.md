@@ -114,41 +114,67 @@ AutoTuner — `docs/INTEGRATION.md`.
 X5a), а не только скрещивает те, что пришли в начальной популяции:
 
 - **Новые x-действия.** Новое действие дерева с той же частотой, что
-  `tamper`, — x-действие. Делаются только клиентские: `xfake`, `xsplit`,
-  `xdisorder`, `xfakedsplit`, `xfakeddisorder`, `xtcpseg`, `xhostfake`,
-  `xtlsrec`, `xoob`, `xdrip`, `xrst`, `xsyndata`, `xsynack`, `xwssize`,
-  `xhttp`, `xsend`, `xmod`, `xudplen`, `xdhtdn` и комбинаторы `xrepeat`,
-  `xwhen`, `xcutoff`; во входящем лесу — только `xwsize` (окно в SYN,ACK
-  сервера). Обфускаторы (`xwgobfs`, `xippxor`, `xudp2icmp`, `xsynhide`)
-  требуют второй стороны, а `xlog`, `xtag`, `xpcap`, `xtlsclone` сами по
-  себе цензору не видны — их подборщик не делает и не меняет.
+  `tamper`, — x-действие. Подборщик делает все действия, которые меняют
+  то, что видит цензор: `xfake`, `xsplit`, `xdisorder`, `xfakedsplit`,
+  `xfakeddisorder`, `xtcpseg`, `xhostfake`, `xtlsrec`, `xoob`, `xdrip`,
+  `xrst`, `xsyndata`, `xsynack`, `xwssize`, `xhttp`, `xtlsclone`, `xtag`,
+  `xsend`, `xmod`, `xudplen`, `xdhtdn` и комбинаторы `xrepeat`, `xwhen`,
+  `xstop`, `xcutoff`; во входящем лесу — `xwsize` (окно в SYN,ACK
+  сервера). Не делает: `xlog` и `xpcap` (только пишут журнал и захват) и
+  обфускаторы (`xwgobfs`, `xippxor`, `xudp2icmp`, `xsynhide`) — их должна
+  снимать вторая сторона, иначе соединение не работает. Блоб `xtlsclone`
+  называется `gclone`, метки `xtag` — `gtag` и `gtag_no`: другие действия
+  иногда берут их в `blob=` и `payload=`.
+- **На сервере** (`evolve --agent`, `docs/SERVER_SIDE.md`) стратегия стоит
+  на сервере: исходящий лес — пакеты сервера. Там подборщик делает и
+  `xsynacksplit` и `xwsize` (SYN,ACK сервера), но не клиентские `xhostfake`,
+  `xsyndata`, `xsynack`, `xwssize`, `xhttp`, `xtlsclone`; payload берётся
+  серверный (`tls_server_hello`, `http_reply`...). Во входящем лесу
+  сервера x-действий нет.
 - **Протокол дерева.** Триггер TCP — действия для TCP, UDP — для UDP
   (`xudplen`, `xdhtdn`, `xfake`, `xsend`...); у остальных триггеров
-  (`IP:`, `FLOW:`, `L7:`) — для протоколов из `--protos`.
+  (`IP:`, `FLOW:`, `L7:`) — для протоколов из `--protos`. В дереве только
+  UDP не выбираются ключи заголовка TCP (`seq`, `ack`, `ts`, `md5`, флаги,
+  `tsup`, `nopdel`).
 - **Мутация параметров.** Мутация действия (ветвь `ActionTree.mutate`, как
   у `tamper` и `fragment`) у x-действия делает одно из: новое значение
   параметра (45%), ещё один параметр (25%), параметр меньше (15%), другое
   x-действие с тем же числом поддеревьев, с параметрами, которые оно
-  принимает (15%). Результат разбирается заново теми же проверками, что и
-  стратегия от человека; что они не пропускают, выбирается снова.
+  принимает и которые значат у него то же (15%). Результат разбирается
+  заново теми же проверками, что и стратегия от человека; что они не
+  пропускают, выбирается снова. Ключи условия согласуются: `iff=cond_payload_str`
+  получает `pattern`, `percent` бывает только при `cond_random`.
+- **Ключи.** Выбирается каждый ключ, который принимает действие, кроме
+  `ifout` и `fwmark` (настройка самого хоста) и `ipfrag_pos_icmp`,
+  `ipfrag_pos` (пакеты, которых в деревьях нет). Действие с параметрами
+  сверх 24 мутация оставляет как есть.
 - **Значения** — те, что используют стратегии zapret2 и сетка blockcheck2:
-  маркеры позиций (`1`, `2`, `midsld`, `sniext+1`, списки до 4),
-  `ttl=N` и `ttl=auto:-D:MIN-MAX`, `seq`/`ack`/`ts` со сдвигом, `md5`,
-  `badsum`, флаги TCP, IPv6-заголовки, `repeats`, `ipid`, `ipfrag` и его
-  позиции, `payload`, `seqovl` и его шаблон, `tlsmod` (`rnd`, `rndsni`,
-  `dupsid`, `padencap`, `sni=`), `urp`, окно и масштаб, условия
-  комбинаторов. Блобы — встроенные и все из `--ext-blob`: для TCP —
-  записи TLS и запросы HTTP, для UDP — остальные, а также короткие
-  `0x...` из одного байта.
+  маркеры позиций (`1`, `2`, `-1`, `midsld`, `sniext+1`, списки до 4),
+  `ttl=N`, `ttl=auto:-D:MIN-MAX`, `ip_ttl`, `ip6_ttl`, `ip_autottl`,
+  `ip6_autottl`, `seq`/`ack`/`ts` со сдвигом, `md5` (с данными и без),
+  `badsum`, флаги TCP, заголовки IPv6 (`ip6ext` и `ip6_*`, с данными и
+  без), `repeats`, `ipid`, `ipfrag` (и `ipfrag2`), его позиции и
+  `ipfrag_next`, `payload` (все типы zapret2 по протоколу, `known`, `all`,
+  отрицание `~`), `seqovl` и его шаблон, `tlsmod` (`rnd`, `rndsni`,
+  `dupsid`, `padencap`, `sni=`, `none`), `host`, `urp`, окно и масштаб,
+  `forced_cutoff`, `pattern_offset`, `sni_*` у `xtlsclone`, `stop`/`clear`
+  у `xrepeat`, `delay` (у `xsend` до 20 мс), условия комбинаторов
+  (`cond_random`, `cond_payload_str`, `cond_true`, `cond_false`,
+  `cond_tcp_has_ts`, `L7:payload`, `L7:proto`, `FLOW:` по всем счётчикам,
+  `FLOW:state`, `FLOW:retrans`, `TCP:flags`). Блобы — встроенные и все из
+  `--ext-blob`: для TCP — записи TLS и запросы HTTP, для UDP — остальные,
+  а также короткие `0x...` из одного байта. Что всё это выпадает, проверяет
+  тест `xgen_coverage` (`tests/test_xgen.c`).
 - **Что ломает пакет** (TTL, `seq`, `ack`, `ts`, `md5`, `badsum`, флаги,
-  IPv6-заголовки) достаётся только действиям, которые шлют подделки
+  заголовки IPv6) достаётся только действиям, которые шлют подделки
   (`xfake`, `xfakedsplit`, `xfakeddisorder`, `xhostfake`, `xrst`,
   `xsyndata`, `xsynack`): на настоящих данных оно бы сломало соединение.
-  Параметры с файлами, интерфейсами, метками и паузами (`xsend{delay}`)
-  подборщик не выбирает; написанные человеком он оставляет как есть.
+  При смене вида на действие с настоящими данными такие параметры
+  снимаются; написанные человеком подборщик оставляет как есть.
 - `--disable-action x` возвращает прежнее поведение: x-действия только
   переходят между особями при скрещивании. `--disable-action xfake,xoob`
-  запрещает делать эти действия (уже имеющиеся меняются).
+  запрещает делать эти действия (уже имеющиеся меняются); имена — в любом
+  регистре.
 
 Без `--ext` подборщик ведёт себя как Geneva.
 
