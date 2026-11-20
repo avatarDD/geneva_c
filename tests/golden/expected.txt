@@ -2265,8 +2265,8 @@ geneva apply: need --input (and no positional arguments)
 [exit 2]
 ### library
 $ $G library
-100%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:34:True:17}-| \/	Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 30 services
-100%	russia	tls	client	[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \/	Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 6 services
+100%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:34:True:17}-| \/	Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 31 services
+100%	russia	tls	client	[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \/	Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 7 services
 100%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:-1:False}-| \/	Segmentation - two segments split in the middle, sent out of order
 100%	russia	tls	client	[TCP:options-mss:]-fragment{tcp:-1:False:21}-| \/	Segmentation - out of order with a 21-byte overlap, packets with MSS
 100%	russia	tls	client	\/ [TCP:urgptr:0]-tamper{TCP:dataofs:corrupt}-|	Inbound - corrupt dataofs of the server's packets
@@ -2275,11 +2275,12 @@ $ $G library
 99%	russia	tls	client	[TCP:flags:PA]-tamper{TCP:options-uto:corrupt}-| \/	Invalid options - corrupt user timeout option on data packets
 99%	russia	tls	client	\/ [TCP:options-sack::4]-tamper{TCP:options-eol:corrupt}-|	Inbound - corrupt end-of-options on the server's SACK packets
 99%	russia	quic	client	[UDP:dport:443]-tamper{IP:len:replace:1228}-| \/	QUIC - IP length shorter than the datagram
+98%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:-1:False:5}-| \/	Segmentation - out of order with a 5-byte overlap
 [exit 0]
 ### library-all
 $ $G library --all
-100%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:34:True:17}-| \/	Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 30 services
-100%	russia	tls	client	[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \/	Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 6 services
+100%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:34:True:17}-| \/	Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 31 services
+100%	russia	tls	client	[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \/	Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 7 services
 100%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:-1:False}-| \/	Segmentation - two segments split in the middle, sent out of order
 100%	russia	tls	client	[TCP:options-mss:]-fragment{tcp:-1:False:21}-| \/	Segmentation - out of order with a 21-byte overlap, packets with MSS
 100%	russia	tls	client	\/ [TCP:urgptr:0]-tamper{TCP:dataofs:corrupt}-|	Inbound - corrupt dataofs of the server's packets
@@ -2288,6 +2289,7 @@ $ $G library --all
 99%	russia	tls	client	[TCP:flags:PA]-tamper{TCP:options-uto:corrupt}-| \/	Invalid options - corrupt user timeout option on data packets
 99%	russia	tls	client	\/ [TCP:options-sack::4]-tamper{TCP:options-eol:corrupt}-|	Inbound - corrupt end-of-options on the server's SACK packets
 99%	russia	quic	client	[UDP:dport:443]-tamper{IP:len:replace:1228}-| \/	QUIC - IP length shorter than the datagram
+98%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:-1:False:5}-| \/	Segmentation - out of order with a 5-byte overlap
 100%	lab	echo	client	[TCP:flags:A]-tamper{TCP:flags:replace:F}-| \/	Interrupts the 3-way handshake with a FIN. The server ignores the FIN, as the 3-way handshake has not been done yet, so there is no connection to teardown. Since the client's very next packet is a PSH-ACK, the ACK in this packet serves to complete the 3-way handshake, but the censor tears down it's TCB at the FIN.
 100%	lab	echo	client	[TCP:flags:A]-duplicate(tamper{TCP:seq:corrupt}(tamper{TCP:flags:replace:R},),)-| \/	Tears down a TCB right after a 3-way handshake by injecting a RST packet.
 100%	lab	echo	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},),)-| \/	Creates a RST injection packet to tear down a TCB and corrupts the checksum, exploiting a censor that does not validate packet checksums.
@@ -2301,7 +2303,7 @@ $ $G library --all
 [exit 0]
 ### library-json
 $ $G library --json
-[{"strategy":"[TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 30 services"},{"strategy":"[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 6 services"},{"strategy":"[TCP:flags:PA]-fragment{tcp:-1:False}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - two segments split in the middle, sent out of order"},{"strategy":"[TCP:options-mss:]-fragment{tcp:-1:False:21}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - out of order with a 21-byte overlap, packets with MSS"},{"strategy":"\\/ [TCP:urgptr:0]-tamper{TCP:dataofs:corrupt}-|","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Inbound - corrupt dataofs of the server's packets"},{"strategy":"[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt},)-| \\/","rate":100,"country":"russia","test":"udp","server_side":false,"description":"UDP desync - a copy with a corrupt payload before each datagram, worked for 4 services"},{"strategy":"[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt}(duplicate,),)-| \\/","rate":100,"country":"russia","test":"udp","server_side":false,"description":"UDP desync - two copies with a corrupt payload before each datagram, worked for 2 services"},{"strategy":"[TCP:flags:PA]-tamper{TCP:options-uto:corrupt}-| \\/","rate":99,"country":"russia","test":"tls","server_side":false,"description":"Invalid options - corrupt user timeout option on data packets"},{"strategy":"\\/ [TCP:options-sack::4]-tamper{TCP:options-eol:corrupt}-|","rate":99,"country":"russia","test":"tls","server_side":false,"description":"Inbound - corrupt end-of-options on the server's SACK packets"},{"strategy":"[UDP:dport:443]-tamper{IP:len:replace:1228}-| \\/","rate":99,"country":"russia","test":"quic","server_side":false,"description":"QUIC - IP length shorter than the datagram"}]
+[{"strategy":"[TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 31 services"},{"strategy":"[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 7 services"},{"strategy":"[TCP:flags:PA]-fragment{tcp:-1:False}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - two segments split in the middle, sent out of order"},{"strategy":"[TCP:options-mss:]-fragment{tcp:-1:False:21}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - out of order with a 21-byte overlap, packets with MSS"},{"strategy":"\\/ [TCP:urgptr:0]-tamper{TCP:dataofs:corrupt}-|","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Inbound - corrupt dataofs of the server's packets"},{"strategy":"[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt},)-| \\/","rate":100,"country":"russia","test":"udp","server_side":false,"description":"UDP desync - a copy with a corrupt payload before each datagram, worked for 4 services"},{"strategy":"[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt}(duplicate,),)-| \\/","rate":100,"country":"russia","test":"udp","server_side":false,"description":"UDP desync - two copies with a corrupt payload before each datagram, worked for 2 services"},{"strategy":"[TCP:flags:PA]-tamper{TCP:options-uto:corrupt}-| \\/","rate":99,"country":"russia","test":"tls","server_side":false,"description":"Invalid options - corrupt user timeout option on data packets"},{"strategy":"\\/ [TCP:options-sack::4]-tamper{TCP:options-eol:corrupt}-|","rate":99,"country":"russia","test":"tls","server_side":false,"description":"Inbound - corrupt end-of-options on the server's SACK packets"},{"strategy":"[UDP:dport:443]-tamper{IP:len:replace:1228}-| \\/","rate":99,"country":"russia","test":"quic","server_side":false,"description":"QUIC - IP length shorter than the datagram"},{"strategy":"[TCP:flags:PA]-fragment{tcp:-1:False:5}-| \\/","rate":98,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - out of order with a 5-byte overlap"}]
 [exit 0]
 ### library-russia-tls
 $ $G library --country russia --test tls -q
@@ -2312,6 +2314,7 @@ $ $G library --country russia --test tls -q
 \/ [TCP:urgptr:0]-tamper{TCP:dataofs:corrupt}-|
 [TCP:flags:PA]-tamper{TCP:options-uto:corrupt}-| \/
 \/ [TCP:options-sack::4]-tamper{TCP:options-eol:corrupt}-|
+[TCP:flags:PA]-fragment{tcp:-1:False:5}-| \/
 [exit 0]
 ### library-censor
 $ $G library --censor 3

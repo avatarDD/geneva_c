@@ -6,14 +6,14 @@
    "strategy": "[TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/",
    "rate": 100,
    "test": "tls",
-   "description": "Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 30 services",
+   "description": "Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 31 services",
    "ext": false
   },
   {
    "strategy": "[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \\/",
    "rate": 100,
    "test": "tls",
-   "description": "Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 6 services",
+   "description": "Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 7 services",
    "ext": false
   },
   {
@@ -73,6 +73,13 @@
    "ext": false
   },
   {
+   "strategy": "[TCP:flags:PA]-fragment{tcp:-1:False:5}-| \\/",
+   "rate": 98,
+   "test": "tls",
+   "description": "Segmentation - out of order with a 5-byte overlap",
+   "ext": false
+  },
+  {
    "strategy": "[TCP:flags:PA]-xfake{blob=fake_default_tls;md5;ip6_routing}-| \\/",
    "rate": 100,
    "test": "tls",
@@ -84,6 +91,20 @@
    "rate": 100,
    "test": "quic",
    "description": "zapret2 fake - six fake QUIC Initials with TTL 4",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:options-nop:]-xdisorder{pos=1,midsld;ipfrag_disorder}-| \\/",
+   "rate": 100,
+   "test": "tls",
+   "description": "zapret2 disorder - split after byte 1 and in the middle of the domain, sent out of order, IP fragments out of order, worked for 6 services",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:flags:PA]-xsplit{pos=1,midsld}-| \\/",
+   "rate": 100,
+   "test": "tls",
+   "description": "zapret2 split - split after byte 1 and in the middle of the domain",
    "ext": true
   },
   {
@@ -133,6 +154,27 @@
    "rate": 99,
    "test": "tls",
    "description": "zapret2 split - split at the host name with a 652-byte sequence overlap",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:flags:PA]-xdisorder(tamper{TCP:options-eol:corrupt},)-| \\/",
+   "rate": 98,
+   "test": "tls",
+   "description": "zapret2 disorder - segments out of order, the first with a corrupt end-of-options",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:flags:PA]-xfake{blob=fake_default_tls;ttl=4;repeats=2}(xdisorder,)-| \\/",
+   "rate": 97,
+   "test": "tls",
+   "description": "zapret2 fake - two fake ClientHellos with TTL 4, then the real one out of order",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:flags:PA]-xhostfake{ttl=auto:-2:3-20}(duplicate,)-| \\/",
+   "rate": 95,
+   "test": "tls",
+   "description": "zapret2 hostfake - fake host name segments with an automatic TTL",
    "ext": true
   }
  ]
