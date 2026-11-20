@@ -6,11 +6,16 @@
 #include "ctl.h"
 #include "evaluator.h"
 #include "json.h"
+#include "ext_opt.h"
 #include "library.h"
 #include "plat.h"
 #include "probe.h"
 #include "strategy.h"
 #include "test.h"
+#if GENEVA_EXT
+#  include "ext/blob.h"
+#  include "ext/xact.h"
+#endif
 
 /* ---- a TCP server with canned answers ------------------------------------ */
 
@@ -913,67 +918,91 @@ static void test_agent(void)
 
 static void test_library(void)
 {
-    size_t n, real = 0, lab = 0, server = 0;
+    size_t n, own = 0, lab = 0, ext = 0;
     const lib_entry *v = library_entries(&n);
     lib_filter f;
     sbuf err;
     t_current = "library";
     sb_init(&err);
-    CHECK(n >= 50);
+#if GENEVA_EXT
+    strategy_set_xact(&xact_ops);
+    blob_reset();
+#endif
+    CHECK(n >= 25);
     for (size_t i = 0; i < n; i++) {
+        CHECK(v[i].rate >= 0 && v[i].rate <= 100);
+        CHECK(v[i].description && *v[i].description);
+        CHECK(!v[i].server_side);
+        if (!strcmp(v[i].country, "lab")) {
+            lab++;
+            CHECK(v[i].censors && *v[i].censors);
+            CHECK(!v[i].ext);
+        } else {
+            own++;
+            /* Geneva's WORKING_STRATEGIES are gone: only geneva_c's own */
+            CHECK_STR(v[i].country, "russia");
+            CHECK(v[i].censors == NULL);
+            CHECK(!strcmp(v[i].test_type, "tls") || !strcmp(v[i].test_type, "quic") ||
+                  !strcmp(v[i].test_type, "udp"));
+        }
+        ext += v[i].ext;
+        if (v[i].ext && !GENEVA_EXT)
+            continue;
         strategy *st = strategy_parse(v[i].strategy, &err);
         if (!st)
             fprintf(stderr, "    %s: %s\n", v[i].strategy, err.data);
         CHECK(st != NULL);
         strategy_free(st);
-        CHECK(v[i].rate >= 0 && v[i].rate <= 100);
-        CHECK(v[i].description && *v[i].description);
-        if (!strcmp(v[i].country, "lab")) {
-            lab++;
-            CHECK(v[i].censors && *v[i].censors);
-        } else {
-            real++;
-            CHECK(v[i].censors == NULL);
-        }
-        server += v[i].server_side;
     }
+#if GENEVA_EXT
+    strategy_set_xact(NULL);
+#endif
     CHECK_INT(lab, 10);
-    CHECK(real >= 40 && server >= 1);
+    CHECK(own >= 15 && ext >= 5 && own > ext);
 
     memset(&f, 0, sizeof(f));
     n = 0;
-    for (size_t i = 0; i < real + lab; i++)
+    for (size_t i = 0; i < own + lab; i++)
         n += library_match(&v[i], &f);
-    CHECK_INT(n, real); /* lab entries only on request */
+    CHECK_INT(n, own - ext); /* lab entries and the ones of --ext only on request */
     f.with_lab = 1;
     n = 0;
-    for (size_t i = 0; i < real + lab; i++)
+    for (size_t i = 0; i < own + lab; i++)
         n += library_match(&v[i], &f);
-    CHECK_INT(n, real + lab);
+    CHECK_INT(n, own - ext + lab);
+    f.ext = 1;
+    n = 0;
+    for (size_t i = 0; i < own + lab; i++)
+        n += library_match(&v[i], &f);
+    CHECK_INT(n, (GENEVA_EXT ? own : own - ext) + lab); /* EXT=0: never */
     memset(&f, 0, sizeof(f));
     f.censor = "8b";
     n = 0;
-    for (size_t i = 0; i < real + lab; i++)
+    for (size_t i = 0; i < own + lab; i++)
         n += library_match(&v[i], &f);
     CHECK_INT(n, 3);
     f.censor = "censor8";
     n = 0;
-    for (size_t i = 0; i < real + lab; i++)
+    for (size_t i = 0; i < own + lab; i++)
         n += library_match(&v[i], &f);
     CHECK_INT(n, 4); /* "8" is not "8b" */
     memset(&f, 0, sizeof(f));
-    f.country = "kazakhstan";
+    f.country = "russia";
+    f.test_type = "quic";
+    n = 0;
+    for (size_t i = 0; i < own + lab; i++)
+        n += library_match(&v[i], &f);
+    CHECK(n >= 1);
+    memset(&f, 0, sizeof(f));
     f.side = 2;
     n = 0;
-    for (size_t i = 0; i < real + lab; i++)
-        n += library_match(&v[i], &f) && v[i].server_side;
-    f.side = 1;
-    for (size_t i = 0; i < real + lab; i++)
-        CHECK(!library_match(&v[i], &f) || !v[i].server_side);
+    for (size_t i = 0; i < own + lab; i++)
+        n += library_match(&v[i], &f);
+    CHECK_INT(n, 0); /* no server-side strategies any more */
     memset(&f, 0, sizeof(f));
-    f.min_rate = 99;
-    for (size_t i = 0; i < real + lab; i++)
-        CHECK(!library_match(&v[i], &f) || v[i].rate >= 99);
+    f.min_rate = 100;
+    for (size_t i = 0; i < own + lab; i++)
+        CHECK(!library_match(&v[i], &f) || v[i].rate >= 100);
     sb_free(&err);
 }
 

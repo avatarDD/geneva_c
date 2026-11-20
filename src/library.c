@@ -5,6 +5,7 @@
 
 #include <string.h>
 
+#include "ext_opt.h"
 #include "util.h"
 
 #include "library_data.h"
@@ -32,6 +33,8 @@ static int has_word(const char *list, const char *w)
 int library_match(const lib_entry *e, const lib_filter *f)
 {
     int lab = !strcmp(e->country, "lab");
+    if (e->ext && (!f->ext || !GENEVA_EXT))
+        return 0;
     if (f->country ? strcmp(e->country, f->country) != 0 : (lab && !f->with_lab && !f->censor))
         return 0;
     if (f->test_type && strcmp(e->test_type, f->test_type))

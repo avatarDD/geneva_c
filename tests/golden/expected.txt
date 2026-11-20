@@ -367,18 +367,19 @@ Options:
 ### help-library
 $ $G library --help
 Usage: geneva library [options]
-Lists the strategies of Geneva's library: the ones found against the censors
-of China, India and Kazakhstan (with Geneva's success rates), and with --all
-or --country lab the ones against the lab censors (docs/CENSOR.md).
+Lists the built-in strategies: the ones geneva_c found against the censor of
+Russia (rate: the eval fitness - 300, so 400 is 100), and with --all or
+--country lab the ones of Geneva's library against the lab censors
+(docs/CENSOR.md). The --ext ones need --ext in eval and evolve too.
 Output: rate, country, test, side, strategy and description, tab-separated.
 
 Options:
-  -c, --country NAME             china, india, kazakhstan, or lab
-  -t, --test TYPE                http, dns, dns_tcp, kazakhstan_injected_https, echo
+  -c, --country NAME             russia, or lab
+  -t, --test TYPE                tls, quic, udp, echo (lab)
       --censor N                 lab strategies that beat censor N of "geneva censor"
       --client-side              only strategies for the client
       --server-side              only strategies for the server
-      --min-rate PCT             only strategies with at least this success rate
+      --min-rate PCT             only strategies with at least this rate (fitness - 300)
   -a, --all                      also the lab strategies
       --json                     JSON array
   -q, --strategies               strategies only, one per line (for eval -f)
@@ -2264,105 +2265,31 @@ geneva apply: need --input (and no positional arguments)
 [exit 2]
 ### library
 $ $G library
-3%	china	http	client	\/	No strategy
-98%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:chksum:replace:25776},),)-	TCP Desync - Increment Dataofs - Corrupt Chksum
-98%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{IP:ttl:replace:10},),)-	TCP Desync - Increment Dataofs - Small TTL
-26%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:flags:replace:FRAPUN},),)-	TCP Desync - Increment Dataofs - Invalid Flags
-94%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:ack:corrupt},),)-	TCP Desync - Increment Dataofs - Corrupt ACK
-98%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:options-wscale:corrupt}(tamper{TCP:dataofs:replace:8},),)-	TCP Desync - Increment Dataofs - Corrupt WScale
-98%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{TCP:chksum:corrupt},),)-	TCP Desync - Invalid Payload - Corrupt Chksum
-98%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{IP:ttl:replace:8}(duplicate(fragment{tcp:-1:False},),),),)-	TCP Desync - Invalid Payload - Small TTL
-93%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{TCP:ack:corrupt}(duplicate(fragment{tcp:-1:False},),),),)-	TCP Desync - Invalid Payload - Corrupt ACK
-95%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},))-	TCB Teardown - with RST - Corrupt Chksum, High Percentage
-51%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},),)-	TCB Teardown - with RST - Corrupt Chksum, Low Percentage
-87%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:R}(tamper{IP:ttl:replace:10},))-	TCB Teardown - with RST - Small TTL, High Percentage
-52%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{IP:ttl:replace:9},),)-	TCB Teardown - with RST - Small TTL, Low Percentage
-86%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},))-	TCB Teardown - with RST - Invalid md5Header, High Percentage
-44%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:RA},),)-	TCB Teardown - with RST - Invalid md5Header, Low Percentage
-90%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{TCP:chksum:replace:27925},))-	TCB Teardown - with RST/ACK - Corrupt Chksum, High Percentage
-66%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{TCP:chksum:replace:27925},),)-	TCB Teardown - with RST/ACK - Corrupt Chksum, High Percentage
-94%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{IP:ttl:replace:10},))-	TCB Teardown - with RST/ACK - Small TTL, High Percentage
-57%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{IP:ttl:replace:10},),)-	TCB Teardown - with RST/ACK - Small TTL, Low Percentage
-94%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},))-	TCB Teardown - with RST/ACK - Invalid md5Header, High Percentage
-48%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},),)-	TCB Teardown - with RST/ACK - Invalid md5Header, Low Percentage
-43%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{TCP:ack:corrupt},),)-	TCB Teardown - with RST/ACK - Corrupt ACK, High Percentage
-31%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{TCP:ack:corrupt},))-	TCB Teardown - with RST/ACK - Corrupt ACK, Low Percentage
-89%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:chksum:corrupt},))-	TCB Teardown - Invalid Flags - Corrupt Chksum, High Percentage
-48%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:chksum:corrupt},),)-	TCB Teardown - Invalid Flags - Corrupt Chksum, Low Percentage
-96%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FREACN}(tamper{IP:ttl:replace:10},))-	TCB Teardown - Invalid Flags - Small TTL, High Percentage
-56%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{IP:ttl:replace:10},),)-	TCB Teardown - Invalid Flags - Small TTL, Low Percentage
-94%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FRAPUN}(tamper{TCP:options-md5header:corrupt},))-	TCB Teardown - Invalid Flags - Invalid md5Header, High Percentage
-55%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:options-md5header:corrupt},),)-	TCB Teardown - Invalid Flags - Invalid md5Header, Low Percentage
-0%	china	http	client	[TCP:flags:A]-tamper{TCP:load:replace:a5z2}(tamper{TCP:flags:replace:CN},)-	TCB Teardown - Invalid Flags - Invalid Payload
-92%	china	http	client	[TCP:flags:PA]-fragment{tcp:8:False}-|[TCP:flags:A]-tamper{TCP:seq:replace:2258679050}-	Segmentation - With ACK - Offsets, subvariant 1
-95%	china	http	client	[TCP:flags:PA]-fragment{tcp:8:False}-| [TCP:flags:A]-tamper{TCP:seq:replace:2258679050}(tamper{TCP:flags:replace:PA},)-	Segmentation - With ACK - Offsets, subvariant 2
-98%	china	http	client	[TCP:flags:PA]-fragment{tcp:8:True}(,fragment{tcp:4:True})-	Segmentation - Reassembly - Offsets, subvariant 1
-96%	china	http	client	[TCP:flags:PA]-fragment{tcp:4:True}(,fragment{tcp:19:True})-	Segmentation - Reassembly - Offsets, subvariant 2
-53%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:flags:replace:F}(tamper{IP:len:replace:68},),)-| \/	Hybrid Strategy - HTTP - Fragment and set Fin flag
-100%	china	dns_tcp	client	[TCP:flags:PA]-duplicate(tamper{TCP:flags:replace:F}(tamper{IP:len:replace:68},),)-| \/	Hybrid Strategy - DNS Over TCP - Fragment and set Fin flag
-43%	china	http	server	[TCP:flags:SA]-duplicate(tamper{TCP:flags:replace:FREC}(duplicate,),tamper{TCP:flags:replace:FSEC})-| \/	Server-Side - Simultaneous Open
-96%	china	dns	client	\/ [UDP:sport:53:2]-drop-	DNS - Drop first two bad responses
-100%	india	http	client	[TCP:options-altchksum:]-tamper{TCP:options-uto:corrupt}(duplicate,)-| \/	Invalid Options
-100%	india	http	client	[TCP:options-mss:]-tamper{TCP:options-md5header:corrupt}-| \/	Invalid Options
-100%	india	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:9},)-| \/	Increasing dataofs
-100%	india	http	client	[TCP:flags:PA]-duplicate(tamper{IP:len:replace:64},)-|	IP length
-100%	india	http	client	[TCP:flags:PA]-fragment{tcp:-1:True}-|	Segmentation
-100%	india	http	server	[TCP:flags:SA]-tamper{TCP:window:replace:98}-|	Server side
-100%	kazakhstan	kazakhstan_injected_https	client	[TCP:flags:PA]-fragment{tcp:-1:True}-|	Segmentation
-100%	kazakhstan	kazakhstan_injected_https	client	[TCP:flags:PA]-duplicate(tamper{IP:len:replace:78},)-|	Segmentation Exploit - Small IP length
-100%	kazakhstan	kazakhstan_injected_https	client	[TCP:flags:S]-duplicate(,tamper{TCP:load:corrupt})-|	Desync: load on second SYN
-100%	kazakhstan	kazakhstan_injected_https	client	[TCP:flags:S]-duplicate(tamper{TCP:flags:replace:SA},)-|	TCB Turnaround
+100%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:34:True:17}-| \/	Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 31 services
+100%	russia	tls	client	[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \/	Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 7 services
+100%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:-1:False}-| \/	Segmentation - two segments split in the middle, sent out of order
+100%	russia	tls	client	[TCP:options-mss:]-fragment{tcp:-1:False:21}-| \/	Segmentation - out of order with a 21-byte overlap, packets with MSS
+100%	russia	tls	client	\/ [TCP:urgptr:0]-tamper{TCP:dataofs:corrupt}-|	Inbound - corrupt dataofs of the server's packets
+100%	russia	udp	client	[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt},)-| \/	UDP desync - a copy with a corrupt payload before each datagram, worked for 4 services
+100%	russia	udp	client	[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt}(duplicate,),)-| \/	UDP desync - two copies with a corrupt payload before each datagram, worked for 2 services
+99%	russia	tls	client	[TCP:flags:PA]-tamper{TCP:options-uto:corrupt}-| \/	Invalid options - corrupt user timeout option on data packets
+99%	russia	tls	client	\/ [TCP:options-sack::4]-tamper{TCP:options-eol:corrupt}-|	Inbound - corrupt end-of-options on the server's SACK packets
+99%	russia	quic	client	[UDP:dport:443]-tamper{IP:len:replace:1228}-| \/	QUIC - IP length shorter than the datagram
+98%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:-1:False:5}-| \/	Segmentation - out of order with a 5-byte overlap
 [exit 0]
 ### library-all
 $ $G library --all
-3%	china	http	client	\/	No strategy
-98%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:chksum:replace:25776},),)-	TCP Desync - Increment Dataofs - Corrupt Chksum
-98%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{IP:ttl:replace:10},),)-	TCP Desync - Increment Dataofs - Small TTL
-26%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:flags:replace:FRAPUN},),)-	TCP Desync - Increment Dataofs - Invalid Flags
-94%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:ack:corrupt},),)-	TCP Desync - Increment Dataofs - Corrupt ACK
-98%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:options-wscale:corrupt}(tamper{TCP:dataofs:replace:8},),)-	TCP Desync - Increment Dataofs - Corrupt WScale
-98%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{TCP:chksum:corrupt},),)-	TCP Desync - Invalid Payload - Corrupt Chksum
-98%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{IP:ttl:replace:8}(duplicate(fragment{tcp:-1:False},),),),)-	TCP Desync - Invalid Payload - Small TTL
-93%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{TCP:ack:corrupt}(duplicate(fragment{tcp:-1:False},),),),)-	TCP Desync - Invalid Payload - Corrupt ACK
-95%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},))-	TCB Teardown - with RST - Corrupt Chksum, High Percentage
-51%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},),)-	TCB Teardown - with RST - Corrupt Chksum, Low Percentage
-87%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:R}(tamper{IP:ttl:replace:10},))-	TCB Teardown - with RST - Small TTL, High Percentage
-52%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{IP:ttl:replace:9},),)-	TCB Teardown - with RST - Small TTL, Low Percentage
-86%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},))-	TCB Teardown - with RST - Invalid md5Header, High Percentage
-44%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:RA},),)-	TCB Teardown - with RST - Invalid md5Header, Low Percentage
-90%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{TCP:chksum:replace:27925},))-	TCB Teardown - with RST/ACK - Corrupt Chksum, High Percentage
-66%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{TCP:chksum:replace:27925},),)-	TCB Teardown - with RST/ACK - Corrupt Chksum, High Percentage
-94%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{IP:ttl:replace:10},))-	TCB Teardown - with RST/ACK - Small TTL, High Percentage
-57%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{IP:ttl:replace:10},),)-	TCB Teardown - with RST/ACK - Small TTL, Low Percentage
-94%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},))-	TCB Teardown - with RST/ACK - Invalid md5Header, High Percentage
-48%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},),)-	TCB Teardown - with RST/ACK - Invalid md5Header, Low Percentage
-43%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{TCP:ack:corrupt},),)-	TCB Teardown - with RST/ACK - Corrupt ACK, High Percentage
-31%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{TCP:ack:corrupt},))-	TCB Teardown - with RST/ACK - Corrupt ACK, Low Percentage
-89%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:chksum:corrupt},))-	TCB Teardown - Invalid Flags - Corrupt Chksum, High Percentage
-48%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:chksum:corrupt},),)-	TCB Teardown - Invalid Flags - Corrupt Chksum, Low Percentage
-96%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FREACN}(tamper{IP:ttl:replace:10},))-	TCB Teardown - Invalid Flags - Small TTL, High Percentage
-56%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{IP:ttl:replace:10},),)-	TCB Teardown - Invalid Flags - Small TTL, Low Percentage
-94%	china	http	client	[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FRAPUN}(tamper{TCP:options-md5header:corrupt},))-	TCB Teardown - Invalid Flags - Invalid md5Header, High Percentage
-55%	china	http	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:options-md5header:corrupt},),)-	TCB Teardown - Invalid Flags - Invalid md5Header, Low Percentage
-0%	china	http	client	[TCP:flags:A]-tamper{TCP:load:replace:a5z2}(tamper{TCP:flags:replace:CN},)-	TCB Teardown - Invalid Flags - Invalid Payload
-92%	china	http	client	[TCP:flags:PA]-fragment{tcp:8:False}-|[TCP:flags:A]-tamper{TCP:seq:replace:2258679050}-	Segmentation - With ACK - Offsets, subvariant 1
-95%	china	http	client	[TCP:flags:PA]-fragment{tcp:8:False}-| [TCP:flags:A]-tamper{TCP:seq:replace:2258679050}(tamper{TCP:flags:replace:PA},)-	Segmentation - With ACK - Offsets, subvariant 2
-98%	china	http	client	[TCP:flags:PA]-fragment{tcp:8:True}(,fragment{tcp:4:True})-	Segmentation - Reassembly - Offsets, subvariant 1
-96%	china	http	client	[TCP:flags:PA]-fragment{tcp:4:True}(,fragment{tcp:19:True})-	Segmentation - Reassembly - Offsets, subvariant 2
-53%	china	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:flags:replace:F}(tamper{IP:len:replace:68},),)-| \/	Hybrid Strategy - HTTP - Fragment and set Fin flag
-100%	china	dns_tcp	client	[TCP:flags:PA]-duplicate(tamper{TCP:flags:replace:F}(tamper{IP:len:replace:68},),)-| \/	Hybrid Strategy - DNS Over TCP - Fragment and set Fin flag
-43%	china	http	server	[TCP:flags:SA]-duplicate(tamper{TCP:flags:replace:FREC}(duplicate,),tamper{TCP:flags:replace:FSEC})-| \/	Server-Side - Simultaneous Open
-96%	china	dns	client	\/ [UDP:sport:53:2]-drop-	DNS - Drop first two bad responses
-100%	india	http	client	[TCP:options-altchksum:]-tamper{TCP:options-uto:corrupt}(duplicate,)-| \/	Invalid Options
-100%	india	http	client	[TCP:options-mss:]-tamper{TCP:options-md5header:corrupt}-| \/	Invalid Options
-100%	india	http	client	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:9},)-| \/	Increasing dataofs
-100%	india	http	client	[TCP:flags:PA]-duplicate(tamper{IP:len:replace:64},)-|	IP length
-100%	india	http	client	[TCP:flags:PA]-fragment{tcp:-1:True}-|	Segmentation
-100%	india	http	server	[TCP:flags:SA]-tamper{TCP:window:replace:98}-|	Server side
-100%	kazakhstan	kazakhstan_injected_https	client	[TCP:flags:PA]-fragment{tcp:-1:True}-|	Segmentation
-100%	kazakhstan	kazakhstan_injected_https	client	[TCP:flags:PA]-duplicate(tamper{IP:len:replace:78},)-|	Segmentation Exploit - Small IP length
-100%	kazakhstan	kazakhstan_injected_https	client	[TCP:flags:S]-duplicate(,tamper{TCP:load:corrupt})-|	Desync: load on second SYN
-100%	kazakhstan	kazakhstan_injected_https	client	[TCP:flags:S]-duplicate(tamper{TCP:flags:replace:SA},)-|	TCB Turnaround
+100%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:34:True:17}-| \/	Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 31 services
+100%	russia	tls	client	[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \/	Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 7 services
+100%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:-1:False}-| \/	Segmentation - two segments split in the middle, sent out of order
+100%	russia	tls	client	[TCP:options-mss:]-fragment{tcp:-1:False:21}-| \/	Segmentation - out of order with a 21-byte overlap, packets with MSS
+100%	russia	tls	client	\/ [TCP:urgptr:0]-tamper{TCP:dataofs:corrupt}-|	Inbound - corrupt dataofs of the server's packets
+100%	russia	udp	client	[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt},)-| \/	UDP desync - a copy with a corrupt payload before each datagram, worked for 4 services
+100%	russia	udp	client	[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt}(duplicate,),)-| \/	UDP desync - two copies with a corrupt payload before each datagram, worked for 2 services
+99%	russia	tls	client	[TCP:flags:PA]-tamper{TCP:options-uto:corrupt}-| \/	Invalid options - corrupt user timeout option on data packets
+99%	russia	tls	client	\/ [TCP:options-sack::4]-tamper{TCP:options-eol:corrupt}-|	Inbound - corrupt end-of-options on the server's SACK packets
+99%	russia	quic	client	[UDP:dport:443]-tamper{IP:len:replace:1228}-| \/	QUIC - IP length shorter than the datagram
+98%	russia	tls	client	[TCP:flags:PA]-fragment{tcp:-1:False:5}-| \/	Segmentation - out of order with a 5-byte overlap
 100%	lab	echo	client	[TCP:flags:A]-tamper{TCP:flags:replace:F}-| \/	Interrupts the 3-way handshake with a FIN. The server ignores the FIN, as the 3-way handshake has not been done yet, so there is no connection to teardown. Since the client's very next packet is a PSH-ACK, the ACK in this packet serves to complete the 3-way handshake, but the censor tears down it's TCB at the FIN.
 100%	lab	echo	client	[TCP:flags:A]-duplicate(tamper{TCP:seq:corrupt}(tamper{TCP:flags:replace:R},),)-| \/	Tears down a TCB right after a 3-way handshake by injecting a RST packet.
 100%	lab	echo	client	[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},),)-| \/	Creates a RST injection packet to tear down a TCB and corrupts the checksum, exploiting a censor that does not validate packet checksums.
@@ -2376,46 +2303,18 @@ $ $G library --all
 [exit 0]
 ### library-json
 $ $G library --json
-[{"strategy":"\\/","rate":3,"country":"china","test":"http","server_side":false,"description":"No strategy"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:chksum:replace:25776},),)-","rate":98,"country":"china","test":"http","server_side":false,"description":"TCP Desync - Increment Dataofs - Corrupt Chksum"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{IP:ttl:replace:10},),)-","rate":98,"country":"china","test":"http","server_side":false,"description":"TCP Desync - Increment Dataofs - Small TTL"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:flags:replace:FRAPUN},),)-","rate":26,"country":"china","test":"http","server_side":false,"description":"TCP Desync - Increment Dataofs - Invalid Flags"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:ack:corrupt},),)-","rate":94,"country":"china","test":"http","server_side":false,"description":"TCP Desync - Increment Dataofs - Corrupt ACK"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{TCP:options-wscale:corrupt}(tamper{TCP:dataofs:replace:8},),)-","rate":98,"country":"china","test":"http","server_side":false,"description":"TCP Desync - Increment Dataofs - Corrupt WScale"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{TCP:chksum:corrupt},),)-","rate":98,"country":"china","test":"http","server_side":false,"description":"TCP Desync - Invalid Payload - Corrupt Chksum"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{IP:ttl:replace:8}(duplicate(fragment{tcp:-1:False},),),),)-","rate":98,"country":"china","test":"http","server_side":false,"description":"TCP Desync - Invalid Payload - Small TTL"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{TCP:ack:corrupt}(duplicate(fragment{tcp:-1:False},),),),)-","rate":93,"country":"china","test":"http","server_side":false,"description":"TCP Desync - Invalid Payload - Corrupt ACK"},{"strategy":"[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},))-","rate":95,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST - Corrupt Chksum, High Percentage"},{"strategy":"[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},),)-","rate":51,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST - Corrupt Chksum, Low Percentage"},{"strategy":"[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:R}(tamper{IP:ttl:replace:10},))-","rate":87,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST - Small TTL, High Percentage"},{"strategy":"[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{IP:ttl:replace:9},),)-","rate":52,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST - Small TTL, Low Percentage"},{"strategy":"[TCP:flags:A]-duplicate(,tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},))-","rate":86,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST - Invalid md5Header, High Percentage"},{"strategy":"[TCP:flags:A]-duplicate(tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:RA},),)-","rate":44,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST - Invalid md5Header, Low Percentage"},{"strategy":"[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{TCP:chksum:replace:27925},))-","rate":90,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST/ACK - Corrupt Chksum, High Percentage"},{"strategy":"[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{TCP:chksum:replace:27925},),)-","rate":66,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST/ACK - Corrupt Chksum, High Percentage"},{"strategy":"[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{IP:ttl:replace:10},))-","rate":94,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST/ACK - Small TTL, High Percentage"},{"strategy":"[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{IP:ttl:replace:10},),)-","rate":57,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST/ACK - Small TTL, Low Percentage"},{"strategy":"[TCP:flags:A]-duplicate(,tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},))-","rate":94,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST/ACK - Invalid md5Header, High Percentage"},{"strategy":"[TCP:flags:A]-duplicate(tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},),)-","rate":48,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST/ACK - Invalid md5Header, Low Percentage"},{"strategy":"[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{TCP:ack:corrupt},),)-","rate":43,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST/ACK - Corrupt ACK, High Percentage"},{"strategy":"[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{TCP:ack:corrupt},))-","rate":31,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - with RST/ACK - Corrupt ACK, Low Percentage"},{"strategy":"[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:chksum:corrupt},))-","rate":89,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - Invalid Flags - Corrupt Chksum, High Percentage"},{"strategy":"[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:chksum:corrupt},),)-","rate":48,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - Invalid Flags - Corrupt Chksum, Low Percentage"},{"strategy":"[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FREACN}(tamper{IP:ttl:replace:10},))-","rate":96,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - Invalid Flags - Small TTL, High Percentage"},{"strategy":"[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{IP:ttl:replace:10},),)-","rate":56,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - Invalid Flags - Small TTL, Low Percentage"},{"strategy":"[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FRAPUN}(tamper{TCP:options-md5header:corrupt},))-","rate":94,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - Invalid Flags - Invalid md5Header, High Percentage"},{"strategy":"[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:options-md5header:corrupt},),)-","rate":55,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - Invalid Flags - Invalid md5Header, Low Percentage"},{"strategy":"[TCP:flags:A]-tamper{TCP:load:replace:a5z2}(tamper{TCP:flags:replace:CN},)-","rate":0,"country":"china","test":"http","server_side":false,"description":"TCB Teardown - Invalid Flags - Invalid Payload"},{"strategy":"[TCP:flags:PA]-fragment{tcp:8:False}-|[TCP:flags:A]-tamper{TCP:seq:replace:2258679050}-","rate":92,"country":"china","test":"http","server_side":false,"description":"Segmentation - With ACK - Offsets, subvariant 1"},{"strategy":"[TCP:flags:PA]-fragment{tcp:8:False}-| [TCP:flags:A]-tamper{TCP:seq:replace:2258679050}(tamper{TCP:flags:replace:PA},)-","rate":95,"country":"china","test":"http","server_side":false,"description":"Segmentation - With ACK - Offsets, subvariant 2"},{"strategy":"[TCP:flags:PA]-fragment{tcp:8:True}(,fragment{tcp:4:True})-","rate":98,"country":"china","test":"http","server_side":false,"description":"Segmentation - Reassembly - Offsets, subvariant 1"},{"strategy":"[TCP:flags:PA]-fragment{tcp:4:True}(,fragment{tcp:19:True})-","rate":96,"country":"china","test":"http","server_side":false,"description":"Segmentation - Reassembly - Offsets, subvariant 2"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{TCP:flags:replace:F}(tamper{IP:len:replace:68},),)-| \\/","rate":53,"country":"china","test":"http","server_side":false,"description":"Hybrid Strategy - HTTP - Fragment and set Fin flag"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{TCP:flags:replace:F}(tamper{IP:len:replace:68},),)-| \\/","rate":100,"country":"china","test":"dns_tcp","server_side":false,"description":"Hybrid Strategy - DNS Over TCP - Fragment and set Fin flag"},{"strategy":"[TCP:flags:SA]-duplicate(tamper{TCP:flags:replace:FREC}(duplicate,),tamper{TCP:flags:replace:FSEC})-| \\/","rate":43,"country":"china","test":"http","server_side":true,"description":"Server-Side - Simultaneous Open"},{"strategy":"\\/ [UDP:sport:53:2]-drop-","rate":96,"country":"china","test":"dns","server_side":false,"description":"DNS - Drop first two bad responses"},{"strategy":"[TCP:options-altchksum:]-tamper{TCP:options-uto:corrupt}(duplicate,)-| \\/","rate":100,"country":"india","test":"http","server_side":false,"description":"Invalid Options"},{"strategy":"[TCP:options-mss:]-tamper{TCP:options-md5header:corrupt}-| \\/","rate":100,"country":"india","test":"http","server_side":false,"description":"Invalid Options"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:9},)-| \\/","rate":100,"country":"india","test":"http","server_side":false,"description":"Increasing dataofs"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{IP:len:replace:64},)-|","rate":100,"country":"india","test":"http","server_side":false,"description":"IP length"},{"strategy":"[TCP:flags:PA]-fragment{tcp:-1:True}-|","rate":100,"country":"india","test":"http","server_side":false,"description":"Segmentation"},{"strategy":"[TCP:flags:SA]-tamper{TCP:window:replace:98}-|","rate":100,"country":"india","test":"http","server_side":true,"description":"Server side"},{"strategy":"[TCP:flags:PA]-fragment{tcp:-1:True}-|","rate":100,"country":"kazakhstan","test":"kazakhstan_injected_https","server_side":false,"description":"Segmentation"},{"strategy":"[TCP:flags:PA]-duplicate(tamper{IP:len:replace:78},)-|","rate":100,"country":"kazakhstan","test":"kazakhstan_injected_https","server_side":false,"description":"Segmentation Exploit - Small IP length"},{"strategy":"[TCP:flags:S]-duplicate(,tamper{TCP:load:corrupt})-|","rate":100,"country":"kazakhstan","test":"kazakhstan_injected_https","server_side":false,"description":"Desync: load on second SYN"},{"strategy":"[TCP:flags:S]-duplicate(tamper{TCP:flags:replace:SA},)-|","rate":100,"country":"kazakhstan","test":"kazakhstan_injected_https","server_side":false,"description":"TCB Turnaround"}]
+[{"strategy":"[TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 31 services"},{"strategy":"[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 7 services"},{"strategy":"[TCP:flags:PA]-fragment{tcp:-1:False}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - two segments split in the middle, sent out of order"},{"strategy":"[TCP:options-mss:]-fragment{tcp:-1:False:21}-| \\/","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - out of order with a 21-byte overlap, packets with MSS"},{"strategy":"\\/ [TCP:urgptr:0]-tamper{TCP:dataofs:corrupt}-|","rate":100,"country":"russia","test":"tls","server_side":false,"description":"Inbound - corrupt dataofs of the server's packets"},{"strategy":"[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt},)-| \\/","rate":100,"country":"russia","test":"udp","server_side":false,"description":"UDP desync - a copy with a corrupt payload before each datagram, worked for 4 services"},{"strategy":"[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt}(duplicate,),)-| \\/","rate":100,"country":"russia","test":"udp","server_side":false,"description":"UDP desync - two copies with a corrupt payload before each datagram, worked for 2 services"},{"strategy":"[TCP:flags:PA]-tamper{TCP:options-uto:corrupt}-| \\/","rate":99,"country":"russia","test":"tls","server_side":false,"description":"Invalid options - corrupt user timeout option on data packets"},{"strategy":"\\/ [TCP:options-sack::4]-tamper{TCP:options-eol:corrupt}-|","rate":99,"country":"russia","test":"tls","server_side":false,"description":"Inbound - corrupt end-of-options on the server's SACK packets"},{"strategy":"[UDP:dport:443]-tamper{IP:len:replace:1228}-| \\/","rate":99,"country":"russia","test":"quic","server_side":false,"description":"QUIC - IP length shorter than the datagram"},{"strategy":"[TCP:flags:PA]-fragment{tcp:-1:False:5}-| \\/","rate":98,"country":"russia","test":"tls","server_side":false,"description":"Segmentation - out of order with a 5-byte overlap"}]
 [exit 0]
-### library-china-http
-$ $G library --country china --test http -q
-\/
-[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:chksum:replace:25776},),)-
-[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{IP:ttl:replace:10},),)-
-[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:flags:replace:FRAPUN},),)-
-[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:ack:corrupt},),)-
-[TCP:flags:PA]-duplicate(tamper{TCP:options-wscale:corrupt}(tamper{TCP:dataofs:replace:8},),)-
-[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{TCP:chksum:corrupt},),)-
-[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{IP:ttl:replace:8}(duplicate(fragment{tcp:-1:False},),),),)-
-[TCP:flags:PA]-duplicate(tamper{TCP:load:corrupt}(tamper{TCP:ack:corrupt}(duplicate(fragment{tcp:-1:False},),),),)-
-[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},))-
-[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{TCP:chksum:corrupt},),)-
-[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:R}(tamper{IP:ttl:replace:10},))-
-[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:R}(tamper{IP:ttl:replace:9},),)-
-[TCP:flags:A]-duplicate(,tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},))-
-[TCP:flags:A]-duplicate(tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:RA},),)-
-[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{TCP:chksum:replace:27925},))-
-[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{TCP:chksum:replace:27925},),)-
-[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{IP:ttl:replace:10},))-
-[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{IP:ttl:replace:10},),)-
-[TCP:flags:A]-duplicate(,tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},))-
-[TCP:flags:A]-duplicate(tamper{TCP:options-md5header:corrupt}(tamper{TCP:flags:replace:R},),)-
-[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:RA}(tamper{TCP:ack:corrupt},),)-
-[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:RA}(tamper{TCP:ack:corrupt},))-
-[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:chksum:corrupt},))-
-[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:chksum:corrupt},),)-
-[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FREACN}(tamper{IP:ttl:replace:10},))-
-[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{IP:ttl:replace:10},),)-
-[TCP:flags:A]-duplicate(,tamper{TCP:flags:replace:FRAPUN}(tamper{TCP:options-md5header:corrupt},))-
-[TCP:flags:A]-duplicate(tamper{TCP:flags:replace:FRAPUEN}(tamper{TCP:options-md5header:corrupt},),)-
-[TCP:flags:A]-tamper{TCP:load:replace:a5z2}(tamper{TCP:flags:replace:CN},)-
-[TCP:flags:PA]-fragment{tcp:8:False}-|[TCP:flags:A]-tamper{TCP:seq:replace:2258679050}-
-[TCP:flags:PA]-fragment{tcp:8:False}-| [TCP:flags:A]-tamper{TCP:seq:replace:2258679050}(tamper{TCP:flags:replace:PA},)-
-[TCP:flags:PA]-fragment{tcp:8:True}(,fragment{tcp:4:True})-
-[TCP:flags:PA]-fragment{tcp:4:True}(,fragment{tcp:19:True})-
-[TCP:flags:PA]-duplicate(tamper{TCP:flags:replace:F}(tamper{IP:len:replace:68},),)-| \/
-[TCP:flags:SA]-duplicate(tamper{TCP:flags:replace:FREC}(duplicate,),tamper{TCP:flags:replace:FSEC})-| \/
+### library-russia-tls
+$ $G library --country russia --test tls -q
+[TCP:flags:PA]-fragment{tcp:34:True:17}-| \/
+[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \/
+[TCP:flags:PA]-fragment{tcp:-1:False}-| \/
+[TCP:options-mss:]-fragment{tcp:-1:False:21}-| \/
+\/ [TCP:urgptr:0]-tamper{TCP:dataofs:corrupt}-|
+[TCP:flags:PA]-tamper{TCP:options-uto:corrupt}-| \/
+\/ [TCP:options-sack::4]-tamper{TCP:options-eol:corrupt}-|
+[TCP:flags:PA]-fragment{tcp:-1:False:5}-| \/
 [exit 0]
 ### library-censor
 $ $G library --censor 3
