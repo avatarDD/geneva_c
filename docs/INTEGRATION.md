@@ -19,7 +19,7 @@ geneva (`geneva run`). В интерфейсе это отдельный дви�
 | проверить, заблокирован ли ресурс | `geneva eval --host H` (baseline) | нет |
 | оценить список стратегий | `geneva eval -f FILE` | root |
 | подобрать стратегию | `geneva evolve --host H --checkpoint F --db F` | root |
-| готовые стратегии Geneva | `geneva library --json` | нет |
+| готовые стратегии | `geneva library --json` (с `--ext` — и x-действия) | нет |
 | база найденных стратегий | `geneva db --db F top --json` | нет |
 | разобрать и проверить стратегию | `geneva check --json STRATEGY` | нет |
 | пробы из цензурируемой сети для server-side | `geneva agent` (`docs/SERVER_SIDE.md`) | нет |
@@ -77,7 +77,8 @@ geneva (`geneva run`). В интерфейсе это отдельный дви�
    `--checkpoint` и `--db` в `/opt`. Прогресс — события `generation`,
    найденное — `result` и `geneva db top --json`. Остановка — SIGTERM;
    продолжение — `--resume`. На слабом роутере берите `--workers 1–2` и
-   небольшую популяцию. Стратегии библиотеки (`geneva library --json`)
+   небольшую популяцию. Стратегии библиотеки (`geneva library --json`,
+   при фиче `ext` — `geneva library --ext --json`)
    можно показать как готовые варианты: `-s` для `geneva eval` или
    `--load-from` для засева.
 6. **Проба своими средствами.** Если у zapret-gui уже есть проверка
@@ -221,7 +222,7 @@ geneva.exe ctl -c tcp:47201 -t T reload_filter
 | стратегия | одна строка, `docs/STRATEGY.md`; каноническую форму даёт `geneva check` |
 | вывод `eval` | `фитнес<TAB>стратегия` построчно; код 0 — хоть одна прошла |
 | вывод `evolve` | лучшие: `фитнес<TAB>прогонов<TAB>стратегия` |
-| библиотека | `geneva library --json`: `[{strategy, rate, country, test, server_side, description, censors?}]`; `-q` — только стратегии |
+| библиотека | `geneva library --json`: `[{strategy, rate, country, test, server_side, description, censors?, ext?}]`: `country` — `russia` (стратегии geneva_c, `rate` — фитнес eval − 300) или `lab`; `ext: true` — нужен `--ext`, такие только с `geneva library --ext`; `-q` — только стратегии |
 | база | JSONL, `docs/EVOLVE.md`; `geneva db export --format txt` — список стратегий |
 | события | JSON Lines, `docs/PROTOCOL.md` |
 | коды возврата | `docs/PROTOCOL.md` |

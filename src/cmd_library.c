@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "args.h"
+#include "ext_opt.h"
 #include "geneva.h"
 #include "json.h"
 #include "library.h"
@@ -16,14 +17,15 @@
 int cmd_library(int argc, char **argv)
 {
     static const optdef defs[] = {
-        {"country", 'c', 1, "NAME", "china, india, kazakhstan, or lab"},
-        {"test", 't', 1, "TYPE", "http, dns, dns_tcp, kazakhstan_injected_https, echo"},
+        {"country", 'c', 1, "NAME", "russia, or lab"},
+        {"test", 't', 1, "TYPE", "tls, quic, udp, echo (lab)"},
         {"censor", 0, 1, "N", "lab strategies that beat censor N of \"geneva censor\""},
         {"client-side", 0, 0, NULL, "only strategies for the client"},
         {"server-side", 0, 0, NULL, "only strategies for the server"},
-        {"min-rate", 0, 1, "PCT", "only strategies with at least this success rate"},
+        {"min-rate", 0, 1, "PCT", "only strategies with at least this rate (fitness - 300)"},
         {"all", 'a', 0, NULL, "also the lab strategies"},
         {"json", 0, 0, NULL, "JSON array"},
+        {"ext", 0, 0, NULL, EXT_HELP("also the strategies with x-actions of zapret2 (they need --ext)")},
         {"strategies", 'q', 0, NULL, "strategies only, one per line (for eval -f)"},
         {"help", 'h', 0, NULL, "show help"},
         {NULL, 0, 0, NULL, NULL},
@@ -44,9 +46,10 @@ int cmd_library(int argc, char **argv)
     }
     if (arg_has(&a, "help")) {
         args_help("Usage: geneva library [options]\n"
-                  "Lists the strategies of Geneva's library: the ones found against the censors\n"
-                  "of China, India and Kazakhstan (with Geneva's success rates), and with --all\n"
-                  "or --country lab the ones against the lab censors (docs/CENSOR.md).\n"
+                  "Lists the built-in strategies: the ones geneva_c found against the censor of\n"
+                  "Russia (rate: the eval fitness - 300, so 400 is 100), and with --all or\n"
+                  "--country lab the ones of Geneva's library against the lab censors\n"
+                  "(docs/CENSOR.md).\n"
                   "Output: rate, country, test, side, strategy and description, tab-separated.",
                   defs);
         args_free(&a);
@@ -73,6 +76,12 @@ int cmd_library(int argc, char **argv)
     f.side = arg_has(&a, "client-side") ? 1 : arg_has(&a, "server-side") ? 2 : 0;
     f.min_rate = (int)rate;
     f.with_lab = arg_has(&a, "all");
+    f.ext = arg_has(&a, "ext");
+    if (f.ext && !GENEVA_EXT) {
+        fprintf(stderr, "geneva library: this build has no --ext (built with EXT=0)\n");
+        args_free(&a);
+        return EXIT_USAGE;
+    }
     json = arg_has(&a, "json");
     quiet = arg_has(&a, "strategies");
 
@@ -92,6 +101,8 @@ int cmd_library(int argc, char **argv)
             jw_kstr(&w, "country", e->country);
             jw_kstr(&w, "test", e->test_type);
             jw_kbool(&w, "server_side", e->server_side);
+            if (e->ext)
+                jw_kbool(&w, "ext", 1);
             jw_kstr(&w, "description", e->description);
             if (e->censors) {
                 jw_key(&w, "censors");
@@ -110,7 +121,8 @@ int cmd_library(int argc, char **argv)
             printf("%s\n", e->strategy);
         } else {
             printf("%d%%\t%s\t%s\t%s\t%s\t%s\n", e->rate, e->country, e->test_type,
-                   e->server_side ? "server" : "client", e->strategy, e->description);
+                   e->server_side ? "server" : e->ext ? "client, ext" : "client", e->strategy,
+                   e->description);
         }
     }
     if (json) {

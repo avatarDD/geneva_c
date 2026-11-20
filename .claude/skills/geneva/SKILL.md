@@ -24,7 +24,7 @@ English twin.
 | `src/evaluator.c`, `probe.c` | fitness, probes (http, tls, dns, tcp, exec, external), engine slots per worker |
 | `src/agent.c`, `cmd_agent.c` | server-side evaluation: remote probes over the control protocol |
 | `src/censor.c`, `cmd_censor.c` | Geneva's lab censors 1–11 + DNS censor on a router namespace |
-| `src/library.c`, `library_data.h` | Geneva's `library.py` strategies; regenerate with `tools/gen_library.py` |
+| `src/library.c`, `library_data.h` | built-in library: geneva_c's own strategies against Russia's censor (`tools/library.json`: strategy, rate = eval fitness − 300, test tls/quic/udp, `ext` for x-actions, listed only by `library --ext`) and Geneva's `LAB_STRATEGIES`; Geneva's `WORKING_STRATEGIES` (China, India, Kazakhstan) are left out on purpose; regenerate with `tools/gen_library.py GENEVA_DIR` |
 | `src/sdb.c` | strategy database (JSONL) |
 | `src/ctl.c`, `json.c`, `log.c` | line-JSON control socket, JSON reader/writer, logging and events |
 | `src/cmd_*.c`, `main.c` | commands |
@@ -101,7 +101,7 @@ action   := name["{" params "}"]["(" left "," right ")"]
 | `eval [-s S]... [-f FILE\|-]` | fitness per strategy; without strategies the baseline | for strategies |
 | `evolve --host H ...` | genetic search; `--checkpoint`/`--resume`, `--db` | yes |
 | `agent --listen ADDR \| --connect ADDR --token T` | probes for server-side evaluation | no |
-| `library [--country C] [--test T] [--censor N] [-q] [--json]` | Geneva's strategies | no |
+| `library [--country C] [--test T] [--censor N] [-q] [--json] [--ext]` | built-in strategies (russia, lab) | no |
 | `db --db F list\|top\|show\|export\|import\|prune\|compact` | strategy database | no |
 | `censor -c N` | lab censor on a Linux router; SIGHUP resets | yes |
 | `check`, `apply` | validate, apply to a pcap | no |

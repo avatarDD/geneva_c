@@ -46,8 +46,12 @@ Windows через WinDivert).
   считается полный ответ, а не рукопожатие.
 - **Server-side** (`geneva agent`): стратегии на своём сервере, пробы из
   цензурируемой сети.
-- **Библиотека** (`geneva library`): стратегии из `library.py` Geneva с
-  долями успеха против цензоров Китая, Индии и Казахстана.
+- **Библиотека** (`geneva library`): лучшие стратегии, которые geneva_c
+  нашла против блокировок в России (TCP, QUIC, UDP; с `--ext` — и
+  x-действия zapret2), и лабораторные стратегии Geneva против цензоров
+  `geneva censor`. Стратегии Китая, Индии и Казахстана из `library.py`
+  Geneva в библиотеку не входят: это отличие от Geneva, они 2019–2020
+  годов и в России не работают.
 - **Лабораторные цензоры** (`geneva censor`): цензоры Geneva 1–11 и
   DNS-цензор для проверки стратегий на стенде.
 - **Расширения `--ext`** (с 2.0): паритет с zapret2 (nfqws2, winws2,
@@ -95,12 +99,11 @@ $ geneva eval --host blocked.example --probe tls
 `reset` — сброс, `injected` — подмена ответа, `timeout` — тишина.
 Подробности пишутся в лог.
 
-**2. Попробовать готовые стратегии Geneva:**
+**2. Попробовать готовые стратегии из библиотеки:**
 
 ```
-$ geneva library -q --test http | sudo geneva eval --host blocked.example --probe tls -f -
--360	\/
-398	[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:chksum:corrupt},),)-
+$ geneva library -q --test tls | sudo geneva eval --host blocked.example --probe tls -f -
+398	[TCP:flags:PA]-fragment{tcp:34:True:17}-| \/
 ...
 ```
 
@@ -143,10 +146,10 @@ DPI вашей сети.
 ```
 make && make test
 build/geneva check '[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamper{TCP:chksum:corrupt},),)-| \/'
-build/geneva library --country china --test http
+build/geneva library --country russia --test tls
 build/geneva eval --host blocked.example                  # заблокирован ли ресурс (без прав)
 sudo build/geneva eval --host blocked.example -s '[TCP:flags:PA]-fragment{tcp:-1:True}-| \/'
-build/geneva library -q --country china | sudo build/geneva eval --host blocked.example -f -
+build/geneva library -q --country russia | sudo build/geneva eval --host blocked.example -f -
 sudo build/geneva evolve --host blocked.example --workers 8 --checkpoint search.ckpt --db db.jsonl
 build/geneva version --json                               # версия и features сборки
 build/geneva db --db db.jsonl top -n 5
@@ -245,4 +248,5 @@ sudo tests/e2e/initscripts.sh build/geneva # скрипты служб
 
 BSD 3-Clause, как у Geneva. Geneva: Copyright (c) 2020, University of
 Maryland College Park. Библиотека стратегий (`src/library_data.h`)
-сгенерирована из `library.py` Geneva скриптом `tools/gen_library.py`.
+сгенерирована скриптом `tools/gen_library.py` из `tools/library.json`
+(стратегии geneva_c) и лабораторных стратегий `library.py` Geneva.

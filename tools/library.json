@@ -1,0 +1,139 @@
+{
+ "_comment": "geneva_c library: strategies found by geneva_c (zapret-gui, geneva evolve/eval) in Russia, 2026-11. rate is the geneva eval fitness minus 300 (400 = 100). No addresses, hosts or devices.",
+ "country": "russia",
+ "strategies": [
+  {
+   "strategy": "[TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/",
+   "rate": 100,
+   "test": "tls",
+   "description": "Segmentation - first segment of 34 bytes, the next one overlaps it by 17, worked for 30 services",
+   "ext": false
+  },
+  {
+   "strategy": "[TCP:dataofs:5]-fragment{tcp:56:True:24}-| \\/",
+   "rate": 100,
+   "test": "tls",
+   "description": "Segmentation - first segment of 56 bytes, overlap 24, packets without TCP options, worked for 6 services",
+   "ext": false
+  },
+  {
+   "strategy": "[TCP:flags:PA]-fragment{tcp:-1:False}-| \\/",
+   "rate": 100,
+   "test": "tls",
+   "description": "Segmentation - two segments split in the middle, sent out of order",
+   "ext": false
+  },
+  {
+   "strategy": "[TCP:options-mss:]-fragment{tcp:-1:False:21}-| \\/",
+   "rate": 100,
+   "test": "tls",
+   "description": "Segmentation - out of order with a 21-byte overlap, packets with MSS",
+   "ext": false
+  },
+  {
+   "strategy": "\\/ [TCP:urgptr:0]-tamper{TCP:dataofs:corrupt}-|",
+   "rate": 100,
+   "test": "tls",
+   "description": "Inbound - corrupt dataofs of the server's packets",
+   "ext": false
+  },
+  {
+   "strategy": "[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt},)-| \\/",
+   "rate": 100,
+   "test": "udp",
+   "description": "UDP desync - a copy with a corrupt payload before each datagram, worked for 4 services",
+   "ext": false
+  },
+  {
+   "strategy": "[UDP:sport:*]-duplicate(tamper{UDP:load:corrupt}(duplicate,),)-| \\/",
+   "rate": 100,
+   "test": "udp",
+   "description": "UDP desync - two copies with a corrupt payload before each datagram, worked for 2 services",
+   "ext": false
+  },
+  {
+   "strategy": "[TCP:flags:PA]-tamper{TCP:options-uto:corrupt}-| \\/",
+   "rate": 99,
+   "test": "tls",
+   "description": "Invalid options - corrupt user timeout option on data packets",
+   "ext": false
+  },
+  {
+   "strategy": "\\/ [TCP:options-sack::4]-tamper{TCP:options-eol:corrupt}-|",
+   "rate": 99,
+   "test": "tls",
+   "description": "Inbound - corrupt end-of-options on the server's SACK packets",
+   "ext": false
+  },
+  {
+   "strategy": "[UDP:dport:443]-tamper{IP:len:replace:1228}-| \\/",
+   "rate": 99,
+   "test": "quic",
+   "description": "QUIC - IP length shorter than the datagram",
+   "ext": false
+  },
+  {
+   "strategy": "[TCP:flags:PA]-xfake{blob=fake_default_tls;md5;ip6_routing}-| \\/",
+   "rate": 100,
+   "test": "tls",
+   "description": "zapret2 fake - fake ClientHello with an MD5 option, worked for 2 services",
+   "ext": true
+  },
+  {
+   "strategy": "[UDP:dport:443]-xfake{blob=fake_quic_initial;repeats=6;ttl=4}-| \\/",
+   "rate": 100,
+   "test": "quic",
+   "description": "zapret2 fake - six fake QUIC Initials with TTL 4",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:flags:PA]-xfake{blob=fake_default_tls;md5;ipid_conn;ip6_ah;nopdel}-| \\/",
+   "rate": 99,
+   "test": "tls",
+   "description": "zapret2 fake - fake ClientHello with an MD5 option, NOP options removed",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:flags:PA]-xfake{blob=fake_default_tls;md5;ipid_conn;ip6_ah;ipfrag_disorder}-| \\/",
+   "rate": 99,
+   "test": "tls",
+   "description": "zapret2 fake - fake ClientHello with an MD5 option, IP fragments out of order",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:flags:PA]-xfake{blob=fake_default_tls;md5;ipid_conn;ip6_ah;ip_ttl=8}-| \\/",
+   "rate": 99,
+   "test": "tls",
+   "description": "zapret2 fake - fake ClientHello with an MD5 option and TTL 8",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:flags:PA]-xfake{blob=fake_default_tls;md5;ipid_conn;ip6_ah;tlsmod=rnd,padencap}-| \\/",
+   "rate": 99,
+   "test": "tls",
+   "description": "zapret2 fake - randomized fake ClientHello with an MD5 option",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:options-altchksumopt:]-xfake{blob=fake_default_tls;md5;ipid_conn}-| \\/",
+   "rate": 99,
+   "test": "tls",
+   "description": "zapret2 fake - fake ClientHello with an MD5 option, packets with altchksum",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:flags:PA]-xsplit{pos=383}-| \\/",
+   "rate": 99,
+   "test": "tls",
+   "description": "zapret2 split - ClientHello split at byte 383",
+   "ext": true
+  },
+  {
+   "strategy": "[TCP:options-eol:]-xsplit{pos=host;seqovl=652;optional}-| \\/",
+   "rate": 99,
+   "test": "tls",
+   "description": "zapret2 split - split at the host name with a 652-byte sequence overlap",
+   "ext": true
+  }
+ ]
+}

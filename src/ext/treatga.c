@@ -91,8 +91,8 @@ static void reader(void *arg)
     atomic_store_int(&g.done, 1);
 }
 
-/* the seed: Geneva's client-side TCP strategies of the library (the lab's
- * too), one per line */
+/* the seed: the client-side TCP strategies of the library (the lab's too)
+ * that need no --ext (the child runs without it), one per line */
 static int write_seed(sbuf *err)
 {
     size_t n;
