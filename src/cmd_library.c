@@ -1,8 +1,10 @@
 /*
- * "geneva library": the built-in strategies of Geneva's library.py.
+ * "geneva library": the built-in strategies (geneva_c's own against the
+ * censor of Russia, Geneva's lab ones against "geneva censor").
  *
- *   geneva library --country china --test http
+ *   geneva library --country russia --test tls
  *   geneva library -q --censor 8b | geneva eval -f - ...
+ *   geneva library -q --ext --test tls | geneva eval --ext -f - ...
  */
 #include <stdio.h>
 #include <string.h>
@@ -49,7 +51,7 @@ int cmd_library(int argc, char **argv)
                   "Lists the built-in strategies: the ones geneva_c found against the censor of\n"
                   "Russia (rate: the eval fitness - 300, so 400 is 100), and with --all or\n"
                   "--country lab the ones of Geneva's library against the lab censors\n"
-                  "(docs/CENSOR.md).\n"
+                  "(docs/CENSOR.md). The --ext ones need --ext in eval and evolve too.\n"
                   "Output: rate, country, test, side, strategy and description, tab-separated.",
                   defs);
         args_free(&a);
@@ -120,9 +122,9 @@ int cmd_library(int argc, char **argv)
         } else if (quiet) {
             printf("%s\n", e->strategy);
         } else {
-            printf("%d%%\t%s\t%s\t%s\t%s\t%s\n", e->rate, e->country, e->test_type,
-                   e->server_side ? "server" : e->ext ? "client, ext" : "client", e->strategy,
-                   e->description);
+            printf("%d%%\t%s\t%s\t%s\t%s\t%s%s\n", e->rate, e->country, e->test_type,
+                   e->server_side ? "server" : "client", e->strategy,
+                   e->ext ? "(needs --ext) " : "", e->description);
         }
     }
     if (json) {

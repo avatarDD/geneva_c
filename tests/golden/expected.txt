@@ -370,7 +370,7 @@ Usage: geneva library [options]
 Lists the built-in strategies: the ones geneva_c found against the censor of
 Russia (rate: the eval fitness - 300, so 400 is 100), and with --all or
 --country lab the ones of Geneva's library against the lab censors
-(docs/CENSOR.md).
+(docs/CENSOR.md). The --ext ones need --ext in eval and evolve too.
 Output: rate, country, test, side, strategy and description, tab-separated.
 
 Options:

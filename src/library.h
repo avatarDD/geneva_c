@@ -3,7 +3,8 @@
  * censor of Russia (tools/library.json) and LAB_STRATEGIES of Geneva's
  * library.py (against the lab censors of "geneva censor"), generated into
  * library_data.h by tools/gen_library.py. Geneva's WORKING_STRATEGIES
- * (China, India, Kazakhstan) are not taken (README, "Отличия от Geneva").
+ * (China, India, Kazakhstan) are not taken: a deviation from Geneva,
+ * explained in README, "Библиотека".
  */
 #ifndef GENEVA_LIBRARY_H
 #define GENEVA_LIBRARY_H

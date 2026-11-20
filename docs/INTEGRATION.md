@@ -80,7 +80,8 @@ geneva (`geneva run`). В интерфейсе это отдельный дви�
    небольшую популяцию. Стратегии библиотеки (`geneva library --json`,
    при фиче `ext` — `geneva library --ext --json`)
    можно показать как готовые варианты: `-s` для `geneva eval` или
-   `--load-from` для засева.
+   `--load-from` для засева. Стратегиям с `"ext": true` нужен `--ext` и
+   в `eval`/`evolve`.
 6. **Проба своими средствами.** Если у zapret-gui уже есть проверка
    ресурса (testers/), её можно подключить через `--probe external`:
    geneva пишет `eval_request` с `lports`, менеджер делает соединение с

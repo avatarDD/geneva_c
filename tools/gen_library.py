@@ -8,9 +8,9 @@ censors, see docs/CENSOR.md).
     python3 tools/gen_library.py /path/to/geneva > src/library_data.h
 
 Geneva's WORKING_STRATEGIES (China, India, Kazakhstan, 2019-2020) are not
-taken: they no longer work there and never worked in Russia (README,
-"Отличия от Geneva"). library.py is parsed with ast.literal_eval, never
-imported or executed.
+taken: they no longer work there and never worked in Russia (a deviation
+from Geneva, explained in README, "Библиотека"). library.py is parsed with
+ast.literal_eval, never imported or executed.
 """
 import ast
 import json

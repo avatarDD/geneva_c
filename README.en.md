@@ -137,7 +137,7 @@ build/geneva check '[TCP:flags:PA]-duplicate(tamper{TCP:dataofs:replace:10}(tamp
 build/geneva library --country russia --test tls
 build/geneva eval --host blocked.example                  # is it blocked (no privileges)
 sudo build/geneva eval --host blocked.example -s '[TCP:flags:PA]-fragment{tcp:-1:True}-| \/'
-build/geneva library -q --country russia | sudo build/geneva eval --host blocked.example -f -
+build/geneva library -q --country russia --test tls | sudo build/geneva eval --host blocked.example --probe tls -f -
 sudo build/geneva evolve --host blocked.example --workers 8 --checkpoint search.ckpt --db db.jsonl
 build/geneva version --json                               # version and build features
 build/geneva db --db db.jsonl top -n 5
