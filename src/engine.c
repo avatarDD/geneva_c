@@ -965,6 +965,12 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
         const char *text = json_get_str(req, "strategy", NULL);
         strategy *s;
         sbuf out;
+        if (e->o->ext && e->o->ext->control && json_get(req, "profile")) {
+            /* "profile": the strategy of that profile (extensions) */
+            int r = e->o->ext->control(e, cmd, req, w, err);
+            if (r)
+                return r < 0 ? -1 : 0;
+        }
         if (!text) {
             sb_puts(err, "set_strategy needs \"strategy\"");
             return -1;
@@ -1013,6 +1019,12 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
         return rc;
     }
     if (!strcmp(cmd, "reload")) {
+        if (e->o->ext && e->o->ext->control) {
+            /* --ext-profile: the profile files read again (extensions) */
+            int r = e->o->ext->control(e, cmd, req, w, err);
+            if (r)
+                return r < 0 ? -1 : 0;
+        }
         if (reload(e, err) < 0)
             return -1;
         return 0;

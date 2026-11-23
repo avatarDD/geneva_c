@@ -149,7 +149,9 @@ Options:
 $ $G ctl --help
 Usage: geneva ctl [options] COMMAND [key=value...]
 Talks to "geneva run --control ADDR". Commands: status, stats, reset_stats,
-set_strategy strategy=..., reload, pause, resume, log_level level=...,
+set_strategy strategy=... (with profile=NAME: that profile's; run --ext),
+reload (run --ext with --ext-profile: the profile files read again),
+pause, resume, log_level level=...,
 subscribe, stop, ping, version, reload_lists (run --ext: re-read the
 --hostlist/--ipset files), ext_flows [limit=N] (run --ext: the
 conntrack's flows), ext_keys (run --ext: the autolist's failure

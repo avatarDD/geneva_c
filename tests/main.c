@@ -37,6 +37,7 @@ void suite_xact(void);
 void suite_xact5b(void);
 void suite_xcomb(void);
 void suite_profile(void);
+void suite_profile_runtime(void);
 void suite_lists(void);
 void suite_autolist(void);
 void suite_svc(void);
@@ -76,6 +77,7 @@ int main(void)
     suite_xact5b();
     suite_xcomb();
     suite_profile();
+    suite_profile_runtime();
     suite_lists();
     suite_autolist();
     suite_svc();

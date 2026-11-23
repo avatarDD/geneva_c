@@ -1070,6 +1070,114 @@ void xprof_label(const xprofile *p, sbuf *out)
         sb_printf(out, " (%s)", p->name);
 }
 
+const xprofile *xprof_name(const xprofiles *ps, const char *name)
+{
+    return name ? find_name(ps, name) : NULL;
+}
+
+int xprof_same_names(const xprofiles *a, const xprofiles *b)
+{
+    if (!a || !b || a->n != b->n)
+        return 0;
+    for (size_t i = 0; i < a->n; i++) {
+        const char *na = a->v[i]->name, *nb = b->v[i]->name;
+        if (!na || !nb) {
+            if (na != nb)
+                return 0;
+        } else if (strcmp(na, nb)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* The same ranges in the same order (a profile's filter) */
+static int same_ports(const xpf *a, size_t na, const xpf *b, size_t nb)
+{
+    if (na != nb)
+        return 0;
+    for (size_t i = 0; i < na; i++)
+        if (a[i].from != b[i].from || a[i].to != b[i].to || a[i].neg != b[i].neg)
+            return 0;
+    return 1;
+}
+
+int xprof_same_filters(const xprofile *a, const xprofile *b)
+{
+    if (a->b_l3 != b->b_l3 || a->ipv4 != b->ipv4 || a->ipv6 != b->ipv6)
+        return 0;
+    if (!same_ports(a->tcp, a->ntcp, b->tcp, b->ntcp) || !same_ports(a->udp, a->nudp, b->udp, b->nudp))
+        return 0;
+    if (a->nicf != b->nicf || (a->nicf && memcmp(a->icf, b->icf, sizeof(*a->icf) * a->nicf)))
+        return 0;
+    if (a->nipp != b->nipp || (a->nipp && memcmp(a->ipp, b->ipp, sizeof(*a->ipp) * a->nipp)))
+        return 0;
+    if (a->b_l7 != b->b_l7 || a->l7 != b->l7)
+        return 0;
+    if (a->mark != b->mark || a->mark_mask != b->mark_mask)
+        return 0;
+    if (a->nssid != b->nssid || a->ssid_neg != b->ssid_neg)
+        return 0;
+    for (size_t i = 0; i < a->nssid; i++)
+        if (strcmp(a->ssid[i], b->ssid[i]) != 0)
+            return 0;
+    /* the autolist is not re-read: it keeps the fail counters of the flows
+     * the profile watched, so its presence must not change */
+    if ((a->ahl != NULL) != (b->ahl != NULL))
+        return 0;
+    return 1;
+}
+
+int xprof_set_strategy(xprofile *p, int file, const char *value, sbuf *err)
+{
+    char *text;
+    strategy *st;
+    sbuf e;
+    if (!p || !value || !*value) {
+        sb_puts(err, "an empty strategy");
+        return -1;
+    }
+    if (p->cmd) {
+        sb_puts(err, "profile 1 runs the command's strategy: set it without \"profile\"");
+        return -1;
+    }
+    if (p->tune) {
+        sb_puts(err, "the profile has --ext-arm: its strategies are its arms");
+        return -1;
+    }
+    if (file) {
+        size_t len;
+        text = read_file(value, &len);
+        if (!text) {
+            sb_printf(err, "cannot read %s", value);
+            return -1;
+        }
+    } else {
+        text = xstrdup(value);
+    }
+    sb_init(&e);
+    st = strategy_parse(text, &e);
+    if (!st) {
+        sbuf l;
+        sb_init(&l);
+        xprof_label(p, &l);
+        sb_printf(err, "profile %s: %s", l.data, e.data);
+        sb_free(&l);
+        sb_free(&e);
+        free(text);
+        return -1;
+    }
+    sb_free(&e);
+    free(p->text);
+    free(p->src);
+    strategy_free(p->st);
+    p->text = text;
+    p->src = xstrdup(file ? value : "-s");
+    p->tpl_text = 0;
+    p->st = st;
+    return 0;
+}
+
 /* ---- the capture ------------------------------------------------------------- */
 
 static int add_range(portset *ps, uint16_t lo, uint16_t hi, sbuf *err)
