@@ -5,7 +5,7 @@
 #include "args.h"
 
 #ifndef GENEVA_VERSION
-#  define GENEVA_VERSION "2.0.1"
+#  define GENEVA_VERSION "2.0.2"
 #endif
 
 /* Exit codes are part of the integration contract (docs/PROTOCOL.md). */
