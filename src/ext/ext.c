@@ -1317,12 +1317,20 @@ static int set_profile_strategy(engine *e, const json_val *req, jw *w, sbuf *err
             plat_rwlock_wrunlock(&g_xlock);
         return -1;
     }
-    if (workers_profile(e, i) < 0)
+    if (workers_profile(e, i) < 0) {
+        /* the profile got it, the workers may not: say so, the call fails */
         LOGE("engine", "cannot copy the strategy of profile %zu for the workers", i + 1);
+        if (g_threaded)
+            plat_rwlock_wrunlock(&g_xlock);
+        sb_printf(err, "profile %s: cannot copy its strategy for the workers", name);
+        return -1;
+    }
     if (g_threaded)
         plat_rwlock_wrunlock(&g_xlock);
     emit_profile_strategy(g_prof.v[i]);
     LOGI("profile", "%s: strategy: %s", name, g_prof.v[i]->text);
+    if (!w) /* no answer expected (a test, a signal) */
+        return 1;
     sb_init(&out);
     strategy_print(g_prof.v[i]->st, &out);
     jw_kstr(w, "profile", name);
@@ -1379,7 +1387,6 @@ static int reload_profiles(engine *e, jw *w, sbuf *err)
         strategy *st = dst->st;
         xlistref hl = dst->hl, hl_ex = dst->hl_ex, ips = dst->ips, ips_ex = dst->ips_ex;
         xlist *fixed[4];
-        xlist *ahl = dst->ahl;
         memcpy(fixed, dst->fixed, sizeof(fixed));
         /* The strategy and the lists change in place; the ports do not:
          * the firewall rules follow them and are not re-made here. The
@@ -1393,7 +1400,9 @@ static int reload_profiles(engine *e, jw *w, sbuf *err)
         dst->ips = src->ips;
         dst->ips_ex = src->ips_ex;
         memcpy(dst->fixed, src->fixed, sizeof(dst->fixed));
-        dst->ahl = src->ahl;
+        /* the autolist is the profile's own: it holds the fail counters of
+         * the flows it watched (xprof_same_filters made sure its presence
+         * did not change) */
         src->text = text;
         src->src = src_s;
         src->st = st;
@@ -1402,9 +1411,10 @@ static int reload_profiles(engine *e, jw *w, sbuf *err)
         src->ips = ips;
         src->ips_ex = ips_ex;
         memcpy(src->fixed, fixed, sizeof(fixed));
-        src->ahl = ahl;
         if (workers_profile(e, i) < 0) {
             LOGE("engine", "cannot copy the strategy of profile %zu for the workers", i + 1);
+            if (!rc)
+                sb_printf(err, "profile %zu: cannot copy its strategy for the workers", i + 1);
             rc = -1;
         }
     }

@@ -1122,8 +1122,19 @@ int xprof_same_filters(const xprofile *a, const xprofile *b)
         if (strcmp(a->ssid[i], b->ssid[i]) != 0)
             return 0;
     /* the autolist is not re-read: it keeps the fail counters of the flows
-     * the profile watched, so its presence must not change */
+     * the profile watched, so neither its presence nor its parameters may
+     * change */
     if ((a->ahl != NULL) != (b->ahl != NULL))
+        return 0;
+    /* the same file: the lists are shared by path, so the object stays the
+     * one whose counters the profile keeps */
+    if (a->ahl && (!a->ahl->path || !b->ahl->path || strcmp(a->ahl->path, b->ahl->path)))
+        return 0;
+    if (a->ahl && (a->ah_fail_threshold != b->ah_fail_threshold || a->ah_fail_time != b->ah_fail_time ||
+                   a->ah_retrans_threshold != b->ah_retrans_threshold ||
+                   a->ah_retrans_reset != b->ah_retrans_reset || a->ah_udp_out != b->ah_udp_out ||
+                   a->ah_udp_in != b->ah_udp_in || a->ah_retrans_maxseq != b->ah_retrans_maxseq ||
+                   a->ah_incoming_maxseq != b->ah_incoming_maxseq))
         return 0;
     return 1;
 }

@@ -1382,8 +1382,17 @@ int engine_run(engine_opts *o)
             if (reload(&e, &herr) < 0 && !e.o->strategy_file)
                 LOGI("engine", "SIGHUP: %s", herr.data);
             sb_reset(&herr);
-            if (e.o->ext && e.o->ext->control)
-                e.o->ext->control(&e, "reload_lists", NULL, NULL, &herr);
+            /* --ext-profile: the profile files are read again, as ctl
+             * reload does (a changed set or the filters are refused there) */
+            if (e.o->ext && e.o->ext->control) {
+                int rr = e.o->ext->control(&e, "reload", NULL, NULL, &herr);
+                if (rr < 0 && herr.data && *herr.data)
+                    LOGI("engine", "SIGHUP: profiles: %s", herr.data);
+                sb_reset(&herr);
+                /* reload_profiles re-reads the lists itself */
+                if (rr <= 0)
+                    e.o->ext->control(&e, "reload_lists", NULL, NULL, &herr);
+            }
             engine_unlock_workers(&e);
             sb_free(&herr);
         }

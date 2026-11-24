@@ -116,6 +116,13 @@ static int rctl(engine *e, const char *cmd, const char *req_json, sbuf *out, sbu
     return r;
 }
 
+/* The same without an answer buffer: SIGHUP calls the hook this way */
+static int rctl_quiet(engine *e, const char *cmd, sbuf *err)
+{
+    sb_init(err);
+    return e->o->ext->control(e, cmd, NULL, NULL, err);
+}
+
 static const char *PROFILES = "[profile one]\n"
                               "filter-tcp = 443\n"
                               "strategy = [TCP:flags:PA]-drop-| \\/\n"
@@ -323,6 +330,47 @@ TEST(rt_reload_refuses_changed_filters)
     remove_file(f);
 }
 
+TEST(rt_reload_without_an_answer)
+{
+    engine e;
+    engine_opts o;
+    sbuf out, err;
+    const char *f = rt_file("profiles-quiet.ini", PROFILES);
+    t_current = "profiles: reload without an answer buffer (SIGHUP)";
+    if (!f || setup(f, &e, &o, &err) < 0) {
+        remove_file(f);
+        return;
+    }
+    f = rt_file("profiles-quiet.ini", "[profile one]\n"
+                                       "filter-tcp = 443\n"
+                                       "strategy = [TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/\n"
+                                       "\n"
+                                       "[profile two]\n"
+                                       "filter-tcp = 80\n"
+                                       "strategy = [TCP:flags:PA]-drop-| \\/\n");
+    CHECK_INT(rctl_quiet(&e, "reload", &err), 1);
+    CHECK(!err.data || !*err.data);
+    sb_free(&err);
+    /* the new strategy of profile one is live */
+    rctl(&e, "ext_status", NULL, &out, &err);
+    CHECK(strstr(out.data, "fragment{tcp:34:True:17}") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    /* and the refusal needs no answer buffer either */
+    f = rt_file("profiles-quiet.ini", "[profile one]\n"
+                                       "filter-tcp = 444\n"
+                                       "strategy = [TCP:flags:PA]-drop-| \\/\n"
+                                       "\n"
+                                       "[profile two]\n"
+                                       "filter-tcp = 80\n"
+                                       "strategy = [TCP:flags:PA]-drop-| \\/\n");
+    CHECK_INT(rctl_quiet(&e, "reload", &err), -1);
+    CHECK(strstr(err.data, "its filters changed") != NULL);
+    sb_free(&err);
+    teardown(&e);
+    remove_file(f);
+}
+
 TEST(rt_reload_without_profiles)
 {
     engine e;
@@ -346,6 +394,7 @@ void suite_profile_runtime(void)
     RUN(rt_reload_in_place);
     RUN(rt_reload_refuses_a_new_set);
     RUN(rt_reload_refuses_changed_filters);
+    RUN(rt_reload_without_an_answer);
     RUN(rt_reload_without_profiles);
 }
 
