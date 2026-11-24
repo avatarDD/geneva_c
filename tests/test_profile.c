@@ -584,6 +584,98 @@ out:
     ext_reset();
 }
 
+/* ctl set_strategy profile=NAME and ctl reload (stage X6c): the strategy of
+ * one profile at run time, and the profile files read again in place. */
+TEST(pr_runtime)
+{
+    xprofiles ps;
+    xprofile *p;
+    sbuf err;
+    strategy *old;
+
+    strategy_set_xact(&xact_ops);
+    strategy_set_xtrig(&xtrig_ops);
+    {
+        /* two profiles: the command's strategy and one of its own */
+        const char *v[] = {"-s", "\\/", "--new", "-s", "[TCP:flags:PA]-drop-| \\/",
+                           "--new=second", "-s", "[TCP:flags:PA]-drop-| \\/", NULL};
+        CHECK_STR(build(v, &ps), "OK");
+        /* the command's strategy is profile 1: three in all */
+        CHECK_INT((int)ps.n, 3);
+        /* by name */
+        CHECK(xprof_name(&ps, "second") == ps.v[2]);
+        CHECK(xprof_name(&ps, "second") != ps.v[0]);
+        CHECK(xprof_name(&ps, "nope") == NULL);
+        CHECK(xprof_name(&ps, NULL) == NULL);
+
+        /* a new strategy of a profile: parsed, kept as text, its own */
+        p = ps.v[2];
+        old = p->st;
+        sb_init(&err);
+        CHECK_INT(xprof_set_strategy(p, 0, "[TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/", &err), 0);
+        CHECK(!err.data || !*err.data);
+        CHECK(p->st != old);
+        CHECK(p->st && p->st->nout == 1);
+        CHECK_STR(p->text, "[TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/");
+        CHECK_STR(p->src, "-s");
+        /* and the next time itself */
+        CHECK_INT(xprof_set_strategy(p, 0, "\\/", &err), 0);
+        CHECK(p->st && p->st->nout == 0);
+        sb_free(&err);
+
+        /* a broken one: refused, the current stays */
+        sb_init(&err);
+        CHECK_INT(xprof_set_strategy(p, 0, "[TCP:flags:S]-nope-| \\/", &err), -1);
+        CHECK(!strncmp(err.data, "profile 3 (second): ", 20));
+        CHECK(p->st && p->st->nout == 0);
+        sb_reset(&err);
+        /* the command's profile: the engine's strategy, not ours */
+        CHECK_INT(xprof_set_strategy(ps.v[0], 0, "\\/", &err), -1);
+        CHECK_STR(err.data, "profile 1 runs the command's strategy: set it without \"profile\"");
+        sb_reset(&err);
+        /* nothing */
+        CHECK_INT(xprof_set_strategy(p, 0, "", &err), -1);
+        CHECK_INT(xprof_set_strategy(p, 0, NULL, &err), -1);
+        sb_free(&err);
+
+        /* the same set by name and order */
+        CHECK_INT(xprof_same_names(&ps, &ps), 1);
+        xprof_free(&ps);
+    }
+    {
+        /* the same names, a different strategy: the same set */
+        xprofiles a, b;
+        const char *va[] = {"--new=one", "-s", "\\/", "--new=two", "-s", "\\/", NULL};
+        const char *vb[] = {"--new=one", "-s", "[TCP:flags:PA]-drop-| \\/", "--new=two", "-s", "\\/", NULL};
+        CHECK_STR(build(va, &a), "OK");
+        CHECK_STR(build(vb, &b), "OK");
+        CHECK_INT(xprof_same_names(&a, &b), 1);
+        xprof_free(&a);
+        xprof_free(&b);
+    }
+    {
+        /* another name, another order, another count: not the same set */
+        xprofiles a, b, c;
+        const char *va[] = {"--new=one", "-s", "\\/", "--new=two", "-s", "\\/", NULL};
+        const char *vb[] = {"--new=one", "-s", "\\/", "--new=three", "-s", "\\/", NULL};
+        const char *vc[] = {"--new=two", "-s", "\\/", "--new=one", "-s", "\\/", NULL};
+        const char *vd[] = {"--new=one", "-s", "\\/", NULL};
+        CHECK_STR(build(va, &a), "OK");
+        CHECK_STR(build(vb, &b), "OK");
+        CHECK_STR(build(vc, &c), "OK");
+        CHECK_INT(xprof_same_names(&a, &b), 0);
+        CHECK_INT(xprof_same_names(&a, &c), 0);
+        xprof_free(&b);
+        xprof_free(&c);
+        CHECK_STR(build(vd, &b), "OK");
+        CHECK_INT(xprof_same_names(&a, &b), 0);
+        xprof_free(&b);
+        xprof_free(&a);
+    }
+    strategy_set_xtrig(NULL);
+    strategy_set_xact(NULL);
+}
+
 void suite_profile(void)
 {
     strategy_set_xact(&xact_ops);
@@ -596,6 +688,7 @@ void suite_profile(void)
     strategy_set_xtrig(NULL);
     strategy_set_xact(NULL);
     RUN(pr_pick);
+    RUN(pr_runtime);
 }
 
 #else

@@ -179,6 +179,28 @@ int xprof_capture(const xprofiles *ps, int ports, xcapture *c, sbuf *err);
 /* "1 (tls)" or "2": for the log */
 void xprof_label(const xprofile *p, sbuf *out);
 
+/* The profile called NAME (NULL: no such profile). */
+const xprofile *xprof_name(const xprofiles *ps, const char *name);
+
+/* Do the two sets name the same profiles in the same order? (ctl reload: a
+ * set that changed needs a restart — the firewall rules follow the ports
+ * the profiles take) */
+int xprof_same_names(const xprofiles *a, const xprofiles *b);
+
+/* Can B replace A at run time (ctl reload)? The strategies and the lists
+ * can; the filters (ports, L3, L7, marks, SSIDs, IP protocols) cannot: the
+ * firewall rules follow them. The autolist cannot either: it keeps the
+ * counters of the flows the old profile watched. */
+int xprof_same_filters(const xprofile *a, const xprofile *b);
+
+/* A new strategy for a profile at run time (ctl set_strategy profile=NAME):
+ * from TEXT, or from the file FILE. The parsed one replaces the profile's
+ * only when it parses; its text and source are kept, so the profile can be
+ * re-read again later. A profile of --ext-arm has its strategies in its arms
+ * and refuses, as does profile 1 of the command line (its strategy is the
+ * engine's). Returns 0, or -1 with a message. */
+int xprof_set_strategy(xprofile *p, int file, const char *value, sbuf *err);
+
 /* One option of a profile, by its CLI name (without "--"): for the
  * profile file and the tests. Returns 1 when name is a profile option, 0
  * when it is not, -1 with err on a bad value. */

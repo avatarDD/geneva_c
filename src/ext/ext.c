@@ -42,6 +42,7 @@ const char *const ext_features[] = {
     "ext_l7",     /* X4: L7 recognition, reassembly, L7: triggers */
     "ext_xact",   /* X5: x-actions (xfake, xsplit, ...), blobs */
     "ext_profile", /* X6: profiles, --filter-*, --ext-profile */
+    "ext_profile_runtime", /* X6d: ctl set_strategy profile=, ctl reload of --ext-profile */
     "ext_lists",   /* X6b: --hostlist*, --ipset*, gzip, reload_lists */
     "ext_autolist", /* X6c: --hostlist-auto*, --ext-ipcache-* */
     "ext_service",  /* X7a: @FILE, --dry-run, --daemon, --pidfile, --user/--uid, seccomp, syslog, ctl ext_flows/ext_keys */
@@ -87,6 +88,16 @@ static int g_server_side; /* run --server-side: outbound packets come from the s
 static plat_rwlock_t g_xlock;
 static int g_threaded, g_ahl_any;
 static int g_healthy; /* the surgical path: the engine marks connections it is done with */
+/* ctl reload of the profiles: the command line as it was (the profiles'
+ * ports and lists come from it) and the profile files it named */
+static args_t g_args;
+static int g_args_saved;
+static char *g_prof_files[XPROF_MAX + 1];
+static size_t g_nprof_files;
+
+static int args_keep(const args_t *a);
+static void args_drop(void);
+static void prof_files_keep(const args_t *a);
 
 /* --ext-payload-disable, --ext-reasm-disable: a payload list, "all" for
  * every type */
@@ -188,6 +199,9 @@ int ext_activate(const args_t *a, const char *cmd)
             return -1;
         }
         sb_free(&err);
+        /* ctl reload of the profiles reads them again from this */
+        args_keep(a);
+        prof_files_keep(a);
     }
     {
         sbuf err;
@@ -275,6 +289,7 @@ void ext_deactivate(void)
 #endif
     blob_free_all();
     xprof_free(&g_prof);
+    args_drop();
     xwlan_free();
     xwinnet_stop();
     xsbx_reset();
@@ -553,8 +568,7 @@ typedef struct {
 } xworker;
 
 /* prof_st with the worker's copies */
-static strategy *wprof_st(const xworker *x, int i, strategy *cmd, const ct_flow *f)
-{
+static strategy *wprof_st(const xworker *x, int i, strategy *cmd, const ct_flow *f){
     const xprofile *p = i >= 0 ? g_prof.v[i] : NULL;
     strategy *st;
     if (p && p->tune && x->arms) {
@@ -1179,9 +1193,325 @@ static int keys(jw *w)
     return 1;
 }
 
+/* ---- the profiles at run time (ctl set_strategy profile=, ctl reload) ----- */
+
+/* The command line as args_t: the values are only read, so the strings stay
+ * the argv's (it outlives the run). */
+static int args_keep(const args_t *a)
+{
+    /* ext_activate may run again without ext_deactivate (a test, a second
+     * parse): the previous copy goes first */
+    free(g_args.opts);
+    free(g_args.pos);
+    g_args_saved = 0;
+    g_args.opts = xcalloc((size_t)(a->nopts ? a->nopts : 1), sizeof(*g_args.opts));
+    g_args.pos = xcalloc((size_t)(a->npos ? a->npos : 1), sizeof(*g_args.pos));
+    g_args.nopts = a->nopts;
+    g_args.npos = a->npos;
+    for (int i = 0; i < a->nopts; i++)
+        g_args.opts[i] = a->opts[i];
+    for (int i = 0; i < a->npos; i++)
+        g_args.pos[i] = a->pos[i];
+    g_args_saved = 1;
+    return 0;
+}
+
+static void args_drop(void)
+{
+    free(g_args.opts);
+    free(g_args.pos);
+    memset(&g_args, 0, sizeof(g_args));
+    g_args_saved = 0;
+    for (size_t i = 0; i < g_nprof_files; i++)
+        free(g_prof_files[i]);
+    g_nprof_files = 0;
+}
+
+/* The --ext-profile files of a command line, for the log and the reload */
+static void prof_files_keep(const args_t *a)
+{
+    int idx = 0;
+    const char *f;
+    for (size_t i = 0; i < g_nprof_files; i++)
+        free(g_prof_files[i]);
+    g_nprof_files = 0;
+    while ((f = arg_next(a, "ext-profile", &idx)) && g_nprof_files < XPROF_MAX)
+        g_prof_files[g_nprof_files++] = xstrdup(f);
+}
+
+/* The strategies of a profile, copied to every worker (call with the
+ * workers locked). 0, or -1 when a copy cannot be made: the workers then
+ * keep what they had. */
+static int workers_profile(engine *e, size_t i)
+{
+    const xprofile *p = g_prof.v[i];
+    strategy *st = p->tune ? NULL : p->st;
+    for (unsigned k = 0; e->threaded && k < e->nw; k++) {
+        strategy *c = st ? strategy_clone(st) : NULL;
+        if (st && !c)
+            return -1;
+        if (!e->w[k].x)
+            continue;
+        {
+            xworker *x = e->w[k].x;
+            if (!x->pst)
+                continue;
+            strategy_free(x->pst[i]);
+            x->pst[i] = c;
+        }
+    }
+    return 0;
+}
+
+static void emit_profile_strategy(const xprofile *p)
+{
+    ev_t ev;
+    sbuf s;
+    if (!ev_enabled())
+        return;
+    sb_init(&s);
+    strategy_print(p->st, &s);
+    ev_begin(&ev, "strategy");
+    jw_kstr(&ev.w, "profile", p->name);
+    jw_kint(&ev.w, "profile_n", p->n);
+    jw_kstr(&ev.w, "strategy", s.data);
+    ev_emit(&ev);
+    sb_free(&s);
+}
+
+/* ctl set_strategy with "profile": the strategy of that profile only. NULL
+ * req->profile: not ours (the engine sets its own). Returns 1 handled, 0
+ * not ours, -1 with err. */
+static int set_profile_strategy(engine *e, const json_val *req, jw *w, sbuf *err)
+{
+    const char *name = json_get_str(req, "profile", NULL);
+    const json_val *fv = req ? json_get(req, "strategy_file") : NULL;
+    const char *text = json_get_str(req, "strategy", NULL);
+    const xprofile *found;
+    size_t i;
+    sbuf out;
+    if (!name)
+        return 0;
+    found = xprof_name(&g_prof, name);
+    if (!found) {
+        sb_printf(err, "no profile \"%s\"", name);
+        return -1;
+    }
+    if (!text && !fv) {
+        sb_puts(err, "set_strategy with \"profile\" needs \"strategy\" or \"strategy_file\"");
+        return -1;
+    }
+    if (fv && fv->type != JSON_STR) {
+        sb_puts(err, "\"strategy_file\" must be a string");
+        return -1;
+    }
+    for (i = 0; i < g_prof.n && g_prof.v[i] != found; i++)
+        ;
+    if (i >= g_prof.n) {
+        sb_printf(err, "no profile \"%s\"", name);
+        return -1;
+    }
+    if (g_threaded)
+        plat_rwlock_wrlock(&g_xlock);
+    if (xprof_set_strategy(g_prof.v[i], fv != NULL, text ? text : fv->str, err) < 0) {
+        if (g_threaded)
+            plat_rwlock_wrunlock(&g_xlock);
+        return -1;
+    }
+    if (workers_profile(e, i) < 0) {
+        /* the profile got it, the workers may not: say so, the call fails */
+        LOGE("engine", "cannot copy the strategy of profile %zu for the workers", i + 1);
+        if (g_threaded)
+            plat_rwlock_wrunlock(&g_xlock);
+        sb_printf(err, "profile %s: cannot copy its strategy for the workers", name);
+        return -1;
+    }
+    if (g_threaded)
+        plat_rwlock_wrunlock(&g_xlock);
+    emit_profile_strategy(g_prof.v[i]);
+    LOGI("profile", "%s: strategy: %s", name, g_prof.v[i]->text);
+    if (!w) /* no answer expected (a test, a signal) */
+        return 1;
+    sb_init(&out);
+    strategy_print(g_prof.v[i]->st, &out);
+    jw_kstr(w, "profile", name);
+    jw_kint(w, "profile_n", g_prof.v[i]->n);
+    jw_kstr(w, "strategy", out.data);
+    sb_free(&out);
+    return 1;
+}
+
+/* ctl reload with profiles: the --ext-profile files read again. The same
+ * set of profiles (by name, in order) is updated in place — the workers get
+ * their new strategies, the lists are re-read; a set that changed is
+ * refused: the firewall rules follow the ports the profiles take. */
+static int reload_profiles(engine *e, jw *w, sbuf *err)
+{
+    xprofiles fresh;
+    sbuf perr;
+    int rc = 0;
+    if (!g_args_saved || !g_nprof_files) {
+        sb_puts(err, "no --ext-profile to re-read");
+        return -1;
+    }
+    sb_init(&perr);
+    memset(&fresh, 0, sizeof(fresh));
+    if (xprof_build(&g_args, arg_has(&g_args, "strategy") || arg_has(&g_args, "strategy-file"), &fresh, &perr) < 0) {
+        sb_printf(err, "%s", perr.data);
+        sb_free(&perr);
+        return -1;
+    }
+    sb_free(&perr);
+    if (!xprof_same_names(&g_prof, &fresh)) {
+        sb_puts(err, "the profiles changed (a name or their order): restart to apply");
+        xprof_free(&fresh);
+        return -1;
+    }
+    /* the firewall rules follow the filters: they are not re-made here */
+    for (size_t i = 0; i < g_prof.n; i++)
+        if (!xprof_same_filters(g_prof.v[i], fresh.v[i])) {
+            sbuf l;
+            sb_init(&l);
+            xprof_label(g_prof.v[i], &l);
+            sb_printf(err, "profile %s: its filters changed (ports, L3, L7, mark, SSID or the autolist): restart to apply", l.data);
+            sb_free(&l);
+            xprof_free(&fresh);
+            return -1;
+        }
+    if (g_threaded)
+        plat_rwlock_wrlock(&g_xlock);
+    for (size_t i = 0; i < g_prof.n; i++) {
+        xprofile *dst = g_prof.v[i];
+        xprofile *src = fresh.v[i];
+        char *text = dst->text;
+        char *src_s = dst->src;
+        strategy *st = dst->st;
+        xlistref hl = dst->hl, hl_ex = dst->hl_ex, ips = dst->ips, ips_ex = dst->ips_ex;
+        xlist *fixed[4];
+        memcpy(fixed, dst->fixed, sizeof(fixed));
+        /* The strategy and the lists change in place; the ports do not:
+         * the firewall rules follow them and are not re-made here. The
+         * lists are read again by xlists_reload below (a new path is loaded
+         * by xprof_build already). */
+        dst->text = src->text;
+        dst->src = src->src;
+        dst->st = src->st;
+        dst->hl = src->hl;
+        dst->hl_ex = src->hl_ex;
+        dst->ips = src->ips;
+        dst->ips_ex = src->ips_ex;
+        memcpy(dst->fixed, src->fixed, sizeof(dst->fixed));
+        /* the autolist is the profile's own: it holds the fail counters of
+         * the flows it watched (xprof_same_filters made sure its presence
+         * did not change) */
+        src->text = text;
+        src->src = src_s;
+        src->st = st;
+        src->hl = hl;
+        src->hl_ex = hl_ex;
+        src->ips = ips;
+        src->ips_ex = ips_ex;
+        memcpy(src->fixed, fixed, sizeof(fixed));
+        if (workers_profile(e, i) < 0) {
+            LOGE("engine", "cannot copy the strategy of profile %zu for the workers", i + 1);
+            if (!rc)
+                sb_printf(err, "profile %zu: cannot copy its strategy for the workers", i + 1);
+            rc = -1;
+        }
+    }
+    if (g_threaded)
+        plat_rwlock_wrunlock(&g_xlock);
+    xprof_free(&fresh);
+    xlists_reload(plat_now_ms(), 1);
+    LOGI("profile", "%zu profile(s) re-read", g_prof.n);
+    if (w) {
+        jw_kint(w, "profiles", (int64_t)g_prof.n);
+        jw_kint(w, "files", (int64_t)g_nprof_files);
+    }
+    return rc;
+}
+
+/* The ports of a profile's filter (xpf) as "443,8000-8100", or "*" when
+ * the profile takes every port. neg: the first one is a negation. */
+static void prof_ports(const xpf *v, size_t n, sbuf *out)
+{
+    int any = 0;
+    sb_reset(out);
+    for (size_t i = 0; i < n; i++) {
+        if (v[i].neg || (v[i].from <= 1 && v[i].to >= 0xffff)) {
+            any = 1;
+            break;
+        }
+    }
+    if (!n || any) {
+        sb_puts(out, "*");
+        return;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (i)
+            sb_puts(out, ",");
+        if (v[i].from == v[i].to)
+            sb_printf(out, "%u", (unsigned)v[i].from);
+        else
+            sb_printf(out, "%u-%u", (unsigned)v[i].from, (unsigned)v[i].to);
+    }
+}
+
+/* The profiles of ctl ext_status: the name, the strategy (short: its text
+ * as parsed), the ports it takes and how many lists it has. */
+static void profiles_json(jw *w)
+{
+    jw_key(w, "profiles");
+    jw_arr(w);
+    for (size_t i = 0; i < g_prof.n; i++) {
+        const xprofile *p = g_prof.v[i];
+        sbuf s;
+        jw_obj(w);
+        jw_kint(w, "profile_n", p->n);
+        if (p->name)
+            jw_kstr(w, "profile", p->name);
+        sb_init(&s);
+        if (p->tune)
+            sb_puts(&s, "the tuner's arms");
+        else if (p->cmd)
+            sb_puts(&s, "the command's");
+        else if (p->text)
+            sb_puts(&s, p->text);
+        jw_kstr(w, "strategy", s.data);
+        sb_reset(&s);
+        if (!p->ipv4)
+            sb_puts(&s, "ipv6");
+        else if (!p->ipv6)
+            sb_puts(&s, "ipv4");
+        else
+            sb_puts(&s, "ipv4,ipv6");
+        jw_kstr(w, "l3", s.data);
+        prof_ports(p->tcp, p->ntcp, &s);
+        jw_kstr(w, "tcp", s.data);
+        prof_ports(p->udp, p->nudp, &s);
+        jw_kstr(w, "udp", s.data);
+        jw_kint(w, "lists", (int64_t)(p->hl.n + p->hl_ex.n + p->ips.n + p->ips_ex.n));
+        if (p->tune)
+            jw_kint(w, "arms", (int64_t)xtune_arms(p->tune));
+        jw_obj_end(w);
+        sb_free(&s);
+    }
+    jw_arr_end(w);
+}
+
 static int xw_control(engine *e, const char *cmd, const json_val *req, jw *w, sbuf *err)
 {
     int n;
+    if (!strcmp(cmd, "set_strategy")) {
+        int r = set_profile_strategy(e, req, w, err);
+        if (r)
+            return r;
+    }
+    if (!strcmp(cmd, "reload") && (g_args_saved && g_nprof_files)) {
+        /* 0 or -1 → 1 (handled) or -1: the engine must not fall back to its
+         * own --strategy-file */
+        return reload_profiles(e, w, err) < 0 ? -1 : 1;
+    }
     if (!strcmp(cmd, "ext_flows"))
         return w ? flows(e, req, w, err) : 1;
     if (!strcmp(cmd, "ext_keys")) {
@@ -1198,6 +1528,8 @@ static int xw_control(engine *e, const char *cmd, const json_val *req, jw *w, sb
             xtune_status(w);
             xpol_json(w);
             jw_kbool(w, "surgical", g_healthy);
+            if (g_prof.n)
+                profiles_json(w);
         }
         return 1;
     }

@@ -91,7 +91,9 @@ int cmd_ctl(int argc, char **argv)
     if (arg_has(&a, "help")) {
         args_help("Usage: geneva ctl [options] COMMAND [key=value...]\n"
                   "Talks to \"geneva run --control ADDR\". Commands: status, stats, reset_stats,\n"
-                  "set_strategy strategy=..., reload, pause, resume, log_level level=...,\n"
+                  "set_strategy strategy=... (with profile=NAME: that profile's; run --ext),\n"
+                  "reload (run --ext with --ext-profile: the profile files read again),\n"
+                  "pause, resume, log_level level=...,\n"
                   "subscribe, stop, ping, version, reload_lists (run --ext: re-read the\n"
                   "--hostlist/--ipset files), ext_flows [limit=N] (run --ext: the\n"
                   "conntrack's flows), ext_keys (run --ext: the autolist's failure\n"

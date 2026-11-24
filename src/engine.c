@@ -965,6 +965,12 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
         const char *text = json_get_str(req, "strategy", NULL);
         strategy *s;
         sbuf out;
+        if (e->o->ext && e->o->ext->control && json_get(req, "profile")) {
+            /* "profile": the strategy of that profile (extensions) */
+            int r = e->o->ext->control(e, cmd, req, w, err);
+            if (r)
+                return r < 0 ? -1 : 0;
+        }
         if (!text) {
             sb_puts(err, "set_strategy needs \"strategy\"");
             return -1;
@@ -1013,6 +1019,12 @@ static int on_control(void *ctx, const char *cmd, const json_val *req, jw *w, sb
         return rc;
     }
     if (!strcmp(cmd, "reload")) {
+        if (e->o->ext && e->o->ext->control) {
+            /* --ext-profile: the profile files read again (extensions) */
+            int r = e->o->ext->control(e, cmd, req, w, err);
+            if (r)
+                return r < 0 ? -1 : 0;
+        }
         if (reload(e, err) < 0)
             return -1;
         return 0;
@@ -1370,8 +1382,17 @@ int engine_run(engine_opts *o)
             if (reload(&e, &herr) < 0 && !e.o->strategy_file)
                 LOGI("engine", "SIGHUP: %s", herr.data);
             sb_reset(&herr);
-            if (e.o->ext && e.o->ext->control)
-                e.o->ext->control(&e, "reload_lists", NULL, NULL, &herr);
+            /* --ext-profile: the profile files are read again, as ctl
+             * reload does (a changed set or the filters are refused there) */
+            if (e.o->ext && e.o->ext->control) {
+                int rr = e.o->ext->control(&e, "reload", NULL, NULL, &herr);
+                if (rr < 0 && herr.data && *herr.data)
+                    LOGI("engine", "SIGHUP: profiles: %s", herr.data);
+                sb_reset(&herr);
+                /* reload_profiles re-reads the lists itself */
+                if (rr <= 0)
+                    e.o->ext->control(&e, "reload_lists", NULL, NULL, &herr);
+            }
             engine_unlock_workers(&e);
             sb_free(&herr);
         }
