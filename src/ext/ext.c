@@ -42,6 +42,7 @@ const char *const ext_features[] = {
     "ext_l7",     /* X4: L7 recognition, reassembly, L7: triggers */
     "ext_xact",   /* X5: x-actions (xfake, xsplit, ...), blobs */
     "ext_profile", /* X6: profiles, --filter-*, --ext-profile */
+    "ext_profile_runtime", /* X6d: ctl set_strategy profile=, ctl reload of --ext-profile */
     "ext_lists",   /* X6b: --hostlist*, --ipset*, gzip, reload_lists */
     "ext_autolist", /* X6c: --hostlist-auto*, --ext-ipcache-* */
     "ext_service",  /* X7a: @FILE, --dry-run, --daemon, --pidfile, --user/--uid, seccomp, syslog, ctl ext_flows/ext_keys */

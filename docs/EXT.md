@@ -881,7 +881,9 @@ mark, SSID or the autolist): restart to apply"`.
 
 Совместимость: `set_strategy` и `reload` без `profile` и без
 `--ext-profile` работают как прежде, сборки `EXT=0` команд не знают
-(`unknown command`).
+(`unknown command`). Клиенту, которому важно знать заранее, отвечает
+фича `ext_profile_runtime` в `version --json` — у сборки без X6d её нет,
+и `set_strategy` с `profile` там заменил бы стратегию команды.
 
 ## Эксплуатация (X7a)
 

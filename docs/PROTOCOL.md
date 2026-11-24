@@ -172,6 +172,7 @@ geneva ctl --json '{"cmd":"pause"}'
 | `ext_l7` | везде | распознавание L7, сборка ClientHello и QUIC, триггеры `L7:` |
 | `ext_xact` | везде | x-действия (`xfake`, `xsplit`, …), блобы `--ext-blob`, комбинаторы |
 | `ext_profile` | везде | профили `--new`/`--template`/`--import`, `--filter-*`, `--ext-profile` |
+| `ext_profile_runtime` | везде | X6d: `ctl set_strategy profile=`, `ctl reload` файлов `--ext-profile`, `profiles` в `ext_status` |
 | `ext_lists` | везде | `--hostlist*`, `--ipset*`, gzip, команда `reload_lists` |
 | `ext_autolist` | везде | `--hostlist-auto*`, `--ext-ipcache-*` |
 | `ext_service` | везде (часть — Linux) | `@FILE`, `--dry-run`, `--pidfile`, `--daemon`, `--user`/`--uid`, seccomp, syslog, команды `ext_flows`, `ext_keys` |
