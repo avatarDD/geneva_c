@@ -19,6 +19,16 @@
   массив `profiles`. Без `profile` и без `--ext-profile` команды работают как
   прежде (`docs/EXT.md`, `docs/PROTOCOL.md`).
 
+- Библиотека (`geneva library`) — лучшие стратегии, которые geneva_c нашла
+  против блокировок в России (`country` `russia`, `test` `tls`, `quic`,
+  `udp`; `rate` — фитнес `eval` − 300). Стратегии Китая, Индии и Казахстана
+  из `library.py` Geneva убраны (отличие от Geneva: они 2019–2020 годов и в
+  России не работают), лабораторные стратегии против `geneva censor`
+  остались. Стратегии с x-действиями zapret2 выводит только
+  `geneva library --ext`, в JSON у них `"ext": true`. Источник —
+  `tools/library.json`, `tools/gen_library.py` собирает из него и из
+  `LAB_STRATEGIES` Geneva `src/library_data.h`.
+
 ## v2.0.1
 
 - `geneva evolve --ext` делает новые x-действия и меняет их параметры:

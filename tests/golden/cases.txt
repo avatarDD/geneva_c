@@ -42,7 +42,7 @@ apply-no-input|ext|$G apply -s '\/'
 library||$G library
 library-all||$G library --all
 library-json||$G library --json
-library-china-http||$G library --country china --test http -q
+library-russia-tls||$G library --country russia --test tls -q
 library-censor||$G library --censor 3
 fw-print|ext|$G fw print -p 443
 fw-print-iptables|ext|$G fw print -p 80,443 --proto tcp,udp --firewall iptables -i eth0 --first 6
@@ -70,6 +70,8 @@ censor-12-without-ext||$G censor -c 12
 censor-rate-without-ext||$G censor -c 1 --rate 5
 help-ext|extonly|$G --help
 help-ext-censor|extonly|$G censor --help
+help-ext-library|extonly|$G library --help
+library-ext|extonly|$G library --ext --json
 help-ext-run|extonly|$G run --help
 censor-ext-list|extonly|$G censor --ext --list
 censor-ext-17-needs-block-ip|extonly|$G censor --ext -c 17
