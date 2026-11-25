@@ -867,11 +867,21 @@ order): restart to apply"`, работают прежние.
 `ok:false`, `error: "profile N (NAME): its filters changed (ports, L3, L7,
 mark, SSID or the autolist): restart to apply"`.
 
+Руки (`--ext-arm`) и настройка тюнера (`--ext-tune`) тоже не на лету:
+копии рук стоят у воркеров с самого старта, и таблица ключей тюнера
+следует за ними. Изменились — `ok:false`, `error: "profile N (NAME):
+its arms changed (--ext-arm, --ext-tune): restart to apply"`, работают
+прежние.
+
 Иначе стратегии заменяются местами с новыми, воркеры получают копии,
-списки перечитываются, ответ — `profiles`, `files`. SIGHUP делает то же
-самое: стратегия команды (`--strategy-file`), файлы профилей и списки;
-отказ (набор или фильтры изменились) виден в журнале строкой
-`SIGHUP: profiles: …`, процесс продолжает работать с прежними.
+списки перечитываются, ответ — `profiles`, `files`. Сегменты `--new`
+командной строки — тоже профили: `ctl reload` перечитывает файлы, не
+затрагивая их. Собственный `--strategy-file` движка `ctl reload` не
+перечитывает (это путь `reload` без профилей; SIGHUP перечитывает и
+его). SIGHUP делает то же, что `ctl reload`, и сверх того стратегию
+команды (`--strategy-file`): отказ (набор, фильтры или руки
+изменились) виден в журнале строкой `SIGHUP: profiles: …`, процесс
+продолжает работать с прежними.
 
 **`ctl ext_status`** с профилями добавляет массив `profiles`:
 `{profile_n, profile, strategy, l3, tcp, udp, lists, arms}` — текст

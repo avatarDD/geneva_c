@@ -55,23 +55,13 @@ static void remove_file(const char *path)
         remove(path);
 }
 
-/* ext_parse_args + the hooks: profiles from FILE, the engine around them */
-static int setup(const char *file, engine *e, engine_opts *o, sbuf *err)
+/* ext_parse_args + the hooks: profiles from ARGV, the engine around them */
+static int setup_argv(const char **argv, int argc, engine *e, engine_opts *o, sbuf *err)
 {
     static const optdef defs[] = {{"strategy", 's', 1, "S", ""}, {"server-port", 'p', 1, "P", ""},
                                  EXT_OPT, EXT_PROFILE_OPTS, {NULL, 0, 0, NULL, NULL}};
     char aerr[128];
     args_t a;
-    const char *argv[6];
-    int argc = 0;
-    argv[argc++] = "-p";
-    argv[argc++] = "1-65535";
-    argv[argc++] = "--ext";
-    if (file) {
-        argv[argc++] = "--ext-profile";
-        argv[argc++] = file;
-    }
-    argv[argc] = NULL;
     ext_reset();
     if (args_parse(&a, argc, (char **)argv, defs, aerr, sizeof(aerr)) < 0)
         return -1;
@@ -90,6 +80,42 @@ static int setup(const char *file, engine *e, engine_opts *o, sbuf *err)
     if (!e->st || engine_workers_init(e, 1, err) < 0)
         return -1;
     return 0;
+}
+
+/* profiles from FILE (NULL: none), the engine around them */
+static int setup(const char *file, engine *e, engine_opts *o, sbuf *err)
+{
+    const char *argv[6];
+    int argc = 0;
+    argv[argc++] = "-p";
+    argv[argc++] = "1-65535";
+    argv[argc++] = "--ext";
+    if (file) {
+        argv[argc++] = "--ext-profile";
+        argv[argc++] = file;
+    }
+    argv[argc] = NULL;
+    return setup_argv(argv, argc, e, o, err);
+}
+
+/* the same, with a --new segment: a profile made on the command line (ST,
+ * a port of its own) before the file's */
+static int setup_new(const char *file, const char *st, engine *e, engine_opts *o, sbuf *err)
+{
+    const char *argv[11];
+    int argc = 0;
+    argv[argc++] = "-p";
+    argv[argc++] = "1-65535";
+    argv[argc++] = "--ext";
+    argv[argc++] = "--new";
+    argv[argc++] = "-s";
+    argv[argc++] = st;
+    argv[argc++] = "--filter-tcp";
+    argv[argc++] = "444";
+    argv[argc++] = "--ext-profile";
+    argv[argc++] = file;
+    argv[argc] = NULL;
+    return setup_argv(argv, argc, e, o, err);
 }
 
 static void teardown(engine *e)
@@ -130,6 +156,27 @@ static const char *PROFILES = "[profile one]\n"
                               "[profile two]\n"
                               "filter-tcp = 80\n"
                               "strategy = [TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/\n";
+
+/* one with the tuner's arms (no strategy of its own), two plain */
+static const char *PROFILES_ARMS = "[profile one]\n"
+                                   "filter-tcp = 443\n"
+                                   "ext-arm = \\/\n"
+                                   "ext-arm = [TCP:flags:PA]-drop-| \\/\n"
+                                   "\n"
+                                   "[profile two]\n"
+                                   "filter-tcp = 80\n"
+                                   "strategy = [TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/\n";
+
+/* the same, with the tuner's own arguments */
+static const char *PROFILES_ARMS_TUNE = "[profile one]\n"
+                                        "filter-tcp = 443\n"
+                                        "ext-arm = \\/\n"
+                                        "ext-arm = [TCP:flags:PA]-drop-| \\/\n"
+                                        "ext-tune = rr:fails=5\n"
+                                        "\n"
+                                        "[profile two]\n"
+                                        "filter-tcp = 80\n"
+                                        "strategy = [TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/\n";
 
 TEST(rt_status_lists_profiles)
 {
@@ -234,6 +281,29 @@ TEST(rt_set_strategy_from_file)
     teardown(&e);
     remove_file(f);
     remove_file(s);
+}
+
+TEST(rt_set_strategy_refuses_wrong_types)
+{
+    engine e;
+    engine_opts o;
+    sbuf out, err;
+    const char *f = rt_file("profiles-types.ini", PROFILES);
+    t_current = "profiles: set_strategy refuses a \"profile\" and a \"strategy_file\" of the wrong type";
+    if (!f || setup(f, &e, &o, &err) < 0) {
+        remove_file(f);
+        return;
+    }
+    CHECK_INT(rctl(&e, "set_strategy", "{\"strategy\":\"\\\\/\",\"profile\":1}", &out, &err), -1);
+    CHECK_STR(err.data, "\"profile\" must be a string");
+    sb_free(&out);
+    sb_free(&err);
+    CHECK_INT(rctl(&e, "set_strategy", "{\"profile\":\"one\",\"strategy_file\":1}", &out, &err), -1);
+    CHECK_STR(err.data, "\"strategy_file\" must be a string");
+    sb_free(&out);
+    sb_free(&err);
+    teardown(&e);
+    remove_file(f);
 }
 
 TEST(rt_reload_in_place)
@@ -371,6 +441,244 @@ TEST(rt_reload_without_an_answer)
     remove_file(f);
 }
 
+TEST(rt_reload_tune_in_place)
+{
+    engine e;
+    engine_opts o;
+    sbuf out, err;
+    const char *f = rt_file("profiles-tune-inplace.ini", PROFILES_ARMS);
+    t_current = "profiles: reload keeps the arms, reads the rest again";
+    if (!f || setup(f, &e, &o, &err) < 0) {
+        remove_file(f);
+        return;
+    }
+    /* the file changes: the arms of one stay, two's strategy is new */
+    f = rt_file("profiles-tune-inplace.ini", "[profile one]\n"
+                                             "filter-tcp = 443\n"
+                                             "ext-arm = \\/\n"
+                                             "ext-arm = [TCP:flags:PA]-drop-| \\/\n"
+                                             "\n"
+                                             "[profile two]\n"
+                                             "filter-tcp = 80\n"
+                                             "strategy = [TCP:flags:PA]-duplicate-| \\/\n");
+    CHECK_INT(rctl(&e, "reload", "{}", &out, &err), 1);
+    sb_free(&out);
+    sb_free(&err);
+    rctl(&e, "ext_status", NULL, &out, &err);
+    CHECK(strstr(out.data, "\"profile_n\":1,\"profile\":\"one\",\"strategy\":\"the tuner's arms\"") != NULL);
+    CHECK(strstr(out.data, "\"arms\":2") != NULL);
+    CHECK(strstr(out.data, "\"profile_n\":2,\"profile\":\"two\",\"strategy\":\"[TCP:flags:PA]-duplicate-| \\\\/\"") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    teardown(&e);
+    remove_file(f);
+}
+
+TEST(rt_reload_refuses_added_arms)
+{
+    engine e;
+    engine_opts o;
+    sbuf out, err;
+    const char *f = rt_file("profiles-add-arms.ini", PROFILES);
+    t_current = "profiles: reload refuses --ext-arm added to a plain profile";
+    if (!f || setup(f, &e, &o, &err) < 0) {
+        remove_file(f);
+        return;
+    }
+    /* one becomes the tuner's: its arms are the workers', not the file's */
+    f = rt_file("profiles-add-arms.ini", "[profile one]\n"
+                                         "filter-tcp = 443\n"
+                                         "ext-arm = \\/\n"
+                                         "ext-arm = [TCP:flags:PA]-drop-| \\/\n"
+                                         "\n"
+                                         "[profile two]\n"
+                                         "filter-tcp = 80\n"
+                                         "strategy = [TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/\n");
+    CHECK_INT(rctl(&e, "reload", "{}", &out, &err), -1);
+    CHECK(strstr(err.data, "profile 1 (one): its arms changed (--ext-arm, --ext-tune): restart to apply") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    /* one is still the strategy it was (not a dead profile) */
+    rctl(&e, "ext_status", NULL, &out, &err);
+    CHECK(strstr(out.data, "\"profile_n\":1,\"profile\":\"one\",\"strategy\":\"[TCP:flags:PA]-drop-| \\\\/\"") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    teardown(&e);
+    remove_file(f);
+}
+
+TEST(rt_reload_refuses_removed_arms)
+{
+    engine e;
+    engine_opts o;
+    sbuf out, err;
+    const char *f = rt_file("profiles-del-arms.ini", PROFILES_ARMS);
+    t_current = "profiles: reload refuses the arms taken from a tune profile";
+    if (!f || setup(f, &e, &o, &err) < 0) {
+        remove_file(f);
+        return;
+    }
+    /* one becomes plain: the workers would keep turning its old arms */
+    f = rt_file("profiles-del-arms.ini", "[profile one]\n"
+                                         "filter-tcp = 443\n"
+                                         "strategy = [TCP:flags:PA]-drop-| \\/\n"
+                                         "\n"
+                                         "[profile two]\n"
+                                         "filter-tcp = 80\n"
+                                         "strategy = [TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/\n");
+    CHECK_INT(rctl(&e, "reload", "{}", &out, &err), -1);
+    CHECK(strstr(err.data, "profile 1 (one): its arms changed (--ext-arm, --ext-tune): restart to apply") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    /* one is still the tuner's */
+    rctl(&e, "ext_status", NULL, &out, &err);
+    CHECK(strstr(out.data, "\"profile_n\":1,\"profile\":\"one\",\"strategy\":\"the tuner's arms\"") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    teardown(&e);
+    remove_file(f);
+}
+
+TEST(rt_reload_refuses_changed_arms)
+{
+    engine e;
+    engine_opts o;
+    sbuf out, err;
+    const char *f = rt_file("profiles-ch-arms.ini", PROFILES_ARMS);
+    t_current = "profiles: reload refuses the arms of a tune profile changed";
+    if (!f || setup(f, &e, &o, &err) < 0) {
+        remove_file(f);
+        return;
+    }
+    /* one's second arm is another one: the workers keep the old */
+    f = rt_file("profiles-ch-arms.ini", "[profile one]\n"
+                                       "filter-tcp = 443\n"
+                                       "ext-arm = \\/\n"
+                                       "ext-arm = [TCP:flags:PA]-duplicate-| \\/\n"
+                                       "\n"
+                                       "[profile two]\n"
+                                       "filter-tcp = 80\n"
+                                       "strategy = [TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/\n");
+    CHECK_INT(rctl(&e, "reload", "{}", &out, &err), -1);
+    CHECK(strstr(err.data, "profile 1 (one): its arms changed (--ext-arm, --ext-tune): restart to apply") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    rctl(&e, "ext_status", NULL, &out, &err);
+    CHECK(strstr(out.data, "\"profile_n\":1,\"profile\":\"one\",\"strategy\":\"the tuner's arms\"") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    teardown(&e);
+    remove_file(f);
+}
+
+TEST(rt_reload_refuses_changed_tune)
+{
+    engine e;
+    engine_opts o;
+    sbuf out, err;
+    const char *f = rt_file("profiles-ch-tune.ini", PROFILES_ARMS_TUNE);
+    t_current = "profiles: reload refuses the tuner's arguments changed";
+    if (!f || setup(f, &e, &o, &err) < 0) {
+        remove_file(f);
+        return;
+    }
+    /* the arms are the same, the tuner turns them another way */
+    f = rt_file("profiles-ch-tune.ini", "[profile one]\n"
+                                        "filter-tcp = 443\n"
+                                        "ext-arm = \\/\n"
+                                        "ext-arm = [TCP:flags:PA]-drop-| \\/\n"
+                                        "ext-tune = rr:fails=6\n"
+                                        "\n"
+                                        "[profile two]\n"
+                                        "filter-tcp = 80\n"
+                                        "strategy = [TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/\n");
+    CHECK_INT(rctl(&e, "reload", "{}", &out, &err), -1);
+    CHECK(strstr(err.data, "profile 1 (one): its arms changed (--ext-arm, --ext-tune): restart to apply") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    teardown(&e);
+    remove_file(f);
+}
+
+TEST(rt_reload_tune_rr_noop)
+{
+    engine e;
+    engine_opts o;
+    sbuf out, err;
+    const char *f = rt_file("profiles-rr-noop.ini", "[profile one]\n"
+                                                    "filter-tcp = 443\n"
+                                                    "ext-arm = \\/\n"
+                                                    "ext-arm = [TCP:flags:PA]-drop-| \\/\n"
+                                                    "ext-tune = rr:fails=3\n"
+                                                    "\n"
+                                                    "[profile two]\n"
+                                                    "filter-tcp = 80\n"
+                                                    "strategy = [TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/\n");
+    t_current = "profiles: reload takes a tune edit that changes nothing";
+    if (!f || setup(f, &e, &o, &err) < 0) {
+        remove_file(f);
+        return;
+    }
+    /* fails=3 is rr's default: the plain form tunes the same way, only
+     * the parse-time marker (rr_args) differs — xtune_same skips it */
+    f = rt_file("profiles-rr-noop.ini", "[profile one]\n"
+                                        "filter-tcp = 443\n"
+                                        "ext-arm = \\/\n"
+                                        "ext-arm = [TCP:flags:PA]-drop-| \\/\n"
+                                        "ext-tune = rr\n"
+                                        "\n"
+                                        "[profile two]\n"
+                                        "filter-tcp = 80\n"
+                                        "strategy = [TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/\n");
+    CHECK_INT(rctl(&e, "reload", "{}", &out, &err), 1);
+    sb_free(&out);
+    sb_free(&err);
+    rctl(&e, "ext_status", NULL, &out, &err);
+    CHECK(strstr(out.data, "\"profile_n\":1,\"profile\":\"one\",\"strategy\":\"the tuner's arms\"") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    teardown(&e);
+    remove_file(f);
+}
+
+TEST(rt_reload_new_segment)
+{
+    engine e;
+    engine_opts o;
+    sbuf out, err;
+    const char *f = rt_file("profiles-new.ini", PROFILES);
+    t_current = "profiles: reload reads the file again with a --new segment";
+    if (!f || setup_new(f, "[TCP:flags:PA]-duplicate-| \\/", &e, &o, &err) < 0) {
+        remove_file(f);
+        return;
+    }
+    /* the --new segment is a profile of its own, before the file's two */
+    CHECK_INT(rctl(&e, "ext_status", NULL, &out, &err), 1);
+    CHECK(strstr(out.data, "[TCP:flags:PA]-duplicate-| \\\\/") != NULL);
+    CHECK(strstr(out.data, "\"profile_n\":2,\"profile\":\"one\"") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    /* the file changes: the segment must not make the set look new */
+    f = rt_file("profiles-new.ini", "[profile one]\n"
+                                    "filter-tcp = 443\n"
+                                    "strategy = [TCP:flags:PA]-fragment{tcp:-1:True}-| \\/\n"
+                                    "\n"
+                                    "[profile two]\n"
+                                    "filter-tcp = 80\n"
+                                    "strategy = [TCP:flags:PA]-fragment{tcp:34:True:17}-| \\/\n");
+    CHECK_INT(rctl(&e, "reload", "{}", &out, &err), 1);
+    CHECK(strstr(out.data, "\"profiles\":3") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    rctl(&e, "ext_status", NULL, &out, &err);
+    CHECK(strstr(out.data, "\"profile_n\":2,\"profile\":\"one\",\"strategy\":\"[TCP:flags:PA]-fragment{tcp:-1:True}") != NULL);
+    CHECK(strstr(out.data, "[TCP:flags:PA]-duplicate-| \\\\/") != NULL);
+    sb_free(&out);
+    sb_free(&err);
+    teardown(&e);
+    remove_file(f);
+}
+
 TEST(rt_reload_without_profiles)
 {
     engine e;
@@ -391,9 +699,17 @@ void suite_profile_runtime(void)
     RUN(rt_status_lists_profiles);
     RUN(rt_set_strategy_by_profile);
     RUN(rt_set_strategy_from_file);
+    RUN(rt_set_strategy_refuses_wrong_types);
     RUN(rt_reload_in_place);
+    RUN(rt_reload_tune_in_place);
     RUN(rt_reload_refuses_a_new_set);
     RUN(rt_reload_refuses_changed_filters);
+    RUN(rt_reload_refuses_added_arms);
+    RUN(rt_reload_refuses_removed_arms);
+    RUN(rt_reload_refuses_changed_arms);
+    RUN(rt_reload_refuses_changed_tune);
+    RUN(rt_reload_tune_rr_noop);
+    RUN(rt_reload_new_segment);
     RUN(rt_reload_without_an_answer);
     RUN(rt_reload_without_profiles);
 }

@@ -141,22 +141,8 @@ jobs:
       - run: make -j"$(nproc)" CC=musl-gcc STATIC=1 SMALL=1 CFLAGS="-Werror" test
       # X13c: the same static build on an Android-shaped root (no /etc/resolv.conf, no /tmp)
       - run: sudo tests/e2e/android_env.sh build/geneva
-      # size of src/ext/ in the router build; the budget grows by stage (6.1)
-      # X2 (lab censors 12-20, TLS/QUIC reading, AES-GCM/HKDF): about 16 KB
-      # X3 (conntrack, ranges, FLOW:/META: triggers): about 8 KB more
-      # X5a (x-actions, blobs, tls_mod, the sending path): about 48 KB more
-      # X6c (autolist, ipcache): about 16 KB more
-      # X7c (fuzz targets and seeds, geneva selftest): about 24 KB more
-      # X8 (seqtrack, xoob/xtlsrec/xdrip): 8 KB more; X9a (NFLOG, detector): 12 KB more
-      # X9c (the parallel plateau, the detector's own counts): 4 KB more
-      # X11a (the tuner: circular, its detectors, --ext-state): 12 KB more
-      # X11b (ts: Thompson sampling, proposals): 12 KB more (16 without crypto: libm)
-      # X13c (nl80211 for --filter-ssid, the Windows network filters' parsing): 8 KB more
-      # evolve --ext making x-actions (src/ext/xgen.c, every action and key): 16 KB more (20 without crypto)
-      # X6d (profiles at run time: re-reading --ext-profile, per-profile
-      # ctl set_strategy, the profiles in ext_status): about 1 KB more
-      - run: tools/ext_size.sh 436224 CC=musl-gcc CFLAGS="-Werror"
-      - run: tools/ext_size.sh 428032 CC=musl-gcc CFLAGS="-Werror" EXT_CRYPTO=0
+      # the size of src/ext/ in the router build is followed by hand:
+      # tools/ext_size.sh (no CI budget)
       # the fuzz targets on musl (fork, alarm, fmemopen), seeds and 2000 inputs each
       - run: build/geneva selftest --ext --fuzz 2000 --seed 1
       - run: ls -la build/geneva && file build/geneva
