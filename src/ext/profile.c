@@ -1139,6 +1139,16 @@ int xprof_same_filters(const xprofile *a, const xprofile *b)
     return 1;
 }
 
+/* The same arms of the tuner: the workers hold clones of them from the
+ * start (xw_open in ext.c), so what the arms are cannot be re-read at
+ * run time */
+int xprof_same_arms(const xprofile *a, const xprofile *b)
+{
+    if ((a->tune != NULL) != (b->tune != NULL))
+        return 0;
+    return !a->tune || xtune_same(a->tune, b->tune);
+}
+
 int xprof_set_strategy(xprofile *p, int file, const char *value, sbuf *err)
 {
     char *text;

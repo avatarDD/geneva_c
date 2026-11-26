@@ -193,6 +193,11 @@ int xprof_same_names(const xprofiles *a, const xprofiles *b);
  * counters of the flows the old profile watched. */
 int xprof_same_filters(const xprofile *a, const xprofile *b);
 
+/* The same arms of the tuner (--ext-arm, --ext-tune)? The arms cannot be
+ * re-read at run time: the workers hold their clones from the start, and
+ * the tuner's keys table follows the arms (ctl reload refuses a change). */
+int xprof_same_arms(const xprofile *a, const xprofile *b);
+
 /* A new strategy for a profile at run time (ctl set_strategy profile=NAME):
  * from TEXT, or from the file FILE. The parsed one replaces the profile's
  * only when it parses; its text and source are kept, so the profile can be

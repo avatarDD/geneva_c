@@ -1246,20 +1246,29 @@ static int workers_profile(engine *e, size_t i)
 {
     const xprofile *p = g_prof.v[i];
     strategy *st = p->tune ? NULL : p->st;
-    for (unsigned k = 0; e->threaded && k < e->nw; k++) {
-        strategy *c = st ? strategy_clone(st) : NULL;
-        if (st && !c)
+    strategy **c;
+    if (!e->threaded)
+        return 0;
+    /* the copies first: a worker gets its new strategy only when every
+     * copy could be made (a worker that cannot take one has no clone) */
+    c = xcalloc(e->nw, sizeof(*c));
+    for (unsigned k = 0; k < e->nw; k++)
+        if (st && !(c[k] = strategy_clone(st))) {
+            for (unsigned j = 0; j < e->nw; j++)
+                strategy_free(c[j]);
+            free(c);
             return -1;
-        if (!e->w[k].x)
-            continue;
-        {
-            xworker *x = e->w[k].x;
-            if (!x->pst)
-                continue;
-            strategy_free(x->pst[i]);
-            x->pst[i] = c;
         }
+    for (unsigned k = 0; k < e->nw; k++) {
+        xworker *x = e->w[k].x;
+        if (!x || !x->pst) { /* not opened: no one to give the copy to */
+            strategy_free(c[k]);
+            continue;
+        }
+        strategy_free(x->pst[i]);
+        x->pst[i] = c[k];
     }
+    free(c);
     return 0;
 }
 
@@ -1280,8 +1289,8 @@ static void emit_profile_strategy(const xprofile *p)
 }
 
 /* ctl set_strategy with "profile": the strategy of that profile only. NULL
- * req->profile: not ours (the engine sets its own). Returns 1 handled, 0
- * not ours, -1 with err. */
+ * req->profile (or none): not ours (the engine sets its own); a "profile"
+ * of another type is an error. Returns 1 handled, 0 not ours, -1 with err. */
 static int set_profile_strategy(engine *e, const json_val *req, jw *w, sbuf *err)
 {
     const char *name = json_get_str(req, "profile", NULL);
@@ -1290,8 +1299,16 @@ static int set_profile_strategy(engine *e, const json_val *req, jw *w, sbuf *err
     const xprofile *found;
     size_t i;
     sbuf out;
-    if (!name)
+    if (!name) {
+        /* "profile" of another type reached us: say so instead of
+         * quietly setting the command's own strategy */
+        const json_val *pv = req ? json_get(req, "profile") : NULL;
+        if (pv && pv->type != JSON_STR) {
+            sb_puts(err, "\"profile\" must be a string");
+            return -1;
+        }
         return 0;
+    }
     found = xprof_name(&g_prof, name);
     if (!found) {
         sb_printf(err, "no profile \"%s\"", name);
@@ -1299,6 +1316,11 @@ static int set_profile_strategy(engine *e, const json_val *req, jw *w, sbuf *err
     }
     if (!text && !fv) {
         sb_puts(err, "set_strategy with \"profile\" needs \"strategy\" or \"strategy_file\"");
+        return -1;
+    }
+    if (text && fv) {
+        /* both given: whose text would win is a guess, do not take it */
+        sb_puts(err, "\"strategy\" and \"strategy_file\" together: pick one");
         return -1;
     }
     if (fv && fv->type != JSON_STR) {
@@ -1356,10 +1378,17 @@ static int reload_profiles(engine *e, jw *w, sbuf *err)
     }
     sb_init(&perr);
     memset(&fresh, 0, sizeof(fresh));
-    if (xprof_build(&g_args, arg_has(&g_args, "strategy") || arg_has(&g_args, "strategy-file"), &fresh, &perr) < 0) {
-        sb_printf(err, "%s", perr.data);
-        sb_free(&perr);
-        return -1;
+    /* as at activation (ext_activate): the later -s/-f are other profiles',
+     * not the command's own strategy — seeing them here would keep a
+     * command segment that activation dropped, and the set would look
+     * changed although the files are the same */
+    {
+        args_t s0 = ext_cmd_args(&g_args);
+        if (xprof_build(&g_args, arg_has(&s0, "strategy") || arg_has(&s0, "strategy-file"), &fresh, &perr) < 0) {
+            sb_printf(err, "%s", perr.data);
+            sb_free(&perr);
+            return -1;
+        }
     }
     sb_free(&perr);
     if (!xprof_same_names(&g_prof, &fresh)) {
@@ -1378,6 +1407,18 @@ static int reload_profiles(engine *e, jw *w, sbuf *err)
             xprof_free(&fresh);
             return -1;
         }
+    /* the arms are the workers' clones, made once (xw_open), and the
+     * tuner's keys table follows them: what they are cannot be re-read */
+    for (size_t i = 0; i < g_prof.n; i++)
+        if (!xprof_same_arms(g_prof.v[i], fresh.v[i])) {
+            sbuf l;
+            sb_init(&l);
+            xprof_label(g_prof.v[i], &l);
+            sb_printf(err, "profile %s: its arms changed (--ext-arm, --ext-tune): restart to apply", l.data);
+            sb_free(&l);
+            xprof_free(&fresh);
+            return -1;
+        }
     if (g_threaded)
         plat_rwlock_wrlock(&g_xlock);
     for (size_t i = 0; i < g_prof.n; i++) {
@@ -1386,6 +1427,7 @@ static int reload_profiles(engine *e, jw *w, sbuf *err)
         char *text = dst->text;
         char *src_s = dst->src;
         strategy *st = dst->st;
+        int tpl_text = dst->tpl_text;
         xlistref hl = dst->hl, hl_ex = dst->hl_ex, ips = dst->ips, ips_ex = dst->ips_ex;
         xlist *fixed[4];
         memcpy(fixed, dst->fixed, sizeof(fixed));
@@ -1396,6 +1438,7 @@ static int reload_profiles(engine *e, jw *w, sbuf *err)
         dst->text = src->text;
         dst->src = src->src;
         dst->st = src->st;
+        dst->tpl_text = src->tpl_text;
         dst->hl = src->hl;
         dst->hl_ex = src->hl_ex;
         dst->ips = src->ips;
@@ -1407,6 +1450,7 @@ static int reload_profiles(engine *e, jw *w, sbuf *err)
         src->text = text;
         src->src = src_s;
         src->st = st;
+        src->tpl_text = tpl_text;
         src->hl = hl;
         src->hl_ex = hl_ex;
         src->ips = ips;
@@ -1423,7 +1467,10 @@ static int reload_profiles(engine *e, jw *w, sbuf *err)
         plat_rwlock_wrunlock(&g_xlock);
     xprof_free(&fresh);
     xlists_reload(plat_now_ms(), 1);
-    LOGI("profile", "%zu profile(s) re-read", g_prof.n);
+    if (rc < 0) /* the workers keep what they had: the answer says the rest */
+        LOGW("profile", "%zu profile(s) re-read, the workers keep what they had", g_prof.n);
+    else
+        LOGI("profile", "%zu profile(s) re-read", g_prof.n);
     if (w) {
         jw_kint(w, "profiles", (int64_t)g_prof.n);
         jw_kint(w, "files", (int64_t)g_nprof_files);

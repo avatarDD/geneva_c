@@ -49,6 +49,8 @@ int xtune_set(xtune **t, const char *args, sbuf *err);
 /* --import of a template with arms: a copy of them and of its --ext-tune,
  * unless the profile has its own */
 void xtune_import(xtune **to, const xtune *from);
+/* The same arms and the same arguments: what the tuner does is the same */
+int xtune_same(const xtune *a, const xtune *b);
 /* After the options: the arms parsed (the extensions registered), the
  * arguments checked against them. prof: the profile's number (the default
  * key). 0 or -1 with err. */
