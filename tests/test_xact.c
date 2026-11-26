@@ -669,6 +669,28 @@ TEST(xact_fooling)
             CHECK(l4sum_ok(out.v[2]));
         }
         pktlist_free(&out);
+        /* badsum: the stored checksum never goes out zero -- for UDP zero
+         * says "no checksum" and the fake stays valid. Seed 10321 is the
+         * one where the draw once hit the value the sum already had
+         * (zapret2 v1.0.8 rolls its value again for the same reason). */
+        {
+            uint8_t ub[PKT_MAX];
+            size_t un = mkpkt(ub, 0, 1, 0, 0, NULL, 0, (const uint8_t *)"xyz", 3);
+            uint8_t *bb;
+            size_t bn;
+
+            rng_global_seed(10321);
+            runx("[UDP:dport:443]-xfake{blob=fake_default_quic;payload=all;ip_ttl=1;badsum}-| \\/", ub, un, NULL,
+                 NULL, NULL, &out);
+            CHECK_INT(out.n, 2);
+            if (out.n == 2) {
+                bb = pkt_bytes(out.v[0], &bn);
+                CHECK(((bb[26] << 8) | bb[27]) != 0);
+                free(bb);
+                CHECK(!l4sum_ok(out.v[0]));
+            }
+            pktlist_free(&out);
+        }
         /* rnd */
         runx("[TCP:flags:PA]-xsplit{pos=5;ipid=rnd}-| \\/", b, hn, &v, NULL, NULL, &out);
         CHECK(out.n == 2 && out.v[0]->id != 0);

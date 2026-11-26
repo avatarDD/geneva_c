@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "plat.h" /* inet_pton: the IP literals of Location/Host, as zapret2's */
+
 #include "ext.h"
 #if GENEVA_EXT_CRYPTO
 #  include "crypto.h"
@@ -193,15 +195,61 @@ int l7_http_header(const uint8_t *d, size_t n, const char *hdr, char *out, size_
 
 int l7_http_host(const uint8_t *d, size_t n, char *out, size_t cap) { return l7_http_header(d, n, "\nHost:", out, cap); }
 
+/* "1.2.3.4" and nothing more: inet_pton's own check, as zapret2's (a
+ * "01.2.3.4" is a name to it) */
+static int str_is_ipv4(const char *s)
+{
+    struct in_addr a;
+    return inet_pton(AF_INET, s, &a) == 1;
+}
+
+/* The host part of what can stand in Location (and in Host:): the port cut
+ * (also off a [v6]:port), the brackets off a v6 literal; says if what is
+ * left is an IP literal. As zapret2's strip_host_to_ip (v1.0.8: the port
+ * used to spoil the comparison, the IPs were compared as names). */
+static int strip_host_to_ip(char *h)
+{
+    char *c, *e;
+    struct in6_addr a6;
+    int colons = 0;
+    if (*h == '[') {
+        e = strchr(h, ']');
+        if (!e)
+            return 0;
+        memmove(h, h + 1, (size_t)(e - h - 1));
+        h[e - h - 1] = 0;
+        return inet_pton(AF_INET6, h, &a6) == 1; /* junk in brackets is a name */
+    }
+    for (c = h; *c; c++)
+        if (*c == ':')
+            colons++;
+    if (!colons)
+        return str_is_ipv4(h);
+    if (colons > 1)
+        /* a bare v6 literal: its port would need the brackets; anything
+         * else with two colons in it is a name */
+        return inet_pton(AF_INET6, h, &a6) == 1;
+    c = strchr(h, ':');
+    if (!c[1])
+        return 0; /* a colon with nothing after: not a port, not an IP */
+    for (e = c + 1; *e; e++)
+        if (!isdigit((unsigned char)*e))
+            return 0; /* a colon, but not a port after it */
+    *c = 0;
+    return str_is_ipv4(h);
+}
+
 int l7_http_dpi_redirect(const uint8_t *d, size_t n, const char *host)
 {
-    char loc[256], *rh, *p;
+    char loc[256], hb[256], *rh, *p;
     const uint8_t *dh, *drh;
     size_t dl, drl;
+    int rh_ip, h_ip;
     (void)dl;
     (void)drl;
     int code = l7_http_reply_code(d, n);
-    if (!host || !*host || (code != 302 && code != 307) || !l7_http_header(d, n, "\nLocation:", loc, sizeof(loc)))
+    if (!host || !*host || strlen(host) >= sizeof(hb) ||
+        (code != 302 && code != 307) || !l7_http_header(d, n, "\nLocation:", loc, sizeof(loc)))
         return 0;
     if (!strncmp(loc, "http://", 7))
         rh = loc + 7;
@@ -212,9 +260,28 @@ int l7_http_dpi_redirect(const uint8_t *d, size_t n, const char *host)
     for (p = rh; *p && *p != '/' && *p != '?' && *p != '#'; p++)
         ;
     *p = 0;
-    if (!*rh || !l7_find_nld((const uint8_t *)rh, strlen(rh), 2, &drh, &drl))
+    /* the port off both, an IP literal told from a name: a name asked and
+     * an IP offered (or the other way) is the censor's answer, and two IPs
+     * are compared as the literals they are, not as if they were names */
+    memcpy(hb, host, strlen(host) + 1);
+    rh_ip = strip_host_to_ip(rh);
+    h_ip = strip_host_to_ip(hb);
+    if (!*rh || !*hb)
         return 0;
-    if (!l7_find_nld((const uint8_t *)host, strlen(host), 2, &dh, &dl))
+    if (rh_ip != h_ip)
+        return 1;
+    if (rh_ip) {
+        char *hp = hb;
+        if (strlen(rh) != strlen(hb))
+            return 1; /* a literal cut short is another address, not the same */
+        for (; *rh; rh++, hp++)
+            if (tolower((unsigned char)*rh) != tolower((unsigned char)*hp))
+                return 1;
+        return 0;
+    }
+    if (!l7_find_nld((const uint8_t *)rh, strlen(rh), 2, &drh, &drl))
+        return 0;
+    if (!l7_find_nld((const uint8_t *)hb, strlen(hb), 2, &dh, &dl))
         return 1; /* no SLD redirects to an SLD */
     /* zapret2 compares the strings from the SLD to their ends */
     if (strlen((const char *)dh) != strlen((const char *)drh))

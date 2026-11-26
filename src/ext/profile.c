@@ -11,6 +11,7 @@
 
 #include "autolist.h"
 #include "l7.h"
+#include "log.h"
 #include "tuner.h"
 #include "util.h"
 
@@ -255,9 +256,10 @@ static const xprofile *find_name(const xprofiles *ps, const char *name)
         }                                                                        \
     } while (0)
 
-/* dp_copy: L3 is added, L7 replaced, the lists appended (not the mark); the strategy is
- * taken when the profile has none of its own (zapret2 appends the
- * template's functions: a Geneva strategy is one whole) */
+/* dp_copy: L3 is added, L7 replaced, the lists appended, the mark carried
+ * over; the strategy is taken when the profile has none of its own
+ * (zapret2 appends the template's functions: a Geneva strategy is one
+ * whole) */
 static void ssid_add(xprofile *p, const char *s, size_t l)
 {
     char *v = xmalloc(l + 1);
@@ -303,6 +305,13 @@ static int prof_import(xprofile *to, const xprofile *from, sbuf *err)
     APPEND(to->udp, to->nudp, from->udp, from->nudp);
     APPEND(to->icf, to->nicf, from->icf, from->nicf);
     APPEND(to->ipp, to->nipp, from->ipp, from->nipp);
+    if (from->mark || from->mark_mask) {
+        /* --filter-mark: zapret2 v1.0.8's dp_copy takes it along (the
+         * mask is the whole value when none is given; a 5/0 mark is a
+         * filter no packet passes, and it stays one after the copy) */
+        to->mark = from->mark;
+        to->mark_mask = from->mark_mask;
+    }
     for (size_t i = 0; i < from->nssid; i++)
         ssid_add(to, from->ssid[i], strlen(from->ssid[i]));
     if (from->ssid_neg_set) {
@@ -578,9 +587,17 @@ static int prof_strategy(xprofile *p, int file, const char *value, sbuf *err)
 
 static int has_filters(const xprofile *p)
 {
-    return p->b_l3 || p->b_l7 || p->ntcp || p->nudp || p->nicf || p->nipp || p->mark_mask || p->nssid ||
+    return p->b_l3 || p->b_l7 || p->ntcp || p->nudp || p->nicf || p->nipp || p->mark || p->mark_mask || p->nssid ||
            p->ssid_neg_set || p->name || p->text ||
            p->tune || p->hl.n || p->hl_ex.n || p->ips.n || p->ips_ex.n;
+}
+
+/* a profile nothing narrows: it takes every packet, and the ones after it
+ * in the set cannot be reached (zapret2 v1.0.8 warns about this too) */
+static int prof_matches_all(const xprofile *p)
+{
+    return !(p->b_l3 || p->b_l7 || p->ntcp || p->nudp || p->nicf || p->nipp || p->mark || p->mark_mask ||
+             p->nssid || p->ssid_neg_set || p->ahl || p->hl.n || p->hl_ex.n || p->ips.n || p->ips_ex.n);
 }
 
 /* what is being built: the profiles, the templates, the one in hand */
@@ -960,6 +977,15 @@ static int build_end(builder *b, int rc)
         }
     }
     xprof_free(&b->tpl);
+    if (!rc)
+        for (size_t i = 0; i + 1 < out->n; i++)
+            if (prof_matches_all(out->v[i])) {
+                sbuf l;
+                sb_init(&l);
+                xprof_label(out->v[i], &l);
+                LOGW("profile", "profile %s has no filters: the profiles after it cannot be reached", l.data);
+                sb_free(&l);
+            }
     if (!rc && !out->n) {
         sb_puts(err, "no profile left (every one is skipped or a template)");
         rc = -1;

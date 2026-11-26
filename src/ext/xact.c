@@ -1318,7 +1318,13 @@ int xa_send_ipfrag(xrun *r, gpkt *dis, const xsendopt *o)
         size_t l3 = dis->ipver == 4 ? (size_t)(b[0] & 15) * 4 : 40 + dis->ext_len;
         size_t at = dis->l4 == LAYER_TCP ? l3 + 16 : dis->l4 == LAYER_UDP ? l3 + 6 : l3 + 2;
         if (at + 2 <= n && !is_fragment(dis)) {
-            uint16_t x = (uint16_t)(1 + rng_range(0, 0xfffe));
+            uint16_t s = (uint16_t)((b[at] << 8) | b[at + 1]), x;
+            /* The value the sum already had leaves it what it was; for UDP
+             * zero also says "no checksum", and the packet stays valid
+             * (zapret2 v1.0.8 rolls its value again for the same reason). */
+            do {
+                x = (uint16_t)(1 + rng_range(0, 0xfffe));
+            } while (x == s);
             b[at] ^= (uint8_t)(x >> 8);
             b[at + 1] ^= (uint8_t)x;
         }

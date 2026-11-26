@@ -88,8 +88,9 @@ int l7_tls_hs_host(const uint8_t *d, size_t n, char *out, size_t cap, int partia
 /* A header value ("\nLocation:"), lowercased */
 int l7_http_header(const uint8_t *d, size_t n, const char *hdr, char *out, size_t cap);
 int l7_http_reply_code(const uint8_t *d, size_t n); /* -1 when not a reply */
-/* A 302/307 to another second-level domain than host (zapret2's
- * HttpReplyLooksLikeDPIRedirect) */
+/* A 302/307 to another second-level domain than host, or to another IP
+ * literal when host is one; a port in "host:port" or "[v6]:port" does not
+ * spoil the comparison (zapret2's HttpReplyLooksLikeDPIRedirect) */
 int l7_http_dpi_redirect(const uint8_t *d, size_t n, const char *host);
 
 /* The N-th level domain of dom (FindNLD): *p and *len, 1 when it exists */
