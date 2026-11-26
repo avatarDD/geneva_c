@@ -143,6 +143,9 @@ jobs:
       - run: sudo tests/e2e/android_env.sh build/geneva
       # the size of src/ext/ in the router build is followed by hand:
       # tools/ext_size.sh (no CI budget)
+      # baseline 2026-11-26 (061a2e7, gcc STATIC=1 SMALL=1): 1880176 bytes
+      # with --ext, 1428592 without, +451584 (stripped binaries, как
+      # меряет tools/ext_size.sh)
       # the fuzz targets on musl (fork, alarm, fmemopen), seeds and 2000 inputs each
       - run: build/geneva selftest --ext --fuzz 2000 --seed 1
       - run: ls -la build/geneva && file build/geneva

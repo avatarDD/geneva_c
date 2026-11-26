@@ -302,6 +302,12 @@ TEST(rt_set_strategy_refuses_wrong_types)
     CHECK_STR(err.data, "\"strategy_file\" must be a string");
     sb_free(&out);
     sb_free(&err);
+    /* both ways of giving the strategy: refused, not guessed */
+    CHECK_INT(rctl(&e, "set_strategy", "{\"profile\":\"one\",\"strategy\":\"\\\\/\",\"strategy_file\":\"/no/path\"}",
+                   &out, &err), -1);
+    CHECK_STR(err.data, "\"strategy\" and \"strategy_file\" together: pick one");
+    sb_free(&out);
+    sb_free(&err);
     teardown(&e);
     remove_file(f);
 }

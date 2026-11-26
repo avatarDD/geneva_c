@@ -1318,6 +1318,11 @@ static int set_profile_strategy(engine *e, const json_val *req, jw *w, sbuf *err
         sb_puts(err, "set_strategy with \"profile\" needs \"strategy\" or \"strategy_file\"");
         return -1;
     }
+    if (text && fv) {
+        /* both given: whose text would win is a guess, do not take it */
+        sb_puts(err, "\"strategy\" and \"strategy_file\" together: pick one");
+        return -1;
+    }
     if (fv && fv->type != JSON_STR) {
         sb_puts(err, "\"strategy_file\" must be a string");
         return -1;
