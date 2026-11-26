@@ -5,6 +5,22 @@
 
 ## Не выпущено
 
+- X6d: исправления `ctl reload` с `--ext-profile` (`docs/EXT.md`):
+  сегмент `--new` командной строки больше не считается профилем набора
+  (раньше `ctl reload` навсегда отказывал `the profiles changed (a name
+  or their order): restart to apply` при запуске `geneva run --ext --new
+  -s ... --ext-profile ...`); руки (`--ext-arm`) и настройка тюнера
+  (`--ext-tune`) не меняются на лету, как и фильтры, — `ok:false` `its
+  arms changed (--ext-arm, --ext-tune): restart to apply` с названием
+  профиля: раньше профиль со стратегией молча умирал, а воркеры
+  продолжали крутить прежние руки; `set_strategy` с `profile` не-строкой
+  отказывает явно (`"profile" must be a string`), а не меняет тихо
+  стратегию команды; `set_strategy` с `profile` и сразу `strategy` и
+  `strategy_file` отказывает (`"strategy" and "strategy_file" together:
+  pick one`) — раньше текст стратегии уходил в `fopen` как путь;
+  копии стратегий воркерам ставятся только когда
+  скопировались все (частичная неудача оставляла воркерам прежние
+  стратегии, а новая утекала).
 - `--import` копирует у шаблона и метку `--filter-mark` (как написано в
   `docs/EXT.md`; zapret2 v1.0.8 делает то же для `filter_mark`).
 - Детект DPI-редиректа (неудача автосписка по ответу HTTP 302/307): порт в

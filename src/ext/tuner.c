@@ -216,6 +216,38 @@ void xtune_import(xtune **to, const xtune *from)
     x->key = from->key ? xstrdup(from->key) : NULL;
 }
 
+int xtune_same(const xtune *a, const xtune *b)
+{
+    size_t i;
+    if (a->n != b->n)
+        return 0;
+    for (i = 0; i < a->n; i++)
+        if (strcmp(a->text[i], b->text[i]))
+            return 0;
+    /* what the tuner does: the arms and the arguments. "set" and "rr_args"
+     * are not compared: "set" only marks the profile's own --ext-tune
+     * (xtune_import clears it), "rr_args" only marks that fails, time or
+     * final were given (xtune_set checks it), the arms themselves are
+     * built from the texts and the values above */
+    if (a->fails != b->fails || a->time_s != b->time_s || a->final != b->final)
+        return 0;
+    if ((a->key != NULL) != (b->key != NULL) || (a->key && strcmp(a->key, b->key)))
+        return 0;
+    if (a->nld != b->nld || a->reqhost != b->reqhost)
+        return 0;
+    if (a->maxseq != b->maxseq || a->inseq != b->inseq || a->retrans != b->retrans)
+        return 0;
+    if (a->udp_out != b->udp_out || a->udp_in != b->udp_in)
+        return 0;
+    if (a->no_rst != b->no_rst || a->no_http_redirect != b->no_http_redirect || a->reset != b->reset)
+        return 0;
+    if (a->ts != b->ts || a->propose != b->propose)
+        return 0;
+    if (a->gamma != b->gamma || a->pbest != b->pbest || a->min_succ != b->min_succ)
+        return 0;
+    return 1;
+}
+
 int xtune_finish(xtune *t, int prof, sbuf *err)
 {
     if (!t)
