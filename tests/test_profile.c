@@ -8,6 +8,7 @@
 
 #include "args.h"
 #include "ext_opt.h"
+#include "log.h"
 #include "pkt.h"
 #include "plat.h"
 #include "strategy.h"
@@ -260,9 +261,40 @@ TEST(pr_build)
         CHECK(ps.v[0]->b_l7 && ps.v[0]->l7 == 1ULL << L7_HTTP);
         CHECK(ps.v[0]->st && ps.v[0]->st->nout == 1); /* the template's strategy */
         CHECK(ps.v[1]->st && ps.v[1]->st->nout == 0); /* its own wins */
-        CHECK(!ps.v[0]->mark_mask); /* the mark is not imported (dp_copy) */
+        CHECK(ps.v[0]->mark == 1 && ps.v[0]->mark_mask == 0xffffffffU); /* the mark is imported (zapret2 v1.0.8's dp_copy) */
+        CHECK(ps.v[1]->mark == 1 && ps.v[1]->mark_mask == 0xffffffffU); /* into the second --import alike */
         m = mt(6, 6, 80, L7_HTTP, 0);
+        CHECK_INT(xprof_find(&ps, &m, 0), -1); /* the copied mark: mark 0 does not pass */
+        m = mt(6, 6, 80, L7_HTTP, 1);
         CHECK_INT(xprof_find(&ps, &m, 0), 0);
+        xprof_free(&ps);
+    }
+    {
+        /* --filter-mark 5/0: a filter no packet passes (a zero mask is not
+         * "no filter"); dp_copy takes it along, as zapret2 v1.0.8's */
+        const char *v[] = {"-p", "443", "--new", "--template=base", "--filter-mark", "5/0",
+                           "--new=c", "-s", "\\/", "--import", "base", NULL};
+        xmatch m;
+        CHECK_STR(build(v, &ps), "OK");
+        CHECK_INT((int)ps.n, 1);
+        CHECK(ps.v[0]->mark == 5 && ps.v[0]->mark_mask == 0);
+        m = mt(6, 6, 80, L7_UNKNOWN, 5);
+        CHECK_INT(xprof_find(&ps, &m, 0), -1); /* no packet's mark passes 5/0 */
+        m = mt(6, 6, 80, L7_UNKNOWN, 0);
+        CHECK_INT(xprof_find(&ps, &m, 0), -1);
+        xprof_free(&ps);
+    }
+    {
+        /* seg0 with a mark filter only: it stays a profile (a 5/0 mark is
+         * a filter, not "no filter"), as in zapret2 */
+        const char *v[] = {"-p", "443", "--filter-mark", "5/0",
+                           "--new", "--filter-tcp", "443", "-s", "\\/", NULL};
+        xmatch m;
+        CHECK_STR(build(v, &ps), "OK");
+        CHECK_INT((int)ps.n, 2);
+        CHECK(ps.v[0]->mark == 5 && ps.v[0]->mark_mask == 0);
+        m = mt(6, 6, 443, L7_UNKNOWN, 0);
+        CHECK_INT(xprof_find(&ps, &m, 0), 1); /* 5/0 never matches: the next one takes it */
         xprof_free(&ps);
     }
     {
@@ -676,6 +708,41 @@ TEST(pr_runtime)
     strategy_set_xact(NULL);
 }
 
+/* A profile nothing narrows takes every packet: the ones after it in the
+ * set cannot be reached. The warning zapret2 v1.0.8 added. */
+static char pr_warn[512];
+
+static void pr_warn_hook(log_level lvl, const char *mod, const char *msg)
+{
+    if (lvl == LOG_WARN && !strcmp(mod, "profile"))
+        snprintf(pr_warn, sizeof(pr_warn), "%s", msg);
+}
+
+TEST(pr_empty_warns)
+{
+    log_level saved = log_get_level();
+    xprofiles ps;
+    const char *v1[] = {"--new", "-s", "\\/", "--new", "--filter-tcp", "443", "-s", "\\/", NULL};
+    const char *v2[] = {"--new", "--filter-tcp", "80", "-s", "\\/", "--new", "--filter-tcp", "443", "-s", "\\/", NULL};
+    const char *v3[] = {"--new", "--filter-mark", "5/0", "--new", "--filter-tcp", "443", "-s", "\\/", NULL};
+    log_set_level(LOG_WARN);
+    log_set_hook(pr_warn_hook);
+    pr_warn[0] = 0;
+    CHECK_STR(build(v1, &ps), "OK");
+    CHECK(strstr(pr_warn, "profile 1 has no filters") != NULL);
+    xprof_free(&ps);
+    pr_warn[0] = 0;
+    CHECK_STR(build(v2, &ps), "OK");
+    CHECK(pr_warn[0] == 0); /* every profile narrowed: nothing warned */
+    xprof_free(&ps);
+    pr_warn[0] = 0;
+    CHECK_STR(build(v3, &ps), "OK");
+    CHECK(pr_warn[0] == 0); /* a 5/0 mark narrows to nothing: not "no filters" */
+    xprof_free(&ps);
+    log_set_hook(NULL);
+    log_set_level(saved);
+}
+
 void suite_profile(void)
 {
     strategy_set_xact(&xact_ops);
@@ -689,6 +756,7 @@ void suite_profile(void)
     strategy_set_xact(NULL);
     RUN(pr_pick);
     RUN(pr_runtime);
+    RUN(pr_empty_warns);
 }
 
 #else

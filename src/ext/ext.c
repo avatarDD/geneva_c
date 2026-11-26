@@ -203,6 +203,17 @@ int ext_activate(const args_t *a, const char *cmd)
         args_keep(a);
         prof_files_keep(a);
     }
+    if (g_ct_disable)
+        for (size_t i = 0; i < g_prof.n; i++)
+            if (g_prof.v[i]->ahl) {
+                /* without conntrack there are no flows, and --hostlist-auto
+                 * counts its failures on flows: it would be silently dead
+                 * (zapret2 v1.0.8 refuses to start the same way) */
+                fprintf(stderr, "geneva %s: profile %zu: --hostlist-auto needs conntrack, take off --ext-ctrack-disable\n",
+                        cmd, i + 1);
+                ext_deactivate();
+                return -1;
+            }
     {
         sbuf err;
         sb_init(&err);

@@ -270,6 +270,7 @@ static const optdef defs[] = {
     {"strategy", 's', 1, "S", ""},
     {"strategy-file", 'f', 1, "F", ""},
     EXT_OPT,
+    EXT_CTRACK_OPTS,
     EXT_PROFILE_OPTS,
     {NULL, 0, 0, NULL, NULL},
 };
@@ -639,6 +640,18 @@ TEST(ah_tune_template)
     sb_free(&e);
 }
 
+/* --hostlist-auto counts its failures on flows: without conntrack
+ * (ext.c) it would be silently dead. zapret2 v1.0.8 refuses to start
+ * the same way; geneva did not before. */
+TEST(ah_needs_ctrack)
+{
+    const char *f = tmp("needs_ctrack.txt");
+    const char *v[] = {"--ext", "-s", "\\/", "--filter-tcp", "80", "--hostlist-auto", f,
+                       "--ext-ctrack-disable", NULL};
+    CHECK_INT(activate(v), -1);
+    remove(f);
+}
+
 TEST(ah_success)
 {
     const char *f = tmp("ok.txt"), *dbg = tmp("ok.log");
@@ -861,6 +874,7 @@ void suite_autolist(void)
     RUN(ah_flows);
     RUN(ah_tune_offline);
     RUN(ah_tune_template);
+    RUN(ah_needs_ctrack);
     RUN(ah_success);
     RUN(ah_udp);
     RUN(ah_ipcache_pick);

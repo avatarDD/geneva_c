@@ -934,6 +934,62 @@ TEST(l7_engine)
     free(ch);
 }
 
+/* The DPI redirect check: the port off both sides, the IP literals
+ * compared as IPs (as zapret2 v1.0.8: the port used to spoil the
+ * comparison, and two IPs sharing their last two octets compared equal) */
+TEST(l7_dpi_redirect)
+{
+#define DPI(code, loc)                                                                            \
+    do {                                                                                          \
+        char r[512];                                                                              \
+        snprintf(r, sizeof(r), "HTTP/1.1 %s Found\r\nLocation: %s\r\n\r\n", code, loc);           \
+        CHECK_INT(l7_http_dpi_redirect((const uint8_t *)r, strlen(r), host), want);               \
+    } while (0)
+    const char *host;
+    int want;
+    host = "www.example.com";
+    want = 0;
+    DPI("302", "http://example.com:8080/x"); /* the port no longer spoils it */
+    DPI("307", "http://example.com/");
+    DPI("302", "http://sub.example.com/y?z");
+    want = 1;
+    DPI("302", "http://other.org/");          /* another name */
+    DPI("302", "http://93.184.216.34/");      /* a name asked, an IP offered */
+    host = "93.184.216.34";
+    want = 0;
+    DPI("302", "http://93.184.216.34:443/x"); /* an IP: the literal, port off */
+    want = 1;
+    DPI("302", "http://216.34.93.184/");      /* the octets reversed */
+    host = "1.2.3.4";
+    DPI("302", "http://9.8.3.4/");            /* was equal: both ended in 3.4 */
+    host = "2001:db8::1";
+    want = 0;
+    DPI("302", "http://[2001:db8::1]:443/x");
+    want = 1;
+    DPI("302", "http://[2001:db8::9]/");
+    host = "85.14.20.15";
+    DPI("302", "http://85.14.20.1/");         /* a literal cut short is another address */
+    host = "2001:db8::23";
+    DPI("302", "http://[2001:db8::2]/");
+    host = "www.example.com";
+    want = 0;
+    DPI("302", "http://[banana]/x");          /* junk in brackets is a name, not an IP */
+    DPI("302", "http://a:b:c/x");             /* two colons are not a v6 literal either */
+    host = "example.com:8080";                /* the asked side with a port */
+    want = 0;
+    DPI("302", "http://example.com:8080/x");
+    host = "a.com";
+    want = 0;
+    DPI("301", "http://b.com/");              /* only 302 and 307 count */
+    {
+        char r[512];
+        snprintf(r, sizeof(r), "HTTP/1.1 302 Found\r\nLocation: /other\r\n\r\n");
+        CHECK_INT(l7_http_dpi_redirect((const uint8_t *)r, strlen(r), host), 0); /* no scheme */
+        CHECK_INT(l7_http_dpi_redirect((const uint8_t *)r, strlen(r), ""), 0);   /* no host */
+    }
+#undef DPI
+}
+
 void suite_l7(void)
 {
     RUN(l7_zapret2_lines);
@@ -945,6 +1001,7 @@ void suite_l7(void)
     RUN(l7_reasm_quic);
 #  endif
     RUN(l7_triggers);
+    RUN(l7_dpi_redirect);
     RUN(l7_engine);
     RUN(l7_engine_detach);
 }
